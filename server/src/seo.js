@@ -7,6 +7,7 @@
 //   /c/:cc        towns in one country
 //   /p/:id-:slug  one town: its libraries and the books on them
 //   /l/:code      one library
+//   /b/:id-:slug  one book: its covers, the text printed on them, its codes, where it is
 // Also /robots.txt and /sitemap.xml (+ /sitemaps/*.xml).
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -14,6 +15,7 @@ import { config } from './config.js';
 import { one, many } from './db.js';
 import { escapeHtml as esc } from './util.js';
 import { PRESENT_BOOKS_SQL, TAKEN_BOOKS_SQL } from './locations.js';
+import { normTitle } from './vision.js';
 import { translate } from '../../web/src/i18n.js';
 
 const LANGS = ['he', 'en'];
@@ -60,9 +62,15 @@ function libList(libs, T, lng) {
   return `<ul>${libs.map((l) => `<li><a href="${withLang(`/l/${l.code}`, lng)}">${esc(l.name || T('free_library'))}</a>${
     l.books ? ` — ${T('seo.n_books', { n: l.books })}` : ''}</li>`).join('')}</ul>`;
 }
-function bookList(books) {
-  return `<ul>${books.map((b) => `<li>${b.code ? `<a href="/l/${b.code}">` : ''}<strong>${esc(b.title)}</strong>${b.code ? '</a>' : ''}${
-    b.authors?.length ? ` — ${esc(b.authors.join(', '))}` : ''}${b.year ? ` (${b.year})` : ''}</li>`).join('')}</ul>`;
+// A book's own page: /b/<id>-<title words> (Hebrew letters kept; the words are ignored).
+export const bookSlug = (title) => normTitle(title).split(' ').filter(Boolean).slice(0, 8).join('-').slice(0, 80);
+export const bookPath = (b) => `/b/${b.id}${bookSlug(b.title) ? `-${encodeURIComponent(bookSlug(b.title))}` : ''}`;
+function bookList(books, lng = 'he') {
+  return `<ul>${books.map((b) => {
+    const href = b.id ? withLang(bookPath(b), lng) : b.code ? `/l/${b.code}` : null;
+    return `<li>${href ? `<a href="${href}">` : ''}<strong>${esc(b.title)}</strong>${href ? '</a>' : ''}${
+      b.authors?.length ? ` — ${esc(b.authors.join(', '))}` : ''}${b.year ? ` (${b.year})` : ''}</li>`;
+  }).join('')}</ul>`;
 }
 function placeLinks(places, T, lng) {
   return `<ul class="place-links">${places.map((p) => `<li><a href="${withLang(placePath(p), lng)}">${esc(placeName(p, lng))}</a> (${T('seo.n_libs', { n: p.n })})</li>`).join('')}</ul>`;
@@ -156,7 +164,7 @@ async function placePage(lng, T, id) {
   const ids = libs.map((l) => l.id);
   const books = await many(
     `WITH ${PRESENT_CTE}
-     SELECT b.title, b.authors, b.year, l.code, pr.location_id
+     SELECT b.id, b.title, b.authors, b.year, l.code, pr.location_id
        FROM present pr JOIN books b ON b.id = pr.book_id JOIN locations l ON l.id = pr.location_id
       ORDER BY pr.created_at DESC LIMIT 300`, [ids]);
   const perLib = new Map();
@@ -181,7 +189,7 @@ async function placePage(lng, T, id) {
       <p class="muted small">${T('seo.updated', { date: fmtDate(updated, lng) })} · <a href="${withLang(`/c/${p.country.toLowerCase()}`, lng)}">${esc(country)}</a> ·
         <a href="/?at=${p.lat.toFixed(4)},${p.lon.toFixed(4)},14">${T('seo.open_map')}</a></p>
       <h2>${T('seo.libraries')}</h2>${libList(libs, T, lng)}
-      ${books.length ? `<h2>${T('seo.books_now', { inPlace })}</h2>${bookList(books)}` : ''}
+      ${books.length ? `<h2>${T('seo.books_now', { inPlace })}</h2>${bookList(books, lng)}` : ''}
       ${nearby.length ? `<h2>${T('seo.nearby')}</h2>${placeLinks(nearby, T, lng)}` : ''}
       <hr><p class="small">${T('shelves.note_html')}</p>`,
     jsonld: [
@@ -226,8 +234,8 @@ async function libraryPage(lng, T, code) {
       <p class="muted small">${T('seo.updated', { date: fmtDate(updated, lng) })}${place ? ` · <a href="${withLang(placePath(place), lng)}">${esc(T('seo.place_h1', { inPlace }))}</a>` : ''}
         · <a href="https://www.google.com/maps/dir/?api=1&amp;destination=${l.lat},${l.lon}">${T('loc.directions')}</a></p>
       <h2>${T('loc.shelf')} (${books.length})</h2>
-      ${books.length ? bookList(books) : `<p>${T('loc.no_books')}</p>`}
-      ${taken.length ? `<h2>${T('loc.taken_title')} (${taken.length})</h2>${bookList(taken)}` : ''}
+      ${books.length ? bookList(books, lng) : `<p>${T('loc.no_books')}</p>`}
+      ${taken.length ? `<h2>${T('loc.taken_title')} (${taken.length})</h2>${bookList(taken, lng)}` : ''}
       ${nearby.length ? `<h2>${T('seo.nearby_libs')}</h2>${libList(nearby, T, lng)}` : ''}
       <hr><p class="small">${T('shelves.note_html')}</p>`,
     jsonld: [
@@ -244,6 +252,104 @@ async function libraryPage(lng, T, code) {
         publicAccess: true,
       },
     ],
+  };
+}
+
+// Cover photos that may be shown publicly: those reported at a library, and those taken
+// at home only when they were cut out to the cover itself (nothing of the home shows).
+const BOOK_PHOTOS_SQL = `
+  SELECT p.id, p.kind, p.path, p.thumb_path, p.ocr_text, p.ocr_status, p.created_at FROM photos p
+   WHERE p.id IN (
+     SELECT unnest(ARRAY[s.photo_id, s.back_photo_id]) FROM sightings s JOIN locations l ON l.id = s.location_id
+      WHERE s.book_id = $1 AND s.status = 'approved' AND l.status = 'approved'
+     UNION
+     SELECT unnest(ARRAY[m.photo_id, m.back_photo_id]) FROM my_books m WHERE m.book_id = $1)
+     AND p.kind IN ('cover', 'back')
+     AND (p.path ~ '_c[a-z0-9]+\\.webp$' OR EXISTS (SELECT 1 FROM sightings s WHERE s.book_id = $1 AND s.status = 'approved' AND p.id IN (s.photo_id, s.back_photo_id)))
+   ORDER BY p.created_at DESC`;
+
+// Where else to read about the book: by ISBN when there is one, else by title.
+function bookLinks(b) {
+  const q = encodeURIComponent(`${b.title} ${b.authors?.[0] ?? ''}`.trim());
+  const ol = b.isbn13 ? `https://openlibrary.org/isbn/${b.isbn13}`
+    : b.source_ids?.openlibrary ? `https://openlibrary.org${b.source_ids.openlibrary}` : `https://openlibrary.org/search?q=${q}`;
+  const links = [
+    ['Open Library', ol],
+    ['Google Books', b.isbn13 ? `https://books.google.com/books?vid=ISBN${b.isbn13}` : `https://www.google.com/search?tbm=bks&q=${q}`],
+    ['WorldCat', b.isbn13 ? `https://search.worldcat.org/isbn/${b.isbn13}` : `https://search.worldcat.org/search?q=${q}`],
+  ];
+  if (b.danacode || /[֐-׿]/.test(b.title)) links.unshift(['סימניה · Simania', `https://simania.co.il/searchBooks.php?query=${q}`]);
+  return links;
+}
+
+const isbnShown = (isbn) => (isbn ? `${isbn.slice(0, 3)}-${isbn.slice(3)}` : '');
+const danacodeShown = (d) => (d ? `${Number(d.slice(0, 4))}-${Number(d.slice(4, 11))}` : '');
+
+async function bookPage(lng, T, id) {
+  const b = await one('SELECT * FROM books WHERE id = $1', [id]);
+  if (!b) return null;
+  const libs = await many(
+    `SELECT * FROM (
+       SELECT DISTINCT ON (s.location_id) l.code, l.name, s.kind, s.created_at, p.name AS pname, p.name_he AS pname_he
+         FROM sightings s JOIN locations l ON l.id = s.location_id LEFT JOIN places p ON p.id = l.place_id
+        WHERE s.book_id = $1 AND s.status = 'approved' AND l.status = 'approved'
+        ORDER BY s.location_id, s.created_at DESC) x
+      ORDER BY created_at DESC LIMIT 50`, [id]);
+  const owned = await one('SELECT 1 FROM my_books WHERE book_id = $1 LIMIT 1', [id]);
+  if (!libs.length && !owned) return null; // only books readers reported have pages
+  const photos = await many(BOOK_PHOTOS_SQL, [id]);
+  const front = photos.find((p) => p.kind === 'cover');
+  const back = photos.find((p) => p.kind === 'back');
+  const frontUrl = front ? `/uploads/${front.path}` : b.front_url || b.cover_url;
+  const backUrl = back ? `/uploads/${back.path}` : b.back_url;
+  const shown = (p) => p && ['auto', 'approved'].includes(p.ocr_status) && p.ocr_text;
+  const texts = [['seo.book_front_text', photos.find((p) => p.kind === 'cover' && shown(p))],
+    ['seo.book_back_text', photos.find((p) => p.kind === 'back' && shown(p))]].filter(([, p]) => p);
+  const here = libs.filter((l) => ['seen', 'added'].includes(l.kind));
+  const authors = (b.authors ?? []).join(', ');
+  const name = authors ? `${b.title} — ${authors}` : b.title;
+  const blurb = b.description || texts.find(([k]) => k === 'seo.book_back_text')?.[1].ocr_text || '';
+  const description = (blurb ? blurb.replace(/\s+/g, ' ').slice(0, 155) : T('seo.book_desc', { title: b.title, n: here.length }));
+  const abs = (u) => (u?.startsWith('/') ? config.baseUrl + u : u);
+  return {
+    title: `${name} | ${T('app.name')}`,
+    description,
+    canonical: bookPath(b),
+    lastmod: libs[0]?.created_at ?? b.details_at ?? b.created_at,
+    html: `<article class="book-public">
+      <h1 dir="auto">${esc(b.title)}</h1>
+      ${authors ? `<p class="lead" dir="auto">${esc(authors)}</p>` : ''}
+      ${frontUrl || backUrl ? `<div class="book-covers">${[[frontUrl, T('seo.book_front')], [backUrl, T('seo.book_back')]].filter(([u]) => u)
+        .map(([u, cap]) => `<figure><a href="${esc(u)}"><img src="${esc(u)}" alt="${esc(`${cap}: ${b.title}`)}" loading="lazy"></a><figcaption>${cap}</figcaption></figure>`).join('')}</div>` : ''}
+      <dl class="book-facts">
+        ${b.isbn13 ? `<dt>ISBN</dt><dd dir="ltr">${isbnShown(b.isbn13)}</dd>` : ''}
+        ${b.danacode ? `<dt>${T('seo.danacode')}</dt><dd dir="ltr">${danacodeShown(b.danacode)}</dd>` : ''}
+        ${b.publisher ? `<dt>${T('seo.publisher')}</dt><dd dir="auto">${esc(b.publisher)}</dd>` : ''}
+        ${b.year ? `<dt>${T('seo.year')}</dt><dd>${b.year}</dd>` : ''}
+      </dl>
+      ${b.description ? `<h2>${T('seo.book_about')}</h2><p class="blurb" dir="auto">${esc(b.description)}</p>` : ''}
+      ${texts.map(([k, p]) => `<h2>${T(k)}</h2><div class="cover-text" dir="auto">${esc(p.ocr_text).replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>').replace(/^/, '<p>')}</p></div>`).join('')}
+      <h2>${T('seo.book_where')}</h2>
+      ${here.length ? `<ul>${here.map((l) => `<li><a href="${withLang(`/l/${l.code}`, lng)}">${esc(l.name || T('free_library'))}</a>${
+        l.pname ? ` · ${esc((lng === 'he' && l.pname_he) || l.pname)}` : ''} · ${T('seo.seen_on', { date: fmtDate(l.created_at, lng) })}</li>`).join('')}</ul>`
+        : `<p>${T('seo.book_nowhere')}</p>`}
+      <h2>${T('seo.book_more')}</h2>
+      <ul class="ext-links">${bookLinks(b).map(([n, u]) => `<li><a href="${esc(u)}" rel="noopener nofollow" target="_blank">${esc(n)}</a></li>`).join('')}</ul>
+      <hr><p class="small">${T('shelves.note_html')}</p></article>`,
+    jsonld: [{
+      '@context': 'https://schema.org',
+      '@type': 'Book',
+      name: b.title,
+      ...(authors ? { author: (b.authors ?? []).map((a) => ({ '@type': 'Person', name: a })) } : {}),
+      ...(b.isbn13 ? { isbn: b.isbn13 } : {}),
+      ...(b.publisher ? { publisher: { '@type': 'Organization', name: b.publisher } } : {}),
+      ...(b.year ? { datePublished: String(b.year) } : {}),
+      ...(b.language ? { inLanguage: b.language } : {}),
+      ...(frontUrl ? { image: abs(frontUrl) } : {}),
+      ...(blurb ? { description: blurb.slice(0, 1000) } : {}),
+      url: config.baseUrl + bookPath(b),
+      ...(b.isbn13 ? { sameAs: [`https://openlibrary.org/isbn/${b.isbn13}`] } : {}),
+    }],
   };
 }
 
@@ -271,10 +377,12 @@ async function renderPath(path, lng) {
   if ((m = path.match(/^\/c\/([a-z]{2})$/i))) return countryPage(lng, T, m[1]);
   if ((m = path.match(/^\/p\/(\d+)(?:-[a-z0-9-]*)?$/))) return placePage(lng, T, Number(m[1]));
   if ((m = path.match(/^\/l\/([A-Za-z0-9]{4,10})$/))) return libraryPage(lng, T, m[1]);
+  if ((m = path.match(/^\/b\/(\d+)(?:-[^/]*)?$/))) return bookPage(lng, T, Number(m[1]));
   return undefined; // not a page we render: plain app shell
 }
 
 function headTags(path, lng, page) {
+  path = page.canonical ?? path;
   const url = (l) => config.baseUrl + withLang(path, l);
   const json = (o) => JSON.stringify(o).replace(/</g, '\\u003c');
   return [
@@ -302,7 +410,9 @@ function inject(html, path, lng, page) {
 // ---- sitemaps
 async function sitemapIndex() {
   const { n } = await one(`SELECT count(*)::int AS n FROM locations WHERE status = 'approved'`);
-  const parts = ['pages', ...Array.from({ length: Math.ceil(n / SITEMAP_CHUNK) }, (_, i) => `libraries-${i + 1}`)];
+  const { n: nb } = await one(`SELECT count(*)::int AS n FROM (${SITEMAP_BOOKS_SQL}) x`);
+  const parts = ['pages', ...Array.from({ length: Math.ceil(n / SITEMAP_CHUNK) }, (_, i) => `libraries-${i + 1}`),
+    ...Array.from({ length: Math.ceil(nb / SITEMAP_CHUNK) }, (_, i) => `books-${i + 1}`)];
   return `<?xml version="1.0" encoding="UTF-8"?>
 <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${parts.map((p) => `  <sitemap><loc>${config.baseUrl}/sitemaps/${p}.xml</loc></sitemap>`).join('\n')}
@@ -334,6 +444,21 @@ async function sitemapPages() {
   ]);
 }
 
+// Books with something to show: a library holding it, its covers, or a blurb.
+export const SITEMAP_BOOKS_SQL = `
+  SELECT b.id, b.title, GREATEST(b.created_at, b.details_at,
+         (SELECT max(s.created_at) FROM sightings s WHERE s.book_id = b.id AND s.status = 'approved')) AS lastmod
+    FROM books b
+   WHERE EXISTS (SELECT 1 FROM sightings s JOIN locations l ON l.id = s.location_id
+                  WHERE s.book_id = b.id AND s.status = 'approved' AND l.status = 'approved')
+      OR (EXISTS (SELECT 1 FROM my_books m WHERE m.book_id = b.id)
+          AND (b.front_url IS NOT NULL OR b.cover_url IS NOT NULL OR b.description IS NOT NULL))`;
+
+async function sitemapBooks(part) {
+  const rows = await many(`${SITEMAP_BOOKS_SQL} ORDER BY b.id LIMIT $1 OFFSET $2`, [SITEMAP_CHUNK, (part - 1) * SITEMAP_CHUNK]);
+  return rows.length ? urlset(rows.map((r) => urlEntry(bookPath(r), r.lastmod))) : null;
+}
+
 async function sitemapLibraries(part) {
   const rows = await many(
     `SELECT l.code, ${LIB_LASTMOD} AS lastmod FROM locations l
@@ -352,13 +477,13 @@ export async function renderShell(req) {
 
 export default async function seoRoutes(app) {
   app.get('/robots.txt', async (req, reply) => reply.type('text/plain').send(
-    `User-agent: *\nDisallow: /api/\nDisallow: /me\nDisallow: /login\nDisallow: /review\nDisallow: /scan/\nAllow: /api/locations/*/sign\n\nSitemap: ${config.baseUrl}/sitemap.xml\n`));
+    `User-agent: *\nDisallow: /api/\nDisallow: /me\nDisallow: /login\nDisallow: /review\nDisallow: /admin\nDisallow: /queue\nDisallow: /books\nDisallow: /scan/\nAllow: /api/locations/*/sign\n\nSitemap: ${config.baseUrl}/sitemap.xml\n`));
 
   app.get('/sitemap.xml', async (req, reply) =>
     reply.type('application/xml').header('Cache-Control', 'public, max-age=3600').send(await cached('sm', sitemapIndex)));
   app.get('/sitemaps/:name', async (req, reply) => {
-    const m = req.params.name.match(/^(pages|libraries-(\d+))\.xml$/);
-    const xml = m && await cached(`sm:${m[1]}`, () => (m[2] ? sitemapLibraries(Number(m[2])) : sitemapPages()));
+    const m = req.params.name.match(/^(pages|(libraries|books)-(\d+))\.xml$/);
+    const xml = m && await cached(`sm:${m[1]}`, () => (m[2] === 'books' ? sitemapBooks(Number(m[3])) : m[2] ? sitemapLibraries(Number(m[3])) : sitemapPages()));
     if (!xml) return reply.code(404).send('Not found');
     return reply.type('application/xml').header('Cache-Control', 'public, max-age=3600').send(xml);
   });
@@ -367,7 +492,7 @@ export default async function seoRoutes(app) {
   app.get('/api/pages', async (req, reply) => {
     const path = String(req.query.path ?? '');
     const lng = req.query.lang === 'en' ? 'en' : 'he';
-    if (!/^\/(places|c\/[a-z]{2}|p\/\d+(-[a-z0-9-]*)?)$/i.test(path)) return reply.code(404).send({ error: 'not_found' });
+    if (!/^\/(places|c\/[a-z]{2}|p\/\d+(-[a-z0-9-]*)?|b\/\d+(-[^/]*)?)$/i.test(path)) return reply.code(404).send({ error: 'not_found' });
     const page = await cached(`${lng}${path}`, () => renderPath(path, lng));
     if (!page) return reply.code(404).send({ error: 'not_found' });
     return { title: page.title, html: page.html };

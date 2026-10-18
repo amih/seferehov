@@ -536,6 +536,30 @@ const he = {
     ? (n === 1 ? 'עוד אדם אחד מחכה לספר הזה' : `עוד ${n} אנשים מחכים לספר הזה`)
     : (n === 1 ? 'אדם אחד מחכה לספר הזה' : `${n} אנשים מחכים לספר הזה`)),
   'watch.on': '🔔 אני ברשימת ההמתנה',
+  // Public book page
+  'seo.book_front': 'הכריכה הקדמית',
+  'seo.book_back': 'הכריכה האחורית',
+  'seo.book_front_text': 'מה כתוב על הכריכה הקדמית',
+  'seo.book_back_text': 'מה כתוב על הכריכה האחורית',
+  'seo.book_about': 'על הספר',
+  'seo.danacode': 'דאנאקוד',
+  'seo.publisher': 'הוצאה',
+  'seo.year': 'שנה',
+  'seo.book_where': 'איפה הספר נמצא עכשיו',
+  'seo.book_nowhere': 'כרגע הוא לא נמצא באף ספריית רחוב. אפשר לבקש התראה כשיופיע.',
+  'seo.seen_on': ({ date }) => `נראה ב־${date}`,
+  'seo.book_more': 'עוד על הספר',
+  'seo.book_desc': ({ title, n }) => (n ? `${title} — נמצא עכשיו ב־${n === 1 ? 'ספריית רחוב אחת' : `${n} ספריות רחוב`}. ספרים בחינם בספריות רחוב.` : `${title} — ספרים בחינם בספריות רחוב.`),
+  'book.public_page': '🔗 עמוד הספר',
+  'menu.admin': 'ניהול ועמודי חיפוש',
+  // Adding books: one way only — photograph the covers
+  'mybooks.add_btn': '＋ הוספת ספרים',
+  'mybooks.add_title': 'הוספת ספרים',
+  'mybooks.add_big': 'צלמו את הספר',
+  'mybooks.add_big_note': 'קודם את הכריכה הקדמית, אחר כך הפכו ואת האחורית. אחר כך הספר הבא.',
+  'mybooks.add_how': 'אין צורך להקליד כלום. אנחנו מזהים את הספר מהתמונות ברקע (זה לוקח כמה דקות), ואחר כך כל ספר יחכה לך ב"ספרים לאישור" — שם אפשר לאשר אותו או לתקן את השם והסופר.',
+  'mybooks.empty2': 'עוד אין ספרים ברשימה.',
+  'shots.code_seen': '✓ הברקוד נקרא',
 };
 
 const en = {
@@ -1070,6 +1094,30 @@ const en = {
     ? (n === 1 ? '1 more person is waiting for this book' : `${n} more people are waiting for this book`)
     : (n === 1 ? '1 person is waiting for this book' : `${n} people are waiting for this book`)),
   'watch.on': '🔔 I am on the waiting list',
+  // Public book page
+  'seo.book_front': 'Front cover',
+  'seo.book_back': 'Back cover',
+  'seo.book_front_text': 'Text on the front cover',
+  'seo.book_back_text': 'Text on the back cover',
+  'seo.book_about': 'About the book',
+  'seo.danacode': 'Danacode',
+  'seo.publisher': 'Publisher',
+  'seo.year': 'Year',
+  'seo.book_where': 'Where the book is now',
+  'seo.book_nowhere': 'It is not in any street library right now. You can ask to be told when it shows up.',
+  'seo.seen_on': ({ date }) => `seen ${date}`,
+  'seo.book_more': 'More about the book',
+  'seo.book_desc': ({ title, n }) => (n ? `${title} — now in ${n === 1 ? 'one street library' : `${n} street libraries`}. Free books in street libraries.` : `${title} — free books in street libraries.`),
+  'book.public_page': '🔗 Book page',
+  'menu.admin': 'Admin and search pages',
+  // Adding books: one way only — photograph the covers
+  'mybooks.add_btn': '＋ Add books',
+  'mybooks.add_title': 'Add books',
+  'mybooks.add_big': 'Photograph the book',
+  'mybooks.add_big_note': 'First the front cover, then turn it over for the back. Then the next book.',
+  'mybooks.add_how': 'No typing needed. We work out which book it is from the photos in the background (it takes a few minutes). Then each book waits for you in "Books to approve", where you can confirm it or fix the title and author.',
+  'mybooks.empty2': 'No books on the list yet.',
+  'shots.code_seen': '✓ Barcode read',
 };
 
 const DICT = { he, en };

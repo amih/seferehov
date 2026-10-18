@@ -129,6 +129,7 @@ function renderBook(root, { b, photos, again, back, status, actions, wire, photo
       : b.details_pending ? `<p class="progress-line small"><span class="spinner"></span> ${t('book.looking')}</p>` : `<p class="muted small">${t('book.no_blurb')}</p>`}
     ${actions}
     ${b.isbn13 ? `<p class="muted small" dir="ltr">ISBN ${esc(b.isbn13)}</p>` : ''}
+    ${b.id ? `<p class="small"><a href="/b/${b.id}">${t('book.public_page')}</a></p>` : ''}
     ${b.details_source ? `<p class="muted small">${t('book.source', { src: esc(b.details_source) })}</p>` : ''}
   </section>`;
 

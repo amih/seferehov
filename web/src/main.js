@@ -23,7 +23,8 @@ import pageView from './views/page.js';
 import { initMenu } from './menu.js';
 import './install.js';
 import searchView from './views/search.js';
-import myBooksView from './views/my-books.js';
+import myBooksView, { addMyBooksView } from './views/my-books.js';
+import adminView from './views/admin.js';
 import duplicatesView from './views/duplicates.js';
 
 const routes = [
@@ -37,14 +38,16 @@ const routes = [
   [/^\/add$/, addLocationView],
   [/^\/search$/, searchView],
   [/^\/books$/, myBooksView],
+  [/^\/books\/add$/, addMyBooksView],
   [/^\/books\/(\d+)$/, myBookView],
   [/^\/duplicates$/, duplicatesView],
   [/^\/login$/, loginView],
   [/^\/me$/, meView],
   [/^\/top$/, topView],
   [/^\/review$/, reviewView],
+  [/^\/admin$/, adminView],
   [/^\/about$/, aboutView],
-  [/^\/(places|c\/[a-z]{2}|p\/\d+(-[a-z0-9-]*)?)$/i, pageView],
+  [/^\/(places|c\/[a-z]{2}|p\/\d+(-[a-z0-9-]*)?|b\/\d+(-[^/]*)?)$/i, pageView],
 ];
 
 let main = document.getElementById('view');

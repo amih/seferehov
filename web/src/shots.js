@@ -1,6 +1,6 @@
 import { api } from './api.js';
 import { enqueue } from './queue.js';
-import { scanImage } from './scanner.js';
+import { scanImage, detectFrame } from './scanner.js';
 import { esc, shrinkImage } from './ui.js';
 import { t, lang } from './i18n.js';
 
@@ -9,10 +9,14 @@ import { t, lang } from './i18n.js';
 // holds still on a sharp picture (a button takes it at once). Both pictures are then
 // shown, to keep or to take one side again. Each book is handed to
 // onBook({ front, back, isbn }) in the background, which resolves to a line to show.
+// While the camera is on, it also looks for the barcode: a whole back cover in one
+// photo leaves the barcode too small to decode from the still, but the live picture,
+// read many times a second, usually catches it.
 // Without a live camera, the phone's camera app is used instead, one photo at a time.
 export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   let stream = null, video = null, timer = null, side = 'front', front = null, back = null, preset = null, busy = false;
   let reviewing = false;
+  let liveCode = null, lastCode = null, looking = false, ticks = 0;
   let session = {}; // this time only: { intro, single, onBook }
   const small = document.createElement('canvas');
   const ctx = small.getContext('2d', { willReadFrequently: true });
@@ -43,7 +47,21 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
       ? `<b>${t('shots.front_now')}</b><br><span class="muted small">${t('shots.front_how')}</span>`
       : `<b>${t('shots.now_back')}</b><br><span class="muted small">${t('shots.back_why')}</span>`;
     panel.querySelector('[data-shots="skip"]').hidden = side !== 'back' || !!session.only || !!back;
+    showCode();
   };
+  const showCode = () => {
+    const say = panel.querySelector('.shot-say');
+    if (liveCode && say && !reviewing && !say.querySelector('.code-seen')) say.insertAdjacentHTML('beforeend', `<br><span class="ok small code-seen">${t('shots.code_seen')}</span>`);
+  };
+  // Every few ticks, in the background: the detector is slower than a tick.
+  async function lookForCode() {
+    if (looking || liveCode || preset || !video?.videoWidth) return;
+    looking = true;
+    const code = await detectFrame(video).catch(() => null);
+    looking = false;
+    // The book just saved may still be in view: its code is not the next book's.
+    if (code && code !== lastCode && !liveCode && !reviewing) { liveCode = code; navigator.vibrate?.(30); showCode(); }
+  }
   // The camera (or the review) in the middle of the screen.
   const center = (el) => requestAnimationFrame(() => el?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
   const thumb = (blob) => `<img class="shot-thumb" src="${esc(URL.createObjectURL(blob))}" alt="">`;
@@ -56,7 +74,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     refresh = say;
     side = only ?? 'front';
     prev = null; steady = 0; moved = true; best = 0;
-    front = null; back = null; reviewing = false;
+    front = null; back = null; reviewing = false; liveCode = null;
     panel.hidden = false;
     panel.innerHTML = `${intro ? `<p class="shot-intro">${intro}</p>` : ''}
       <div class="shot-live"><video muted playsinline></video><div class="shot-guide"></div><div class="shot-flash"></div>
@@ -87,6 +105,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   // sharpness = variance of its Laplacian (text and edges in focus score high).
   function tick() {
     if (busy || reviewing || !video.videoWidth) return;
+    if (++ticks % 4 === 0) lookForCode();
     const w = 160, h = Math.round((w * video.videoHeight) / video.videoWidth);
     small.width = w; small.height = h;
     ctx.drawImage(video, 0, 0, w, h);
@@ -144,8 +163,9 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   }
 
   function keep() {
-    save(session.only === 'back' ? null : front, session.only === 'front' ? null : back);
-    front = null; back = null; reviewing = false; side = 'front';
+    save(session.only === 'back' ? null : front, session.only === 'front' ? null : back, liveCode);
+    lastCode = liveCode ?? lastCode;
+    front = null; back = null; reviewing = false; side = 'front'; liveCode = null;
     if (session.single) return stop();
     moved = false; since = Date.now();
     refresh();
@@ -153,9 +173,9 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   }
 
   // In the background, so the next book can be photographed meanwhile.
-  async function save(f, b) {
+  async function save(f, b, seen = null) {
     const handle = session.onBook ?? onBook;
-    const isbn = preset || (b && await scanImage(b).catch(() => null)) || (f && await scanImage(f).catch(() => null));
+    const isbn = preset || seen || (b && await scanImage(b).catch(() => null)) || (f && await scanImage(f).catch(() => null));
     preset = null;
     const li = document.createElement('li');
     li.innerHTML = `${f ? thumb(f) : ''}${b ? thumb(b) : ''}<span><span class="spinner"></span></span>`;

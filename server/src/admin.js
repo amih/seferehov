@@ -1,0 +1,158 @@
+// /admin: what search engines can find (the public pages, as lists), cover texts that
+// wait for a check before they are shown, and how the app is used — counts only, never
+// who did what. Visitor numbers come from Matomo when MATOMO_TOKEN is set.
+import { config } from './config.js';
+import { one, many, q } from './db.js';
+import { requireUser } from './auth.js';
+import { bookPath, SITEMAP_BOOKS_SQL } from './seo.js';
+
+const ADMIN = 3;
+const DAYS = 30;
+
+// Each list is what the sitemap holds; the counts say how many pages of each kind exist.
+async function seoPages() {
+  const countries = await many(
+    `SELECT p.country AS cc, count(*)::int AS n FROM locations l JOIN places p ON p.id = l.place_id
+      WHERE l.status = 'approved' GROUP BY 1 ORDER BY n DESC`);
+  const places = await many(
+    `SELECT p.id, p.slug, p.name, p.name_he, p.country, count(*)::int AS n
+       FROM locations l JOIN places p ON p.id = l.place_id
+      WHERE l.status = 'approved' GROUP BY p.id ORDER BY n DESC LIMIT 300`);
+  const { n: placeCount } = await one(
+    `SELECT count(DISTINCT place_id)::int AS n FROM locations WHERE status = 'approved' AND place_id IS NOT NULL`);
+  const { n: libCount } = await one(`SELECT count(*)::int AS n FROM locations WHERE status = 'approved'`);
+  // Libraries with books first: those are the pages worth reading.
+  const libraries = await many(
+    `SELECT l.code, l.name, p.name AS place, p.name_he AS place_he, count(DISTINCT s.book_id)::int AS books, max(s.created_at) AS last_report
+       FROM locations l LEFT JOIN places p ON p.id = l.place_id
+       LEFT JOIN sightings s ON s.location_id = l.id AND s.status = 'approved'
+      WHERE l.status = 'approved' AND (s.id IS NOT NULL OR l.created_by IS NOT NULL)
+      GROUP BY l.id, p.id ORDER BY books DESC, last_report DESC NULLS LAST LIMIT 300`);
+  const books = await many(
+    `SELECT x.id, x.title, x.lastmod, b.authors, b.isbn13, b.danacode,
+            (b.front_url IS NOT NULL OR b.cover_url IS NOT NULL) AS catalog_cover, b.description IS NOT NULL AS blurb,
+            (SELECT count(*)::int FROM photos p WHERE p.ocr_status IN ('auto', 'approved') AND p.id IN (
+               SELECT unnest(ARRAY[s.photo_id, s.back_photo_id]) FROM sightings s WHERE s.book_id = x.id
+               UNION SELECT unnest(ARRAY[m.photo_id, m.back_photo_id]) FROM my_books m WHERE m.book_id = x.id)) AS texts
+       FROM (${SITEMAP_BOOKS_SQL}) x JOIN books b ON b.id = x.id
+      ORDER BY x.lastmod DESC NULLS LAST LIMIT 500`);
+  const { n: bookCount } = await one(`SELECT count(*)::int AS n FROM (${SITEMAP_BOOKS_SQL}) x`);
+  return {
+    counts: { countries: countries.length, places: placeCount, libraries: libCount, books: bookCount },
+    countries, places, libraries,
+    books: books.map((b) => ({ ...b, path: bookPath(b) })),
+    sitemap: `${config.baseUrl}/sitemap.xml`,
+  };
+}
+
+// Day by day for the last 30 days, plus totals. Counts only.
+async function activity() {
+  const daily = await many(
+    `WITH days AS (SELECT generate_series(current_date - ${DAYS - 1}, current_date, '1 day')::date AS d)
+     SELECT d AS day,
+       (SELECT count(*) FROM users WHERE created_at::date = d)::int AS new_readers,
+       (SELECT count(DISTINCT user_id) FROM (
+          SELECT user_id FROM scans WHERE created_at::date = d
+          UNION ALL SELECT user_id FROM sightings WHERE created_at::date = d
+          UNION ALL SELECT user_id FROM my_books WHERE created_at::date = d) a)::int AS active_readers,
+       (SELECT count(*) FROM scans WHERE created_at::date = d)::int AS scans,
+       (SELECT count(*) FROM sightings WHERE created_at::date = d)::int AS reports,
+       (SELECT count(*) FROM my_books WHERE created_at::date = d)::int AS home_books,
+       (SELECT count(*) FROM locations WHERE created_at::date = d AND created_by IS NOT NULL)::int AS new_libraries
+     FROM days ORDER BY d`);
+  const totals = await one(
+    `SELECT (SELECT count(*) FROM users)::int AS readers,
+            (SELECT count(*) FROM locations WHERE status = 'approved')::int AS libraries,
+            (SELECT count(*) FROM locations WHERE status = 'approved' AND created_by IS NOT NULL)::int AS reader_libraries,
+            (SELECT count(DISTINCT book_id) FROM sightings WHERE status = 'approved')::int AS books_in_libraries,
+            (SELECT count(DISTINCT book_id) FROM my_books)::int AS books_at_home,
+            (SELECT count(*) FROM sightings WHERE status = 'approved')::int AS reports,
+            (SELECT count(*) FROM book_watches)::int AS watches`);
+  // How good the reading is: what readers did with what the photos found.
+  const reading = await many(
+    `SELECT s.source, count(*)::int AS items,
+            count(*) FILTER (WHERE i.outcome = 'kept')::int AS kept,
+            count(*) FILTER (WHERE i.outcome = 'edited')::int AS edited,
+            count(*) FILTER (WHERE i.outcome = 'dropped')::int AS dropped,
+            count(*) FILTER (WHERE i.isbn13 IS NOT NULL OR i.danacode IS NOT NULL)::int AS with_code
+       FROM scan_items i JOIN scans s ON s.id = i.scan_id
+      WHERE i.decision IS DISTINCT FROM 'merged' GROUP BY 1 ORDER BY 2 DESC`);
+  // Most reported books and busiest towns: only what three or more reports agree on.
+  const topBooks = await many(
+    `SELECT b.id, b.title, count(*)::int AS n FROM sightings s JOIN books b ON b.id = s.book_id
+      WHERE s.status = 'approved' GROUP BY b.id HAVING count(DISTINCT s.user_id) >= 3 ORDER BY n DESC LIMIT 15`);
+  const topPlaces = await many(
+    `SELECT p.id, p.slug, p.name, p.name_he, count(*)::int AS n FROM sightings s
+       JOIN locations l ON l.id = s.location_id JOIN places p ON p.id = l.place_id
+      WHERE s.status = 'approved' GROUP BY p.id HAVING count(DISTINCT s.user_id) >= 3 ORDER BY n DESC LIMIT 15`);
+  return { daily, totals, reading, topBooks: topBooks.map((b) => ({ ...b, path: bookPath(b) })), topPlaces };
+}
+
+// ---- Matomo (view-only token for the Seferehov site), cached for 10 minutes
+let matomoCache = { at: 0, value: null };
+async function matomo() {
+  const { url, siteId, token } = config.matomo;
+  if (!url || !siteId || !token) return null;
+  if (matomoCache.at > Date.now() - 600_000) return matomoCache.value;
+  const call = async (method, extra = {}) => {
+    const body = new URLSearchParams({ module: 'API', method, idSite: siteId, format: 'JSON', token_auth: token, ...extra });
+    const res = await fetch(`${url}/index.php`, { method: 'POST', body, signal: AbortSignal.timeout(15_000) });
+    const json = await res.json();
+    if (json?.result === 'error') throw new Error(json.message);
+    return json;
+  };
+  const range = { period: 'range', date: `last${DAYS}` };
+  try {
+    const [days, pages, referrers, countries] = await Promise.all([
+      call('VisitsSummary.get', { period: 'day', date: `last${DAYS}` }),
+      call('Actions.getPageUrls', { ...range, flat: '1', filter_limit: '25', filter_sort_column: 'nb_hits' }),
+      call('Referrers.getReferrerType', range),
+      call('UserCountry.getCountry', { ...range, filter_limit: '10' }),
+    ]);
+    const value = {
+      days: Object.entries(days).map(([day, v]) => ({ day, visits: v.nb_visits ?? 0, actions: v.nb_actions ?? 0 })),
+      pages: pages.map((p) => ({ url: p.label, hits: p.nb_hits, visits: p.nb_visits })),
+      referrers: referrers.map((r) => ({ type: r.label, visits: r.nb_visits })),
+      countries: countries.map((c) => ({ country: c.label, code: c.code, visits: c.nb_visits })),
+    };
+    matomoCache = { at: Date.now(), value };
+    return value;
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
+export default async function adminRoutes(app) {
+  app.get('/api/admin/overview', { preHandler: requireUser(ADMIN) }, async () => ({
+    seo: await seoPages(),
+    activity: await activity(),
+    matomo: await matomo(),
+  }));
+
+  // Cover texts waiting for a check: Hebrew reads, and reads that looked like a loop.
+  app.get('/api/admin/cover-texts', { preHandler: requireUser(ADMIN) }, async () => ({
+    items: await many(
+      `SELECT p.id, p.kind, p.path, p.ocr_text, p.ocr_at, b.id AS book_id, b.title
+         FROM photos p
+         LEFT JOIN LATERAL (
+           SELECT book_id FROM sightings s WHERE p.id IN (s.photo_id, s.back_photo_id)
+           UNION ALL SELECT book_id FROM my_books m WHERE p.id IN (m.photo_id, m.back_photo_id) LIMIT 1) x ON true
+         LEFT JOIN books b ON b.id = x.book_id
+        WHERE p.ocr_status = 'review' ORDER BY p.ocr_at DESC LIMIT 50`),
+    counts: await one(
+      `SELECT count(*) FILTER (WHERE ocr_status = 'review')::int AS review,
+              count(*) FILTER (WHERE ocr_status IN ('auto', 'approved'))::int AS shown,
+              count(*) FILTER (WHERE ocr_at IS NULL AND kind IN ('cover', 'back'))::int AS waiting
+         FROM photos`),
+  }));
+
+  app.post('/api/admin/cover-texts/:id', { preHandler: requireUser(ADMIN) }, async (req, reply) => {
+    const { status, text } = req.body ?? {};
+    if (!['approved', 'rejected'].includes(status)) return reply.code(400).send({ error: 'bad_request' });
+    const r = await q(
+      `UPDATE photos SET ocr_status = $2, ocr_text = COALESCE($3, ocr_text) WHERE id = $1 AND ocr_text IS NOT NULL`,
+      [req.params.id, status, typeof text === 'string' ? text.trim().slice(0, 8000) : null]);
+    if (!r.rowCount) return reply.code(404).send({ error: 'not_found' });
+    return { ok: true };
+  });
+}

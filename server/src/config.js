@@ -37,6 +37,12 @@ export const config = {
     pass: env.SMTP_PASS || '',
     from: env.MAIL_FROM || 'Seferehov <noreply@example.com>',
   },
+  // Visitor numbers on /admin: a view-only Matomo token for the Seferehov site. Optional.
+  matomo: {
+    url: (env.MATOMO_URL || '').replace(/\/$/, ''),
+    siteId: env.MATOMO_SITE_ID || '',
+    token: env.MATOMO_TOKEN || '',
+  },
   // Sightings reported from farther than this go to review even for trusted users.
   maxReportDistanceM: 300,
 };

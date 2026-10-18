@@ -345,3 +345,35 @@ button.big-btn { font: inherit; text-align: start; width: 100%; }
 /* Android draws its buttons (back / home / recent) over the bottom of the app, in white:
    a strip in the app's colour behind them keeps them visible. */
 body::after { content: ''; position: fixed; z-index: 3000; left: 0; right: 0; bottom: 0; height: env(safe-area-inset-bottom); background: var(--wood); pointer-events: none; }
+
+/* Public book page (/b/<id>) */
+.book-public .lead { font-size: 1.1em; color: var(--muted); margin-top: -6px; }
+.book-covers { display: flex; gap: 12px; margin: 12px 0; }
+.book-covers figure { flex: 1 1 0; margin: 0; max-width: 50%; }
+.book-covers img { display: block; width: 100%; max-height: 60vh; object-fit: contain; border-radius: 8px; background: var(--line); }
+.book-covers figcaption { font-size: 0.85em; color: var(--muted); text-align: center; margin-top: 4px; }
+.book-facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 10px 0; }
+.book-facts dt { color: var(--muted); }
+.book-facts dd { margin: 0; }
+.cover-text { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 14px; white-space: normal; overflow-wrap: anywhere; }
+.ext-links { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 0; list-style: none; }
+
+/* Admin */
+.admin .seg { margin-bottom: 12px; }
+.admin details summary { cursor: pointer; }
+.admin details summary h2 { display: inline; }
+.table-wrap { overflow-x: auto; margin: 8px 0 16px; }
+.table-wrap table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
+.table-wrap th, .table-wrap td { text-align: start; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.table-wrap th { color: var(--muted); font-weight: 600; }
+.stat-row { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+.stat { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 12px; min-width: 96px; }
+.stat b { display: block; font-size: 1.4em; }
+.stat span { color: var(--muted); font-size: 0.85em; }
+.bars { display: flex; align-items: flex-end; gap: 2px; height: 80px; margin: 6px 0 16px; border-bottom: 1px solid var(--line); }
+.bars span { flex: 1 1 0; background: var(--green); min-height: 1px; border-radius: 2px 2px 0 0; }
+.ocr-item { display: flex; gap: 12px; align-items: flex-start; }
+.ocr-item img { width: 140px; border-radius: 6px; }
+.ocr-item > div { flex: 1; min-width: 0; }
+.ocr-item textarea { width: 100%; font: inherit; }
+@media (max-width: 560px) { .ocr-item { flex-direction: column; } .ocr-item img { width: 100%; } }

@@ -1,7 +1,7 @@
 import sharp from 'sharp';
 import { readBarcodes } from 'zxing-wasm/reader';
 import { config } from './config.js';
-import { normalizeIsbn } from './util.js';
+import { normalizeIsbn, normalizeDanacode } from './util.js';
 
 // One line per book is far more reliable with small local models than JSON.
 const PROMPT = `Read the book spines and covers in this photo. Write one line per distinct book, in the format:
@@ -12,9 +12,9 @@ Skip spines you cannot read. Do not repeat a book. After the last book write END
 const MAX_LINES = 60;
 
 // Long side ~1280 px keeps spine text legible without blowing the context window.
-async function prepare(buffer, angle) {
+async function prepare(buffer, angle, size = 1280) {
   return sharp(buffer).rotate().rotate(angle)
-    .resize(1280, 1280, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 88 }).toBuffer();
+    .resize(size, size, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 88 }).toBuffer();
 }
 
 // Spine text runs vertically, so each photo is read upright and turned both ways.
@@ -47,18 +47,48 @@ export async function readBooks(buffer, { spines = true } = {}) {
 }
 
 // The front and back covers of one book, photographed one after the other: the title and
-// author from the front, the ISBN from a barcode (either side) or printed on the back.
+// author from the front, the ISBN or Danacode from a barcode (either side) or from the
+// digits printed on the back. Barcodes in a photo of a whole cover are often too small
+// to decode; the printed digits are read well, and an ISBN's check digit catches misreads.
 const FRONT_PROMPT = 'This is the front cover of one book. Read its title and author exactly as printed, in the original language and script (do not translate). Answer one line: TITLE | AUTHOR. If unreadable answer NONE.';
-const BACK_PROMPT = 'This is the back cover of a book. If an ISBN number is printed on it, answer the ISBN digits only. Otherwise answer NONE.';
+const BACK_PROMPT = 'This is the back cover of a book. Find the ISBN, or the Israeli Danacode (דאנאקוד), printed on it, usually next to the barcode. Answer one line: ISBN <digits> or DANACODE <digits>. If there is neither, answer NONE.';
 export async function readCover(front, back = null) {
   let book = null;
   for (const angle of [0, 90, 270]) {
     [book] = parseBooks((await generate(await prepare(front, angle), FRONT_PROMPT, 120)).trim().split('\n')[0]);
     if (book && book.quality !== 'low') break;
   }
-  let isbn = (back && (await readIsbnBarcodes(back))[0]) || (await readIsbnBarcodes(front))[0] || null;
-  if (!isbn && back) isbn = normalizeIsbn(await generate(await prepare(back, 0), BACK_PROMPT, 40));
-  return { title: book?.title ?? null, author: book?.author ?? null, quality: book?.quality ?? 'low', isbn };
+  let code = (back && (await readBookCodes(back))[0]) || (await readBookCodes(front))[0] || null;
+  if (!code && back) code = parsePrintedCode(await generate(await prepare(back, 0, 1600), BACK_PROMPT, 40));
+  return { title: book?.title ?? null, author: book?.author ?? null, quality: book?.quality ?? 'low', isbn: code };
+}
+
+// "ISBN 978-0-385-54647-8" / "DANACODE 239-597" → the ISBN-13 or the Danacode's 12 digits.
+export function parsePrintedCode(answer) {
+  const m = String(answer ?? '').match(/(ISBN|DANACODE)\s*:?\s*([0-9Xx][0-9Xx\s-]{4,20})/i);
+  if (!m) return null;
+  const digits = m[2].trim();
+  return m[1].toUpperCase() === 'ISBN' ? normalizeIsbn(digits) ?? normalizeDanacode(digits) : normalizeDanacode(digits) ?? normalizeIsbn(digits);
+}
+
+// All the text printed on one cover photo, for the book page. Hebrew is read by
+// Tesseract (the vision model invents Hebrew text it cannot make out); everything else
+// by the vision model, which copies Latin print almost perfectly.
+const TEXT_PROMPT = 'Transcribe all the text printed on this book cover, exactly as printed, in its original language and script (do not translate). Keep paragraphs. Skip barcodes. Output only the text.';
+export async function readCoverText(buffer) {
+  const text = (await generate(await prepare(buffer, 0, 1600), TEXT_PROMPT, 1200)).trim();
+  if (!/[\u0590-\u05FF]/.test(text)) return { text, hebrew: false };
+  return { text: await tesseract(buffer).catch(() => '') || text, hebrew: true };
+}
+
+async function tesseract(buffer) {
+  const { execFile } = await import('node:child_process');
+  const png = await sharp(buffer).rotate().resize(2400, 2400, { fit: 'inside' }).grayscale().png().toBuffer();
+  return new Promise((resolve, reject) => {
+    const p = execFile('tesseract', ['-', '-', '-l', 'heb+eng', '--psm', '3'], { timeout: 120_000, maxBuffer: 4 << 20 },
+      (err, out) => (err ? reject(err) : resolve(out.trim())));
+    p.stdin.end(png);
+  });
 }
 
 // The four corners of the book cover in a photo of one book (held in a hand, lying on
@@ -372,6 +402,17 @@ export async function readIsbnBarcodes(buffer) {
     const img = await sharp(buffer).rotate().resize(2000, 2000, { fit: 'inside', withoutEnlargement: true }).jpeg().toBuffer();
     const found = await readBarcodes(img, { formats: ['EAN13'], tryHarder: true, maxNumberOfSymbols: 20 });
     return [...new Set(found.filter((b) => b.isValid && /^97[89]\d{10}$/.test(b.text)).map((b) => b.text))];
+  } catch {
+    return [];
+  }
+}
+
+// ISBN barcodes, and Danacodes (printed as UPC-A), on one book's cover.
+export async function readBookCodes(buffer) {
+  try {
+    const img = await sharp(buffer).rotate().resize(2400, 2400, { fit: 'inside', withoutEnlargement: true }).jpeg().toBuffer();
+    const found = await readBarcodes(img, { formats: ['EAN13', 'UPCA'], tryHarder: true, maxNumberOfSymbols: 4 });
+    return [...new Set(found.filter((b) => b.isValid).map((b) => normalizeIsbn(b.text) ?? normalizeDanacode(b.text)).filter(Boolean))];
   } catch {
     return [];
   }

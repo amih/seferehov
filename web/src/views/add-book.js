@@ -6,9 +6,9 @@ import { t, lang } from '../i18n.js';
 import { placeBook } from '../mybooks.js';
 import { bookShots, sendCovers } from '../shots.js';
 
-// Three ways in: shelf photos, a short video, or barcodes one by one. Photos and
-// videos upload in the background so the next one can be taken right away; every
-// book found waits in the approval queue (/queue).
+// Three ways in: shelf photos, a short video, or one book's front and back covers (the
+// live camera also catches its barcode). Photos and videos upload in the background so
+// the next one can be taken right away; every book found waits in the approval queue.
 export default async function addBookView(root, [code], query) {
   const me = await getMe();
   if (!me) return navigate(`/login?next=/l/${code}/add`, { replace: true });
@@ -24,7 +24,6 @@ export default async function addBookView(root, [code], query) {
         <input type="file" accept="image/*" capture="environment" multiple hidden id="shelf"></label>
       <label class="big-btn"><span>🎥</span><b>${t('add3.video')}</b><small>${t('add3.video_note')}</small>
         <input type="file" accept="video/*" capture="environment" hidden id="video"></label>
-      <a class="big-btn" id="barcode" href="/l/${code}/barcode"><span>▥</span><b>${t('add3.barcode')}</b><small>${t('add3.barcode_note')}</small></a>
       <button class="big-btn" data-shots="start"><span>📕</span><b>${t('shots.start')}</b><small>${t('shots.start_note')}</small></button>
     </div>
     <div class="shots" id="shots" hidden></div>
@@ -33,21 +32,12 @@ export default async function addBookView(root, [code], query) {
     <p id="queue-link"></p>
     <p class="muted small">${t('addbook.shelf_lead')}</p>
     ${noStringsNote()}
-    <details class="nobarcode"><summary>${t('addbook.nobarcode')}</summary>
-      <form id="noisbn" class="form">
-        <label>${t('field.title')} <input name="title" required maxlength="300"></label>
-        <label>${t('field.author')} <input name="author" maxlength="200"></label>
-        <label class="photo-pick small"><input type="file" name="photo" accept="image/*" capture="environment" hidden><span>${t('addbook.cover_photo')}</span></label>
-        <button class="btn primary">${t('addbook.add_this')}</button>
-      </form>
-    </details>
   </section>`;
 
   let pos = null;
   getPosition().then((p) => { pos = p; }).catch(() => {});
   const showMode = () => {
     root.querySelectorAll('#mode button').forEach((x) => x.classList.toggle('on', x.dataset.k === mode));
-    root.querySelector('#barcode').href = `/l/${code}/barcode${mode === 'added' ? '?kind=added' : ''}`;
   };
   showMode();
   root.querySelector('#mode').onclick = (e) => {
@@ -122,7 +112,6 @@ export default async function addBookView(root, [code], query) {
 
   // Front and back photos of one book: a known barcode is reported here now; anything
   // else is read from the covers on the server and waits in the queue.
-  const noisbn = root.querySelector('#noisbn');
   const shots = bookShots({ on: root, panel: root.querySelector('#shots'), onBook: async ({ front, back, isbn }) => {
     if (isbn && navigator.onLine) {
       const fd = new FormData();
@@ -140,24 +129,5 @@ export default async function addBookView(root, [code], query) {
     showQueue();
     return line;
   } });
-  noisbn.onsubmit = async (e) => {
-    e.preventDefault();
-    const file = noisbn.photo.files[0];
-    const photo = file ? await shrinkImage(file) : null;
-    const fields = { title: noisbn.title.value, author: noisbn.author.value, kind: mode, lat: pos?.lat ?? '', lon: pos?.lon ?? '' };
-    const url = `/api/locations/${code}/sightings`;
-    const fd = new FormData();
-    Object.entries(fields).forEach(([k, v]) => fd.append(k, v));
-    if (photo) fd.append('photo', photo, 'photo.jpg');
-    try {
-      const r = await api(url, { method: 'POST', form: fd });
-      toast(r.sighting?.status === 'approved' ? t('loc.thanks_updated') : t('loc.thanks_review'));
-    } catch (err) {
-      if (!(err instanceof TypeError)) return toast(err.message);
-      await enqueue(url, fields, { photo }, 'book');
-      toast(t('status.offline'));
-    }
-    noisbn.reset();
-  };
   return () => shots.stop();
 }

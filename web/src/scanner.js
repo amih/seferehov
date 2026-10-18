@@ -63,6 +63,14 @@ export async function startScanner(video, onIsbn) {
   return () => { running = false; stream.getTracks().forEach((t) => t.stop()); video.srcObject = null; };
 }
 
+// One look at the live camera picture: the book code in it, or null.
+export async function detectFrame(video) {
+  const detector = await getDetector();
+  try {
+    return (await detector.detect(video)).map((c) => bookCode(c.rawValue)).find(Boolean) ?? null;
+  } catch { return null; } // frame not ready
+}
+
 // For a still photo of a back cover.
 export async function scanImage(blob) {
   const detector = await getDetector();
