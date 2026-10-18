@@ -20,6 +20,7 @@ import { PRESENT_BOOKS_SQL, TAKEN_BOOKS_SQL } from './locations.js';
 import { normTitle } from './vision.js';
 import { BOOK_REVIEWS_SQL, READER_REVIEWS_SQL, QUESTIONS, hasText } from './reviews.js';
 import { translate } from '../../web/src/i18n.js';
+import { levelOf } from '../../web/src/levels.js';
 
 const LANGS = ['he', 'en'];
 const SITEMAP_CHUNK = 40000;
@@ -397,8 +398,11 @@ async function bookPage(lng, T, id) {
 }
 
 async function readerPage(lng, T, id) {
-  const u = await one('SELECT id, screen_name, created_at FROM users WHERE id = $1 AND screen_name IS NOT NULL', [id]);
+  const u = await one(
+    `SELECT id, screen_name, created_at, (SELECT COALESCE(sum(points), 0)::int FROM karma_events WHERE user_id = users.id) AS karma
+       FROM users WHERE id = $1 AND screen_name IS NOT NULL`, [id]);
   if (!u) return null;
+  const { level } = levelOf(u.karma);
   const rows = await many(READER_REVIEWS_SQL, [id]);
   const recommended = rows.filter((r) => r.rating >= 4);
   const others = rows.filter((r) => !(r.rating >= 4));
@@ -413,6 +417,7 @@ async function readerPage(lng, T, id) {
     noindex: !rows.length, // nothing to read there yet
     lastmod: rows[0]?.updated_at,
     html: `<h1 dir="auto">${esc(T('reader.title', { name }))}</h1>
+      <p class="level-line">${level.badge} ${T(`level.${level.key}`)}</p>
       <p>${rows.length ? T('reader.lead', { n: rows.length, rec: recommended.length }) : T('reader.none')}</p>
       ${recommended.length ? `<h2>${T('reader.recommends')}</h2><ul class="reader-books">${recommended.map(item).join('')}</ul>` : ''}
       ${others.length ? `<h2>${T('reader.also_read')}</h2><ul class="reader-books">${others.map(item).join('')}</ul>` : ''}

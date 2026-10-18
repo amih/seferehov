@@ -5,7 +5,7 @@ import { savePhoto, photoUrls, avatarUrl } from './photos.js';
 import { bookDetails } from './details.js';
 import { lookupIsbn, upsertBook, findOrCreateBook } from './books.js';
 import { readForm } from './multipart.js';
-import { initialStatus, locationStatus, award, pointsForSighting } from './moderation.js';
+import { initialStatus, locationStatus, award, awardSighting } from './moderation.js';
 import { parseLatLon, shortCode } from './util.js';
 import { checkPrivate } from './privacy.js';
 import { waitingFor } from './finder.js';
@@ -62,7 +62,7 @@ export async function recordSighting({ user, loc, book, kind, distance, photoId 
       [book.id, loc.id, user.id, kind, status, photoId, backPhotoId, distance],
     )).rows[0];
     if (status === 'approved') {
-      await award(db, { userId: user.id, points: pointsForSighting(kind), reason: `sighting_${kind}`, refType: 'sighting', refId: row.id });
+      await awardSighting(db, { userId: user.id, locationId: loc.id, bookId: book.id, kind, sightingId: row.id });
       await db.query('UPDATE locations SET last_checked_at = now() WHERE id = $1', [loc.id]);
     }
     return row;
@@ -338,7 +338,8 @@ export default async function locationRoutes(app) {
   app.get('/api/leaderboard', async (req) => {
     const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 3650);
     const rows = await many(
-      `SELECT COALESCE(u.screen_name, 'Reader #' || u.id) AS name, u.avatar_path, sum(k.points)::int AS points
+      `SELECT u.id, u.screen_name IS NOT NULL AS public, COALESCE(u.screen_name, 'Reader #' || u.id) AS name, u.avatar_path, sum(k.points)::int AS points,
+              (SELECT sum(points) FROM karma_events WHERE user_id = u.id)::int AS karma
          FROM karma_events k JOIN users u ON u.id = k.user_id
         WHERE k.created_at > now() - make_interval(days => $1)
         GROUP BY u.id ORDER BY points DESC LIMIT 20`,

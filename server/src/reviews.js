@@ -7,6 +7,8 @@ import { patternCheck } from './privacy.js';
 import { avatarUrl } from './photos.js';
 import { normTitle } from './vision.js';
 import { forgetPages } from './seo.js';
+import { award } from './moderation.js';
+import { POINTS } from './config.js';
 
 export const QUESTIONS = ['summary', 'liked', 'recommend_to', 'when'];
 const MAX = { summary: 300, liked: 3000, recommend_to: 600, when: 200 };
@@ -95,6 +97,10 @@ export default async function reviewRoutes(app) {
        RETURNING rating, answers, hidden`,
       [req.user.id, id, r, clean ? JSON.stringify(clean) : null, rating !== undefined]);
     forgetPages(`/b/${id}`); forgetPages(`/r/${req.user.id}`);
+    // Points for the first written review of this book (not for a star or "I read it").
+    if (hasText(mine.answers) && !await one(`SELECT 1 FROM karma_events WHERE user_id = $1 AND reason = 'book_review' AND ref_id = $2`, [req.user.id, id])) {
+      await award({ query: q }, { userId: req.user.id, points: POINTS.bookReview, reason: 'book_review', refType: 'book', refId: id });
+    }
     return { mine };
   });
 

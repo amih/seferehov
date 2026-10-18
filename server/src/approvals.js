@@ -6,7 +6,7 @@ import { requireUser } from './auth.js';
 import { lookupIsbn, findOrCreateBook, withCode } from './books.js';
 import { missingParts } from './details.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
-import { initialStatus, award, pointsForSighting } from './moderation.js';
+import { initialStatus, awardSighting } from './moderation.js';
 import { parseLatLon } from './util.js';
 import { readForm } from './multipart.js';
 import { normTitle } from './vision.js';
@@ -74,7 +74,7 @@ export async function approveItem(item, scan, user, { title, author } = {}) {
       [book.id, scan.location_id, user.id, scan.kind, status, scan.distance_m, photoId, backPhotoId],
     )).rows[0];
     if (status === 'approved') {
-      await award(db, { userId: user.id, points: pointsForSighting(scan.kind), reason: `sighting_${scan.kind}`, refType: 'sighting', refId: s.id });
+      await awardSighting(db, { userId: user.id, locationId: scan.location_id, bookId: book.id, kind: scan.kind, sightingId: s.id });
       await db.query('UPDATE locations SET last_checked_at = now() WHERE id = $1', [scan.location_id]);
     }
     return s;

@@ -11,7 +11,7 @@ import { readBooks, readCover, readIsbnBarcodes, normTitle, sameTitle } from './
 import { pickFrames } from './frames.js';
 import { cropCover } from './covers.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
-import { initialStatus, award, pointsForSighting } from './moderation.js';
+import { initialStatus, awardSighting } from './moderation.js';
 import { parseLatLon, normalizeIsbn, normalizeDanacode } from './util.js';
 import { mergeDuplicates } from './approvals.js';
 import { ownerOf } from './mybooks.js';
@@ -206,7 +206,7 @@ export default async function scanRoutes(app) {
           [book.id, scan.location_id, req.user.id, kind, status, scan.distance_m],
         )).rows[0];
         if (status === 'approved') {
-          await award(db, { userId: req.user.id, points: pointsForSighting(kind), reason: `sighting_${kind}`, refType: 'sighting', refId: s.id });
+          await awardSighting(db, { userId: req.user.id, locationId: scan.location_id, bookId: book.id, kind, sightingId: s.id });
         }
       });
       n++;

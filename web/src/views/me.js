@@ -2,6 +2,7 @@ import { api, getMe } from '../api.js';
 import { navigate } from '../nav.js';
 import { esc, toast, avatarHtml, contactHtml } from '../ui.js';
 import { t } from '../i18n.js';
+import { levelOf } from '../levels.js';
 import { pushSupported, isIos, installed, currentSub, enablePush, disablePush } from '../push.js';
 
 const NAME_ERRORS = ['invalid_screen_name', 'screen_name_taken'];
@@ -38,6 +39,7 @@ export default async function meView(root, _, query) {
       ${me.avatar_source === 'upload' ? `<button class="btn" id="avatar-reset">${t(me.can_use_google_picture ? 'me.use_google' : 'me.remove')}</button>` : ''}
     </div>
     ${me.avatar_source === 'google' ? `<p class="muted small">${t('me.google_note')}</p>` : ''}
+    ${levelCard(me.karma)}
     <div class="stats">
       <div><strong>${me.karma}</strong><span>${t('stat.points')}</span></div>
       <div><strong>${me.locations}</strong><span>${t('stat.libraries')}</span></div>
@@ -155,4 +157,13 @@ export default async function meView(root, _, query) {
     document.dispatchEvent(new Event('seferehov:me'));
     navigate('/');
   });
+}
+
+// The reader's level, how far to the next one, and how points are earned.
+function levelCard(karma) {
+  const { level, next, toNext, share } = levelOf(karma);
+  return `<div class="level-card"><p><span class="level-badge">${level.badge}</span> <b>${t(`level.${level.key}`)}</b></p>
+    ${next ? `<div class="level-bar"><i style="width:${Math.round(share * 100)}%"></i></div>
+      <p class="muted small">${t('level.next', { n: toNext, name: `${next.badge} ${t(`level.${next.key}`)}` })}</p>` : `<p class="muted small">${t('level.top')}</p>`}
+    <details><summary class="small">${t('level.how')}</summary><p class="small">${t('top.legend')}</p></details></div>`;
 }

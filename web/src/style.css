@@ -397,3 +397,8 @@ body::after { content: ''; position: fixed; z-index: 3000; left: 0; right: 0; bo
 .notify-opts { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; }
 .notify-opts label.check { display: inline-flex; gap: 8px; align-items: center; }
 .books li.stale { opacity: .55; }
+.level-card { border: 1px solid var(--line, #ddd); border-radius: var(--radius); padding: 10px 14px; margin: 12px 0; }
+.level-card p { margin: 4px 0; }
+.level-badge { font-size: 1.4rem; }
+.level-bar { height: 8px; border-radius: 4px; background: rgba(127, 127, 127, .2); overflow: hidden; }
+.level-bar i { display: block; height: 100%; background: var(--green); }

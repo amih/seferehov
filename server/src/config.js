@@ -55,11 +55,17 @@ export const config = {
   maxReportDistanceM: 300,
 };
 
+// Karma. Generous at the start on purpose: a reader reaches the second level on the
+// first day with one full shelf. Levels are in levels.js.
 export const POINTS = {
-  location: 10,
-  sighting: 2,
-  gone: 1,
-  check: 1,
-  edit: 3,
-  review: 1,
+  location: 100, // a new library
+  sighting: 10, // a book on a shelf, or left there
+  taken: 10, // "I took it"
+  gone: 50, // a book that is no longer there: keeps the map honest
+  check: 50, // the library's state, standing by it (once a day per library)
+  shelf: 150, // three or more books reported at one library (once a day per library)
+  edit: 20, // a change to a library, once approved
+  review: 10, // a reviewer's decision
+  bookReview: 30, // a written review of a book (once per book)
 };
+export const KARMA_DAY_CAP = 1000;

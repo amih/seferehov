@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { esc, avatarHtml } from '../ui.js';
 import { t } from '../i18n.js';
+import { levelOf } from '../levels.js';
 
 export default async function topView(root) {
   root.innerHTML = `<section class="page"><h1>${t('top.title')}</h1>
@@ -11,7 +12,11 @@ export default async function topView(root) {
   async function load(days) {
     try {
       const { leaders } = await api(`/api/leaderboard?days=${days}`);
-      list.innerHTML = leaders.length ? leaders.map((l) => `<li><span class="who">${avatarHtml(l, 28)}${esc(l.name)}</span><strong>${l.points}</strong></li>`).join('') : `<p class="muted">${t('top.none')}</p>`;
+      list.innerHTML = leaders.length ? leaders.map((l) => {
+        const { level } = levelOf(l.karma);
+        const who = `${avatarHtml(l, 28)}${esc(l.name)} <span title="${esc(t(`level.${level.key}`))}">${level.badge}</span>`;
+        return `<li><span class="who">${l.public ? `<a href="/r/${l.id}">${who}</a>` : who}</span><strong>${l.points}</strong></li>`;
+      }).join('') : `<p class="muted">${t('top.none')}</p>`;
     } catch { list.innerHTML = `<p class="muted">${t('offline.short')}</p>`; }
   }
   root.querySelector('.seg').onclick = (e) => {
