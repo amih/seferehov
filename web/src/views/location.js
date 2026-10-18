@@ -1,7 +1,11 @@
 import { api, getMe } from '../api.js';
-import { esc, getPosition, timeAgo, toast, avatarHtml, noStringsNote, confirmDialog } from '../ui.js';
+import { esc, getPosition, timeAgo, toast, avatarHtml, noStringsNote, confirmDialog, dialog } from '../ui.js';
+import { navigate } from '../nav.js';
 import { t, lang } from '../i18n.js';
 import { rememberList } from '../pager.js';
+
+const STATES = ['ok', 'messy', 'damaged', 'empty', 'missing'];
+const STALE_MS = 182 * 86400_000; // not seen for half a year: maybe gone
 
 export default async function locationView(root, [code]) {
   root.innerHTML = `<section class="page"><p class="muted">${t('loading')}</p></section>`;
@@ -24,7 +28,8 @@ export default async function locationView(root, [code]) {
     ${l.status === 'removed' ? `<p class="note">${t('loc.removed')}</p>` : ''}
     ${l.restricted ? `<p class="note">${t('loc.restricted')}</p>` : ''}
     ${l.description ? `<p class="desc">${esc(l.description)}</p>` : ''}
-    <p class="muted">${l.last_checked_at ? t('loc.checked', { when: timeAgo(l.last_checked_at) }) : t('loc.not_checked')}
+    <p class="muted">${l.last_check ? t('loc.checked_state', { when: timeAgo(l.last_check.at), state: t(`loc.state.${l.last_check.state}`) })
+      : l.last_checked_at ? t('loc.checked', { when: timeAgo(l.last_checked_at) }) : t('loc.not_checked')}
       · ${t('loc.code')} <strong dir="ltr">${l.code}</strong>${l.source === 'osm' ? ` · ${t('loc.from_osm_html', { url: l.osm })}` : ''}</p>
     ${l.place ? `<p><a href="/p/${l.place.id}-${l.place.slug}">${esc(t('seo.place_h1', { inPlace: t('seo.in', (lang() === 'he' && l.place.name_he) || l.place.name) }))}</a></p>` : ''}
     <div class="actions">
@@ -43,14 +48,14 @@ export default async function locationView(root, [code]) {
     ${books.length ? '' : `<p class="muted">${t('loc.no_books')}</p>`}
     <ul class="books">
       ${books.map((b) => `
-        <li data-id="${b.id}">
+        <li data-id="${b.id}"${Date.now() - new Date(b.last_seen) > STALE_MS ? ' class="stale"' : ''}>
           <a href="/l/${l.code}/b/${b.id}" class="cover-link" data-book>${b.cover_url ? `<img src="${esc(b.cover_url)}" alt="" loading="lazy">` : '<div class="nocover">📖</div>'}</a>
           <div class="meta">
             <a href="/l/${l.code}/b/${b.id}" class="title-link" data-book><strong>${esc(b.title)}</strong></a>
             <span>${esc(b.authors.join(', '))}${b.year ? ` · ${b.year}` : ''}</span>
             <span class="muted">${t('loc.seen', { when: timeAgo(b.last_seen) })}</span>
             ${b.waiting?.others ? `<span class="waiting">👥 ${t('watch.waiting', { n: b.waiting.others, mine: b.waiting.mine })}</span>` : ''}
-            <span class="row"><button class="link" data-kind="taken">${t('loc.took')}</button><button class="link" data-kind="gone">${t('loc.gone')}</button></span>
+            <span class="row"><button class="link" data-kind="seen">${t('loc.still')}</button><button class="link" data-kind="taken">${t('loc.took')}</button><button class="link" data-kind="gone">${t('loc.gone')}</button></span>
           </div>
         </li>`).join('')}
     </ul>
@@ -77,11 +82,19 @@ export default async function locationView(root, [code]) {
 
   root.querySelector('#check').onclick = async (e) => {
     if (needLogin()) return;
-    if (!await confirmDialog(t('loc.confirm_check'), e.target.textContent)) return;
+    const ok = await dialog({
+      title: t('loc.check_title'),
+      html: `<p class="muted small">${t('loc.check_lead')}</p><div class="choices">${STATES.map((s, i) =>
+        `<label><input type="radio" name="state" value="${s}" ${i ? '' : 'checked'}> ${t(`loc.state.${s}`)}</label>`).join('')}</div>`,
+      ok: t('loc.check_send'), cancel: t('cancel'),
+      read: (el) => el.querySelector('input[name=state]:checked').value,
+    });
+    if (!ok) return;
     e.target.disabled = true;
     try {
       const p = await getPosition();
-      await api(`/api/locations/${code}/check`, { method: 'POST', json: p });
+      await api(`/api/locations/${code}/check`, { method: 'POST', json: { ...p, state: ok } });
+      if (ok === 'missing') { toast(t('loc.missing_next')); navigate(`/l/${code}/edit?removed=1`); return; }
       toast(t('loc.thanks_checked'));
     } catch (err) {
       toast(err.body?.error === 'too_far' ? t('loc.too_far') : err.message);
@@ -104,7 +117,8 @@ export default async function locationView(root, [code]) {
     try {
       const r = await api(`/api/locations/${code}/sightings`, { method: 'POST', form });
       toast(t(r.sighting.status === 'approved' ? 'loc.thanks_updated' : 'loc.thanks_review'));
-      if (r.sighting.status === 'approved') li.remove();
+      if (r.sighting.status === 'approved' && btn.dataset.kind !== 'seen') li.remove();
+      if (r.sighting.status === 'approved' && btn.dataset.kind === 'seen') { li.classList.remove('stale'); btn.remove(); }
     } catch (err) { toast(err.message); }
   };
 }

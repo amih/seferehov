@@ -396,3 +396,4 @@ body::after { content: ''; position: fixed; z-index: 3000; left: 0; right: 0; bo
 .reader-books li { margin-bottom: 10px; }
 .notify-opts { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; }
 .notify-opts label.check { display: inline-flex; gap: 8px; align-items: center; }
+.books li.stale { opacity: .55; }

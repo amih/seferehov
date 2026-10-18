@@ -3,7 +3,7 @@ import { navigate } from '../nav.js';
 import { esc, getPosition, shrinkImage, toast, privacyDialog } from '../ui.js';
 import { t } from '../i18n.js';
 
-export default async function editLocationView(root, [code]) {
+export default async function editLocationView(root, [code], query) {
   const me = await getMe();
   if (!me) return navigate(`/login?next=/l/${code}/edit`, { replace: true });
   let l;
@@ -31,7 +31,7 @@ export default async function editLocationView(root, [code]) {
       </fieldset>
       <label class="check"><input type="checkbox" name="move"> ${t('edit.move')}</label>
       <p class="muted small">${t('edit.move_note')}</p>
-      <label class="check"><input type="checkbox" name="removed"> ${t('edit.removed')}</label>
+      <label class="check"><input type="checkbox" name="removed" ${query?.get('removed') ? 'checked' : ''}> ${t('edit.removed')}</label>
       <label>${t('edit.note')} <span class="muted">${t('optional')}</span><textarea name="note" maxlength="500" rows="2"></textarea></label>
       <button class="btn primary big" type="submit">${t('edit.submit')}</button>
     </form>

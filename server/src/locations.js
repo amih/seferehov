@@ -12,6 +12,7 @@ import { waitingFor } from './finder.js';
 
 const DUPLICATE_RADIUS_M = 25;
 export const SIGHTING_KINDS = ['seen', 'added', 'taken', 'gone'];
+export const CHECK_STATES = ['ok', 'messy', 'damaged', 'empty', 'missing'];
 const MAP_LIMIT = 5000;
 const CLUSTER_BELOW_ZOOM = 10;
 const CELL_PX = 64; // one bubble per ~64 screen pixels
@@ -145,6 +146,7 @@ export default async function locationRoutes(app) {
         source: loc.source, status: loc.status, restricted: loc.restricted,
         osm: loc.osm_id ? `https://www.openstreetmap.org/${loc.osm_type}/${loc.osm_id}` : null,
         last_checked_at: loc.last_checked_at, created_at: loc.created_at,
+        last_check: await one('SELECT state, created_at AS at FROM location_checks WHERE location_id = $1 ORDER BY created_at DESC LIMIT 1', [loc.id]),
         photo: photoUrls(photo),
         place: loc.place_id ? await one('SELECT id, slug, name, name_he FROM places WHERE id = $1', [loc.place_id]) : null,
       },
@@ -204,7 +206,8 @@ export default async function locationRoutes(app) {
     return { location: { code: loc.code, status: loc.status } };
   });
 
-  // "I was here and it's still there" — keeps the map fresh.
+  // "I was here": the library is in good shape, messy, damaged, empty, or gone (the
+  // last one also goes through the usual removal edit). Keeps the map fresh.
   app.post('/api/locations/:code/check', { preHandler: requireUser() }, async (req, reply) => {
     const loc = await locationByCode(req.params.code);
     if (!visibleTo(loc, req.user)) return reply.code(404).send({ error: 'not_found' });
@@ -212,8 +215,10 @@ export default async function locationRoutes(app) {
     if (distance == null || distance > config.maxReportDistanceM) {
       return reply.code(422).send({ error: 'too_far', distance });
     }
+    const state = CHECK_STATES.includes(req.body?.state) ? req.body.state : 'ok';
     await tx(async (db) => {
       await db.query('UPDATE locations SET last_checked_at = now() WHERE id = $1', [loc.id]);
+      await db.query('INSERT INTO location_checks(location_id, user_id, state) VALUES ($1, $2, $3)', [loc.id, req.user.id, state]);
       const already = (await db.query(
         `SELECT 1 FROM karma_events WHERE user_id = $1 AND reason = 'check' AND ref_id = $2
             AND created_at > now() - interval '1 day'`,
