@@ -4,8 +4,9 @@ import { esc, toast } from '../ui.js';
 import { lang } from '../i18n.js';
 
 // For the admin only (English): the public pages search engines see, cover texts that
-// wait for a check, and how the app is used (counts only) with Matomo's visitor numbers.
-const TABS = [['pages', 'Search pages'], ['texts', 'Cover texts'], ['stats', 'Activity']];
+// wait for a check, readers' reviews (to hide one), and how the app is used (counts
+// only) with Matomo's visitor numbers.
+const TABS = [['pages', 'Search pages'], ['texts', 'Cover texts'], ['reviews', 'Reviews'], ['stats', 'Activity']];
 
 export default async function adminView(root) {
   const me = await getMe();
@@ -67,6 +68,18 @@ export default async function adminView(root) {
         : '<p class="note">Nothing waits for a check.</p>'}`;
   }
 
+  async function reviews() {
+    const d = await api('/api/admin/reviews');
+    const q = { summary: 'In one sentence', liked: 'Liked', recommend_to: 'Recommend to', when: 'When' };
+    return `<p>Newest written reviews. They are public at once; hide one that should not be.</p>
+      ${d.reviews.length ? d.reviews.map((r) => `<div class="card review-admin${r.hidden ? ' muted' : ''}" data-review="${r.id}">
+        <p><a href="/b/${r.book_id}" dir="auto">${esc(r.title)}</a> · <a href="/r/${r.user_id}">${esc(r.screen_name)}</a>
+          ${r.rating ? '★'.repeat(r.rating) : ''} · ${day(r.updated_at)}${r.hidden ? ' · <b>hidden</b>' : ''}</p>
+        ${Object.entries(r.answers).map(([k, v]) => `<p dir="auto"><span class="muted small">${q[k] ?? k}:</span> ${esc(v)}</p>`).join('')}
+        <p><button class="btn small" data-hide="${r.hidden ? '0' : '1'}">${r.hidden ? 'Show again' : 'Hide'}</button></p></div>`).join('')
+        : '<p class="note">No written reviews yet.</p>'}`;
+  }
+
   function stats() {
     const a = data.activity, m = data.matomo;
     const sum = (k) => a.daily.reduce((s, d) => s + d[k], 0);
@@ -101,6 +114,7 @@ export default async function adminView(root) {
     body.innerHTML = '<p class="muted">Loading…</p>';
     try {
       if (tab === 'texts') { body.innerHTML = await texts(); return; }
+      if (tab === 'reviews') { body.innerHTML = await reviews(); return; }
       data ??= await api('/api/admin/overview');
       body.innerHTML = tab === 'stats' ? stats() : pages();
     } catch (e) {
@@ -109,6 +123,12 @@ export default async function adminView(root) {
   }
 
   body.addEventListener('click', async (e) => {
+    const h = e.target.closest('[data-hide]');
+    if (h) {
+      await api(`/api/admin/reviews/${h.closest('[data-review]').dataset.review}`, { method: 'POST', json: { hidden: h.dataset.hide === '1' } })
+        .then(show, (err) => toast(err.message));
+      return;
+    }
     const b = e.target.closest('[data-s]');
     const card = b?.closest('.ocr-item');
     if (!card) return;

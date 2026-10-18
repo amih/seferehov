@@ -7,7 +7,9 @@
 //   /c/:cc        towns in one country
 //   /p/:id-:slug  one town: its libraries and the books on them
 //   /l/:code      one library
-//   /b/:id-:slug  one book: its covers, the text printed on them, its codes, where it is
+//   /b/:id-:slug  one book: its covers, the text printed on them, its codes, where it is,
+//                 and what readers wrote about it
+//   /r/:id-:slug  one reader: the books they read, rated and recommend
 // Also /robots.txt and /sitemap.xml (+ /sitemaps/*.xml).
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -16,6 +18,7 @@ import { one, many } from './db.js';
 import { escapeHtml as esc } from './util.js';
 import { PRESENT_BOOKS_SQL, TAKEN_BOOKS_SQL } from './locations.js';
 import { normTitle } from './vision.js';
+import { BOOK_REVIEWS_SQL, READER_REVIEWS_SQL, QUESTIONS, hasText } from './reviews.js';
 import { translate } from '../../web/src/i18n.js';
 
 const LANGS = ['he', 'en'];
@@ -41,6 +44,14 @@ async function cached(key, fn) {
   return value;
 }
 
+// A page changed (a review was written): drop its cached copies, in both languages.
+export function forgetPages(path) {
+  for (const key of cache.keys()) {
+    const p = key.slice(2);
+    if (p === path || p.startsWith(`${path}-`)) cache.delete(key);
+  }
+}
+
 const countryName = (cc, lng) => {
   try { return new Intl.DisplayNames([lng], { type: 'region' }).of(cc) ?? cc; } catch { return cc; }
 };
@@ -64,6 +75,18 @@ function libList(libs, T, lng) {
 }
 // A book's own page: /b/<id>-<title words> (Hebrew letters kept; the words are ignored).
 export const bookSlug = (title) => normTitle(title).split(' ').filter(Boolean).slice(0, 8).join('-').slice(0, 80);
+export const readerPath = (u) => `/r/${u.id}${bookSlug(u.screen_name) ? `-${encodeURIComponent(bookSlug(u.screen_name))}` : ''}`;
+const stars = (n) => (n ? `<span class="stars" aria-label="${n}/5">${'★'.repeat(n)}${'☆'.repeat(5 - n)}</span>` : '');
+// One review: the stars, then each guided question the reader answered, with the question.
+function reviewHtml(r, T, lng, { who = true } = {}) {
+  const a = r.answers ?? {};
+  return `<article class="review">
+    <p class="review-head">${who ? `<a href="${withLang(readerPath({ id: r.user_id, screen_name: r.screen_name }), lng)}">${esc(r.screen_name)}</a> ` : ''}${stars(r.rating)}
+      <span class="muted small">${hasText(a) ? '' : `${T('review.read_it_short')} · `}${fmtDate(r.updated_at, lng)}</span></p>
+    ${QUESTIONS.filter((k) => a[k]).map((k) => `<p><span class="q">${T(`review.q_${k}`)}</span><br><bdi dir="auto">${esc(a[k]).replace(/\n/g, '<br>')}</bdi></p>`).join('')}
+  </article>`;
+}
+const reviewBody = (a) => QUESTIONS.filter((k) => a?.[k]).map((k) => a[k]).join('\n\n');
 export const bookPath = (b) => `/b/${b.id}${bookSlug(b.title) ? `-${encodeURIComponent(bookSlug(b.title))}` : ''}`;
 function bookList(books, lng = 'he') {
   return `<ul>${books.map((b) => {
@@ -296,8 +319,13 @@ async function bookPage(lng, T, id) {
         ORDER BY s.location_id, s.created_at DESC) x
       ORDER BY created_at DESC LIMIT 50`, [id]);
   const owned = await one('SELECT 1 FROM my_books WHERE book_id = $1 LIMIT 1', [id]);
-  if (!libs.length && !owned) return null; // only books readers reported have pages
+  const reviewed = await one('SELECT 1 FROM book_reviews WHERE book_id = $1 AND NOT hidden LIMIT 1', [id]);
+  if (!libs.length && !owned && !reviewed) return null; // only books readers reported or read have pages
   const photos = await many(BOOK_PHOTOS_SQL, [id]);
+  const reviews = await many(BOOK_REVIEWS_SQL, [id]);
+  const rated = reviews.filter((r) => r.rating);
+  const avg = rated.length ? rated.reduce((a, r) => a + r.rating, 0) / rated.length : null;
+  const written = reviews.filter((r) => hasText(r.answers));
   const front = photos.find((p) => p.kind === 'cover');
   const back = photos.find((p) => p.kind === 'back');
   const frontUrl = front ? `/uploads/${front.path}` : b.front_url || b.cover_url;
@@ -327,6 +355,13 @@ async function bookPage(lng, T, id) {
         ${b.publisher ? `<dt>${T('seo.publisher')}</dt><dd dir="auto">${esc(b.publisher)}</dd>` : ''}
         ${b.year ? `<dt>${T('seo.year')}</dt><dd>${b.year}</dd>` : ''}
       </dl>
+      <h2>${T('review.title')}</h2>
+      ${reviews.length ? `<p class="review-sum">${T('review.n_read', { n: reviews.length })}${avg ? ` · ${stars(Math.round(avg))} ${avg.toFixed(1)} (${T('review.n_rated', { n: rated.length })})` : ''}</p>
+        ${written.map((r) => reviewHtml(r, T, lng)).join('')}
+        ${reviews.length > written.length ? `<p class="small">${T('review.also_read')} ${reviews.filter((r) => !hasText(r.answers))
+          .map((r) => `<a href="${withLang(readerPath({ id: r.user_id, screen_name: r.screen_name }), lng)}">${esc(r.screen_name)}</a>${r.rating ? ` ${stars(r.rating)}` : ''}`).join(' · ')}</p>` : ''}`
+        : `<p class="muted">${T('review.none_yet')}</p>`}
+      <div id="review-box"></div>
       ${b.description ? `<h2>${T('seo.book_about')}</h2><p class="blurb" dir="auto">${esc(b.description)}</p>` : ''}
       ${texts.map(([k, p]) => `<h2>${T(k)}</h2><div class="cover-text" dir="auto">${esc(p.ocr_text).replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>').replace(/^/, '<p>')}</p></div>`).join('')}
       <h2>${T('seo.book_where')}</h2>
@@ -349,6 +384,43 @@ async function bookPage(lng, T, id) {
       ...(blurb ? { description: blurb.slice(0, 1000) } : {}),
       url: config.baseUrl + bookPath(b),
       ...(b.isbn13 ? { sameAs: [`https://openlibrary.org/isbn/${b.isbn13}`] } : {}),
+      ...(avg ? { aggregateRating: { '@type': 'AggregateRating', ratingValue: avg.toFixed(1), ratingCount: rated.length, bestRating: 5, worstRating: 1 } } : {}),
+      ...(written.length ? { review: written.slice(0, 20).map((r) => ({
+        '@type': 'Review',
+        author: { '@type': 'Person', name: r.screen_name, url: config.baseUrl + readerPath({ id: r.user_id, screen_name: r.screen_name }) },
+        datePublished: new Date(r.created_at).toISOString().slice(0, 10),
+        reviewBody: reviewBody(r.answers),
+        ...(r.rating ? { reviewRating: { '@type': 'Rating', ratingValue: r.rating, bestRating: 5, worstRating: 1 } } : {}),
+      })) } : {}),
+    }],
+  };
+}
+
+async function readerPage(lng, T, id) {
+  const u = await one('SELECT id, screen_name, created_at FROM users WHERE id = $1 AND screen_name IS NOT NULL', [id]);
+  if (!u) return null;
+  const rows = await many(READER_REVIEWS_SQL, [id]);
+  const recommended = rows.filter((r) => r.rating >= 4);
+  const others = rows.filter((r) => !(r.rating >= 4));
+  const item = (r) => `<li><a href="${withLang(bookPath({ id: r.book_id, title: r.title }), lng)}" dir="auto"><strong>${esc(r.title)}</strong></a>${
+    r.authors?.length ? ` <span dir="auto">— ${esc(r.authors.join(', '))}</span>` : ''} ${stars(r.rating)}
+    ${hasText(r.answers) ? `${reviewHtml({ ...r, screen_name: u.screen_name, user_id: u.id }, T, lng, { who: false })}` : ''}</li>`;
+  const name = u.screen_name;
+  return {
+    title: `${T('reader.title', { name })} | ${T('app.name')}`,
+    description: T('reader.desc', { name, n: rows.length, rec: recommended.length }),
+    canonical: readerPath(u),
+    noindex: !rows.length, // nothing to read there yet
+    lastmod: rows[0]?.updated_at,
+    html: `<h1 dir="auto">${esc(T('reader.title', { name }))}</h1>
+      <p>${rows.length ? T('reader.lead', { n: rows.length, rec: recommended.length }) : T('reader.none')}</p>
+      ${recommended.length ? `<h2>${T('reader.recommends')}</h2><ul class="reader-books">${recommended.map(item).join('')}</ul>` : ''}
+      ${others.length ? `<h2>${T('reader.also_read')}</h2><ul class="reader-books">${others.map(item).join('')}</ul>` : ''}
+      <hr><p class="small">${T('shelves.note_html')}</p>`,
+    jsonld: [{
+      '@context': 'https://schema.org',
+      '@type': 'ProfilePage',
+      mainEntity: { '@type': 'Person', name, url: config.baseUrl + readerPath(u) },
     }],
   };
 }
@@ -378,6 +450,7 @@ async function renderPath(path, lng) {
   if ((m = path.match(/^\/p\/(\d+)(?:-[a-z0-9-]*)?$/))) return placePage(lng, T, Number(m[1]));
   if ((m = path.match(/^\/l\/([A-Za-z0-9]{4,10})$/))) return libraryPage(lng, T, m[1]);
   if ((m = path.match(/^\/b\/(\d+)(?:-[^/]*)?$/))) return bookPage(lng, T, Number(m[1]));
+  if ((m = path.match(/^\/r\/(\d+)(?:-[^/]*)?$/))) return readerPage(lng, T, Number(m[1]));
   return undefined; // not a page we render: plain app shell
 }
 
@@ -390,6 +463,7 @@ function headTags(path, lng, page) {
     ...LANGS.map((l) => `<link rel="alternate" hreflang="${l}" href="${esc(url(l))}">`),
     `<link rel="alternate" hreflang="x-default" href="${esc(url('he'))}">`,
     `<meta property="og:url" content="${esc(url(lng))}">`,
+    ...(page.noindex ? ['<meta name="robots" content="noindex">'] : []),
     ...(page.jsonld ?? []).map((o) => `<script type="application/ld+json">${json(o)}</script>`),
   ].join('\n  ');
 }
@@ -437,8 +511,12 @@ async function sitemapPages() {
        FROM locations l JOIN places p ON p.id = l.place_id
       WHERE l.status = 'approved' GROUP BY p.id ORDER BY p.id`);
   const countries = await countryCounts();
+  const readers = await many(
+    `SELECT u.id, u.screen_name, max(r.updated_at) AS lastmod FROM users u JOIN book_reviews r ON r.user_id = u.id AND NOT r.hidden
+      WHERE u.screen_name IS NOT NULL GROUP BY u.id ORDER BY u.id`);
   return urlset([
     urlEntry('/'), urlEntry('/about'), urlEntry('/places'),
+    ...readers.map((u) => urlEntry(readerPath(u), u.lastmod)),
     ...countries.map((c) => urlEntry(`/c/${c.cc.toLowerCase()}`)),
     ...places.map((p) => urlEntry(placePath(p), p.lastmod)),
   ]);
@@ -451,6 +529,7 @@ export const SITEMAP_BOOKS_SQL = `
     FROM books b
    WHERE EXISTS (SELECT 1 FROM sightings s JOIN locations l ON l.id = s.location_id
                   WHERE s.book_id = b.id AND s.status = 'approved' AND l.status = 'approved')
+      OR EXISTS (SELECT 1 FROM book_reviews r WHERE r.book_id = b.id AND NOT r.hidden)
       OR (EXISTS (SELECT 1 FROM my_books m WHERE m.book_id = b.id)
           AND (b.front_url IS NOT NULL OR b.cover_url IS NOT NULL OR b.description IS NOT NULL))`;
 
@@ -492,7 +571,7 @@ export default async function seoRoutes(app) {
   app.get('/api/pages', async (req, reply) => {
     const path = String(req.query.path ?? '');
     const lng = req.query.lang === 'en' ? 'en' : 'he';
-    if (!/^\/(places|c\/[a-z]{2}|p\/\d+(-[a-z0-9-]*)?|b\/\d+(-[^/]*)?)$/i.test(path)) return reply.code(404).send({ error: 'not_found' });
+    if (!/^\/(places|c\/[a-z]{2}|p\/\d+(-[a-z0-9-]*)?|[br]\/\d+(-[^/]*)?)$/i.test(path)) return reply.code(404).send({ error: 'not_found' });
     const page = await cached(`${lng}${path}`, () => renderPath(path, lng));
     if (!page) return reply.code(404).send({ error: 'not_found' });
     return { title: page.title, html: page.html };

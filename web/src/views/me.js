@@ -21,7 +21,8 @@ export default async function meView(root, _, query) {
   root.innerHTML = `
   <section class="page">
     ${needsName ? `<h1>${t('me.welcome')}</h1><p>${t('shelves.note_html')}</p><p>${t('me.choose')}</p>`
-      : `<div class="profile-head">${avatarHtml(me, 72)}<div><h1>${esc(me.screen_name)}</h1><p class="muted">${t('me.levels')[me.trust_level]}</p></div></div>`}
+      : `<div class="profile-head">${avatarHtml(me, 72)}<div><h1>${esc(me.screen_name)}</h1><p class="muted">${t('me.levels')[me.trust_level]}</p>
+        <p class="small"><a href="/r/${me.id}">${t('reader.my_page')}</a></p></div></div>`}
     <form class="form" id="name">
       <label>${t('me.screen_name')}
         <input name="screen_name" maxlength="30" minlength="3" required value="${esc(me.screen_name ?? '')}" placeholder="${t('me.name_ph')}" autocomplete="nickname"></label>

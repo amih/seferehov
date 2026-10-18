@@ -6,6 +6,7 @@ import { watchDialog } from '../watch.js';
 import { pagerHtml, attachPager, loadBook } from '../pager.js';
 import { bookShots } from '../shots.js';
 import { placeBook, ownerLabel } from '../mybooks.js';
+import { reviewBox } from '../review.js';
 
 // One book at one library: large pictures (photos taken at the shelf, the front and
 // back covers found online), the back-cover text, and whether it is still there.
@@ -128,12 +129,14 @@ function renderBook(root, { b, photos, again, back, status, actions, wire, photo
     ${b.description ? `<h2>${t('book.blurb')}</h2><p class="desc blurb" dir="auto">${esc(b.description)}</p>`
       : b.details_pending ? `<p class="progress-line small"><span class="spinner"></span> ${t('book.looking')}</p>` : `<p class="muted small">${t('book.no_blurb')}</p>`}
     ${actions}
+    <div id="review-box"></div>
     ${b.isbn13 ? `<p class="muted small" dir="ltr">ISBN ${esc(b.isbn13)}</p>` : ''}
     ${b.id ? `<p class="small"><a href="/b/${b.id}">${t('book.public_page')}</a></p>` : ''}
     ${b.details_source ? `<p class="muted small">${t('book.source', { src: esc(b.details_source) })}</p>` : ''}
   </section>`;
 
   wire(root);
+  if (b.id) reviewBox(root.querySelector('#review-box'), b.id);
   root.querySelector('.gallery')?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-i]');
     if (btn) viewer(pics, Number(btn.dataset.i));

@@ -377,3 +377,17 @@ body::after { content: ''; position: fixed; z-index: 3000; left: 0; right: 0; bo
 .ocr-item > div { flex: 1; min-width: 0; }
 .ocr-item textarea { width: 100%; font: inherit; }
 @media (max-width: 560px) { .ocr-item { flex-direction: column; } .ocr-item img { width: 100%; } }
+
+/* Readers on books */
+.stars { color: var(--yellow); letter-spacing: 1px; white-space: nowrap; }
+.review { border-top: 1px solid var(--line); padding: 8px 0; }
+.review p { margin: 4px 0; }
+.review .q { color: var(--muted); font-size: 0.9em; }
+.review-head a { font-weight: 600; }
+.review-box { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 14px; margin: 12px 0; }
+.review-box details summary { list-style: none; display: inline-block; margin: 4px 0; }
+.review-box details summary::-webkit-details-marker { display: none; }
+.review-form textarea { width: 100%; font: inherit; }
+.star-pick button { background: none; border: 0; font-size: 1.8em; line-height: 1; color: var(--line); cursor: pointer; padding: 0 2px; }
+.star-pick button.on { color: var(--yellow); }
+.reader-books li { margin-bottom: 10px; }

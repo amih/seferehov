@@ -47,7 +47,7 @@ const routes = [
   [/^\/review$/, reviewView],
   [/^\/admin$/, adminView],
   [/^\/about$/, aboutView],
-  [/^\/(places|c\/[a-z]{2}|p\/\d+(-[a-z0-9-]*)?|b\/\d+(-[^/]*)?)$/i, pageView],
+  [/^\/(places|c\/[a-z]{2}|p\/\d+(-[a-z0-9-]*)?|[br]\/\d+(-[^/]*)?)$/i, pageView],
 ];
 
 let main = document.getElementById('view');

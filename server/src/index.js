@@ -19,6 +19,7 @@ import { startAdminNotifier } from './notify.js';
 import seoRoutes, { renderShell } from './seo.js';
 import finderRoutes, { startWatchNotifier } from './finder.js';
 import adminRoutes from './admin.js';
+import bookReviewRoutes from './reviews.js';
 import { startOcrWorker } from './ocr.js';
 
 const app = Fastify({ logger: true, trustProxy: '127.0.0.1', bodyLimit: 1024 * 1024 });
@@ -56,6 +57,7 @@ await app.register(duplicateRoutes);
 await app.register(seoRoutes);
 await app.register(finderRoutes);
 await app.register(adminRoutes);
+await app.register(bookReviewRoutes);
 
 app.get('/api/health', async () => ({ ok: true, web: deployed?.version ?? null }));
 
