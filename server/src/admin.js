@@ -1,6 +1,7 @@
 // /admin: what search engines can find (the public pages, as lists), cover texts that
-// wait for a check before they are shown, and how the app is used — counts only, never
-// who did what. Visitor numbers come from Matomo when MATOMO_TOKEN is set.
+// wait for a check before they are shown, how the app is used (counts), and the readers
+// themselves: who joined, when they were last in, and what they did. Visitor numbers
+// come from Matomo when MATOMO_TOKEN is set.
 import { config } from './config.js';
 import { one, many, q } from './db.js';
 import { requireUser } from './auth.js';
@@ -122,7 +123,35 @@ async function matomo() {
   }
 }
 
+// Every reader, newest first, with what they did. "Last in" is the later of their last
+// visit while signed in and their last report, scan, home book or review.
+async function readers() {
+  return many(
+    `SELECT u.id, u.screen_name, u.email, u.trust_level, u.created_at, u.google_sub IS NOT NULL AS google,
+            GREATEST(u.last_seen_at, a.last_act) AS last_seen,
+            COALESCE(k.karma, 0)::int AS karma, COALESCE(k.week, 0)::int AS week_points,
+            a.scans, a.reports, a.home_books, a.reviews, a.libraries, a.watches,
+            (SELECT count(*) FROM push_subs p WHERE p.user_id = u.id)::int AS phones
+       FROM users u
+       LEFT JOIN (SELECT user_id, sum(points) AS karma, sum(points) FILTER (WHERE created_at > now() - interval '7 days') AS week
+                    FROM karma_events GROUP BY 1) k ON k.user_id = u.id
+       CROSS JOIN LATERAL (SELECT
+            (SELECT count(*) FROM scans WHERE user_id = u.id)::int AS scans,
+            (SELECT count(*) FROM sightings WHERE user_id = u.id)::int AS reports,
+            (SELECT count(*) FROM my_books WHERE user_id = u.id)::int AS home_books,
+            (SELECT count(*) FROM book_reviews WHERE user_id = u.id)::int AS reviews,
+            (SELECT count(*) FROM locations WHERE created_by = u.id)::int AS libraries,
+            (SELECT count(*) FROM book_watches WHERE user_id = u.id)::int AS watches,
+            (SELECT max(t) FROM (SELECT max(created_at) t FROM scans WHERE user_id = u.id
+               UNION ALL SELECT max(created_at) FROM sightings WHERE user_id = u.id
+               UNION ALL SELECT max(created_at) FROM my_books WHERE user_id = u.id
+               UNION ALL SELECT max(updated_at) FROM book_reviews WHERE user_id = u.id) x) AS last_act) a
+      ORDER BY u.created_at DESC LIMIT 500`);
+}
+
 export default async function adminRoutes(app) {
+  app.get('/api/admin/readers', { preHandler: requireUser(ADMIN) }, async () => ({ readers: await readers() }));
+
   app.get('/api/admin/overview', { preHandler: requireUser(ADMIN) }, async () => ({
     seo: await seoPages(),
     activity: await activity(),

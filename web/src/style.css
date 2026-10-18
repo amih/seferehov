@@ -161,7 +161,7 @@ input:not([type=checkbox]), textarea { width: 100%; font: inherit; padding: 11px
 .stats div { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 6px; text-align: center; display: grid; }
 .stats strong { font-size: 1.5rem; color: var(--wood-light); }
 .stats span { font-size: .8rem; color: var(--muted); }
-.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .seg button { border: 0; background: var(--card); color: var(--ink); padding: 8px 14px; font: inherit; cursor: pointer; }
 .seg button.on { background: var(--wood); color: #fff; }
 .leaders { counter-reset: r; margin-top: 10px; }
@@ -402,3 +402,6 @@ body::after { content: ''; position: fixed; z-index: 3000; left: 0; right: 0; bo
 .level-badge { font-size: 1.4rem; }
 .level-bar { height: 8px; border-radius: 4px; background: rgba(127, 127, 127, .2); overflow: hidden; }
 .level-bar i { display: block; height: 100%; background: var(--green); }
+.cover-text-box { margin: 10px 0; }
+.cover-text-box summary { cursor: pointer; font-weight: 600; }
+.cover-text-box .desc { white-space: pre-line; }

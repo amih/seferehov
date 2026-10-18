@@ -5,9 +5,9 @@ import { lang } from '../i18n.js';
 import { tracked } from '../analytics.js';
 
 // For the admin only (English): the public pages search engines see, cover texts that
-// wait for a check, readers' reviews (to hide one), and how the app is used (counts
-// only) with Matomo's visitor numbers.
-const TABS = [['pages', 'Search pages'], ['texts', 'Cover texts'], ['reviews', 'Reviews'], ['stats', 'Activity']];
+// wait for a check, readers' reviews (to hide one), how the app is used (counts) with
+// Matomo's visitor numbers, and the readers one by one.
+const TABS = [['pages', 'Search pages'], ['texts', 'Cover texts'], ['reviews', 'Reviews'], ['stats', 'Activity'], ['readers', 'Readers']];
 
 export default async function adminView(root) {
   const me = await getMe();
@@ -81,6 +81,27 @@ export default async function adminView(root) {
         : '<p class="note">No written reviews yet.</p>'}`;
   }
 
+  async function readersTab() {
+    const { readers } = await api('/api/admin/readers');
+    const ago = (d) => {
+      if (!d) return '—';
+      const m = (Date.now() - new Date(d)) / 60000;
+      return m < 60 ? `${Math.max(1, Math.round(m))} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : m < 2880 ? 'yesterday' : day(d);
+    };
+    const since = (d, days) => d && Date.now() - new Date(d) < days * 864e5;
+    const count = (f) => readers.filter(f).length;
+    const LEVEL = ['new', 'trusted', 'reviewer', 'admin'];
+    return `<div class="stat-row">${[['Readers', readers.length], ['Joined in 7 days', count((r) => since(r.created_at, 7))],
+      ['In today', count((r) => since(r.last_seen, 1))], ['In this week', count((r) => since(r.last_seen, 7))],
+      ['Did something', count((r) => r.scans + r.reports + r.home_books + r.reviews)], ['Phone alerts on', count((r) => r.phones)]]
+        .map(([k, v]) => `<div class="stat"><b>${n(v)}</b><span>${k}</span></div>`).join('')}</div>
+      <p class="muted small">Newest first. "Last in": last visit while signed in, or last report. Points: all time (this week).</p>
+      ${table(['Reader', 'Joined', 'Last in', 'Points', 'Scans', 'Reports', 'At home', 'Reviews', 'Libraries', 'Alerts', '📱'], readers.map((r) => [
+        `<a href="/r/${r.id}" dir="auto">${esc(r.screen_name || '(no name yet)')}</a><br><span class="muted small">${esc(r.email)}${r.google ? ' · G' : ''}${r.trust_level ? ` · ${LEVEL[r.trust_level]}` : ''}</span>`,
+        day(r.created_at), ago(r.last_seen), `${n(r.karma)}${r.week_points ? ` <span class="muted small">(+${n(r.week_points)})</span>` : ''}`,
+        n(r.scans), n(r.reports), n(r.home_books), n(r.reviews), n(r.libraries), n(r.watches), r.phones ? '✓' : '']))}`;
+  }
+
   function stats() {
     const a = data.activity, m = data.matomo;
     const sum = (k) => a.daily.reduce((s, d) => s + d[k], 0);
@@ -116,6 +137,7 @@ export default async function adminView(root) {
     try {
       if (tab === 'texts') { body.innerHTML = await texts(); return; }
       if (tab === 'reviews') { body.innerHTML = await reviews(); return; }
+      if (tab === 'readers') { body.innerHTML = await readersTab(); return; }
       data ??= await api('/api/admin/overview');
       body.innerHTML = tab === 'stats' ? stats() : pages();
     } catch (e) {

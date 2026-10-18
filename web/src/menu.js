@@ -1,7 +1,8 @@
 import { api, getMe } from './api.js';
-import { esc, avatarHtml, CONTACT_EMAIL } from './ui.js';
+import { esc, avatarHtml, toast, CONTACT_EMAIL } from './ui.js';
 import { t, toggleLang } from './i18n.js';
 import { canOfferInstall, install } from './install.js';
+import { muted, setMuted } from './sound.js';
 
 // ☰ in the header: every screen of the app in one list.
 export function initMenu() {
@@ -29,6 +30,7 @@ async function open() {
     ...(canOfferInstall() ? [['📲', 'menu.install', '#install']] : []),
     ['ℹ️', 'menu.about', '/about'],
     ['✉️', 'menu.feedback', `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(t('contact.subject'))}&body=${encodeURIComponent(`${t('contact.greeting')}\n\n`)}`],
+    muted() ? ['🔇', 'menu.sound_on', '#sound'] : ['🔊', 'menu.sound_off', '#sound'],
     ['🌐', 'lang.other', '#lang'],
   ];
   const el = document.createElement('div');
@@ -45,6 +47,7 @@ async function open() {
   el.addEventListener('click', (e) => {
     const a = e.target.closest('a');
     if (a?.getAttribute('href') === '#install') { e.preventDefault(); close(); install(); return; }
+    if (a?.getAttribute('href') === '#sound') { e.preventDefault(); close(); setMuted(!muted()); toast(t(muted() ? 'sound.muted' : 'sound.on')); return; }
     if (a?.getAttribute('href') === '#lang') { e.preventDefault(); close(); toggleLang(); return; }
     if (a) setTimeout(close); // let the router (or mailto) handle the click first
     else if (e.target === el || e.target.closest('[data-close]')) close();

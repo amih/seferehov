@@ -292,6 +292,14 @@ const BOOK_PHOTOS_SQL = `
      AND (p.path ~ '_c[a-z0-9]+\\.webp$' OR EXISTS (SELECT 1 FROM sightings s WHERE s.book_id = $1 AND s.status = 'approved' AND p.id IN (s.photo_id, s.back_photo_id)))
    ORDER BY p.created_at DESC`;
 
+// The text read from the book's public cover photos (newest of each side), once it may be
+// shown: Latin-script reads at once, Hebrew ones after an admin approved them.
+export async function coverTexts(bookId) {
+  const photos = await many(BOOK_PHOTOS_SQL, [bookId]);
+  const pick = (kind) => photos.find((p) => p.kind === kind && ['auto', 'approved'].includes(p.ocr_status) && p.ocr_text)?.ocr_text ?? null;
+  return { front: pick('cover'), back: pick('back') };
+}
+
 // Where else to read about the book: by ISBN when there is one, else by title.
 function bookLinks(b) {
   const q = encodeURIComponent(`${b.title} ${b.authors?.[0] ?? ''}`.trim());

@@ -1,6 +1,11 @@
 // Short tunes for scanning: found, not in any catalogue, found but missing pictures.
 // Phones allow sound only after a tap, so the first tap anywhere unlocks it.
+// Muting (☰ menu) is kept on this device; a muted chime does not buzz either.
+const MUTE = 'seferehov:mute';
 let ctx = null;
+export function muted() { try { return localStorage.getItem(MUTE) === '1'; } catch { return false; } }
+export function setMuted(on) { try { if (on) localStorage.setItem(MUTE, '1'); else localStorage.removeItem(MUTE); } catch { /* no storage */ } }
+
 const unlock = () => {
   try { ctx ??= new (window.AudioContext || window.webkitAudioContext)(); ctx.resume(); } catch { /* no sound */ }
 };
@@ -13,7 +18,7 @@ const TUNES = {
 };
 
 export function chime(kind) {
-  if (!ctx || ctx.state !== 'running') return;
+  if (muted() || !ctx || ctx.state !== 'running') return;
   const t0 = ctx.currentTime + 0.02;
   for (const [freq, at, len] of TUNES[kind] ?? []) {
     const o = ctx.createOscillator(), g = ctx.createGain();

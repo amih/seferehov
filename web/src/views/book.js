@@ -23,7 +23,7 @@ export default async function bookView(root, [code, id], _q, fresh = false) {
   // "Tell me when it shows up" only when it is not on the shelf now.
   const present = here?.present;
   return renderBook(root, {
-    b, photos, again: () => bookView(root, [code, id], null, true),
+    b, photos, texts: data.texts, again: () => bookView(root, [code, id], null, true),
     // Whoever stands at the library (the book in hand) can photograph its covers.
     photoSaver: async () => {
       const p = await getPosition({ timeout: 8000 }).catch(() => null);
@@ -55,7 +55,7 @@ export async function myBookView(root, [id], _q, fresh = false) {
   }
   const { item, book: b, photos } = data;
   return renderBook(root, {
-    b, photos, again: () => myBookView(root, [id], null, true),
+    b, photos, texts: data.texts, again: () => myBookView(root, [id], null, true),
     photoSaver: async () => async ({ front, back }) => {
       const fd = new FormData();
       if (front) fd.append('photo', front, 'photo.jpg');
@@ -87,7 +87,7 @@ const distanceM = (a, b) => {
   return Math.hypot(x, y) * R;
 };
 
-function renderBook(root, { b, photos, again, back, status, actions, wire, photoSaver }) {
+function renderBook(root, { b, photos, texts, again, back, status, actions, wire, photoSaver }) {
   root._bookCleanup?.(); // the page re-renders when the details arrive
   // Covers and the back-cover text are still being looked up: show this, then look again.
   const path = location.pathname;
@@ -128,6 +128,8 @@ function renderBook(root, { b, photos, again, back, status, actions, wire, photo
     ${status}
     ${b.description ? `<h2>${t('book.blurb')}</h2><p class="desc blurb" dir="auto">${esc(b.description)}</p>`
       : b.details_pending ? `<p class="progress-line small"><span class="spinner"></span> ${t('book.looking')}</p>` : `<p class="muted small">${t('book.no_blurb')}</p>`}
+    ${[['front', 'seo.book_front_text'], ['back', 'seo.book_back_text']].filter(([k]) => texts?.[k]).map(([k, label]) =>
+      `<details class="cover-text-box"${k === 'back' && !b.description ? ' open' : ''}><summary>${t(label)}</summary><p class="desc" dir="auto">${esc(texts[k])}</p></details>`).join('')}
     ${actions}
     ${(b.authors ?? []).length ? `<p class="row">${b.authors.slice(0, 2).map((a) => `<button class="link" data-watch-author="${esc(a)}">${esc(t('watch.author_button', { author: a }))}</button>`).join('')}</p>` : ''}
     <div id="review-box"></div>

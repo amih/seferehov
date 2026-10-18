@@ -1,6 +1,7 @@
 // The reader's own books: scanned at home, away from any library. When one is later
 // left in a library, it is reported there as an 'added' sighting.
 import { one, many, q } from './db.js';
+import { coverTexts } from './seo.js';
 import { requireUser } from './auth.js';
 import { lookupIsbn, upsertBook, findOrCreateBook } from './books.js';
 import { savePhoto, photoUrls } from './photos.js';
@@ -81,6 +82,7 @@ export default async function myBookRoutes(app) {
         cover_url: book.cover_url, front_url: book.front_url, back_url: book.back_url,
         description: book.description, details_source: book.details_source, details_pending: !ready,
       },
+      texts: await coverTexts(book.id),
       photos: [m.front_path && { url: `/uploads/${m.front_path}`, kind: 'cover', at: m.front_at },
         m.back_path && { url: `/uploads/${m.back_path}`, kind: 'back', at: m.back_at }].filter(Boolean),
     };

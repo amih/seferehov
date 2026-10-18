@@ -1,5 +1,6 @@
 import { config, POINTS } from './config.js';
 import { one, many, tx } from './db.js';
+import { coverTexts } from './seo.js';
 import { requireUser } from './auth.js';
 import { savePhoto, photoUrls, avatarUrl } from './photos.js';
 import { bookDetails } from './details.js';
@@ -271,6 +272,7 @@ export default async function locationRoutes(app) {
         cover_url: book.cover_url, front_url: book.front_url, back_url: book.back_url,
         description: book.description, details_source: book.details_source, details_pending: pending,
       },
+      texts: await coverTexts(book.id),
       photos: shelf.filter((p) => !seen.has(p.url) && seen.add(p.url)).map((p) => ({ url: `/uploads/${p.url}`, kind: p.kind, at: p.created_at })),
       here: latest ? { present: ['seen', 'added'].includes(latest.kind), kind: latest.kind, at: latest.created_at } : null,
       waiting: (await waitingFor([book.id], req.user?.id)).get(book.id) ?? null,

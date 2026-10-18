@@ -19,13 +19,18 @@ const SCREEN_NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} _.\-]{1,28}[\p{L}\p{N}]$/u;
 export async function currentUser(req) {
   const token = req.cookies[SESSION_COOKIE];
   if (!token) return null;
-  return one(
+  const user = await one(
     `SELECT u.id, u.email, u.screen_name, u.trust_level, u.avatar_path, u.avatar_source,
             u.google_sub IS NOT NULL AS has_google, u.google_picture, u.notify_email, u.notify_push
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = $1 AND s.expires_at > now()`,
     [sha256(token)],
   );
+  if (user) {
+    q(`UPDATE users SET last_seen_at = now() WHERE id = $1 AND (last_seen_at IS NULL OR last_seen_at < now() - interval '10 minutes')`, [user.id])
+      .catch(() => {});
+  }
+  return user;
 }
 
 export function requireUser(minTrust = 0) {
