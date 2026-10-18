@@ -6,11 +6,13 @@ import { t, lang } from './i18n.js';
 
 // Photographing books one after another with the live camera: the front cover, turn the
 // book over, the back cover, next book. The picture is taken by itself once the camera
-// holds still on a sharp picture (a button takes it at once). Each book is handed to
+// holds still on a sharp picture (a button takes it at once). Both pictures are then
+// shown, to keep or to take one side again. Each book is handed to
 // onBook({ front, back, isbn }) in the background, which resolves to a line to show.
 // Without a live camera, the phone's camera app is used instead, one photo at a time.
 export function bookShots({ on, panel, onBook, onStart, onEnd }) {
-  let stream = null, video = null, timer = null, side = 'front', front = null, preset = null, busy = false;
+  let stream = null, video = null, timer = null, side = 'front', front = null, back = null, preset = null, busy = false;
+  let reviewing = false;
   let session = {}; // this time only: { intro, single, onBook }
   const small = document.createElement('canvas');
   const ctx = small.getContext('2d', { willReadFrequently: true });
@@ -18,11 +20,32 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   let refresh = () => {};
 
   const say = () => {
+    const live = panel.querySelector('.shot-live');
+    if (live) live.hidden = reviewing;
+    panel.querySelector('.shot-cam')?.toggleAttribute('hidden', reviewing);
+    panel.querySelector('[data-shots="snap"]')?.toggleAttribute('hidden', reviewing);
+    const rev = panel.querySelector('.shot-review');
+    rev.hidden = !reviewing;
+    if (reviewing) {
+      panel.querySelector('.shot-say').innerHTML = `<b>${t('shots.review')}</b>`;
+      panel.querySelector('[data-shots="skip"]').hidden = true;
+      const sides = session.only ? [session.only] : ['front', 'back'];
+      rev.innerHTML = `<div class="shot-pair">${sides.map((s) => {
+        const blob = s === 'front' ? front : back;
+        return `<figure>${blob ? `<img src="${esc(URL.createObjectURL(blob))}" alt="">` : `<div class="shot-none">${t('shots.no_back_yet')}</div>`}
+          <figcaption><button class="btn small" data-shots="again-${s}">📷 ${t(blob ? `shots.again_${s}` : 'shots.back')}</button></figcaption></figure>`;
+      }).join('')}</div>
+        <p class="row"><button class="btn primary" data-shots="ok">✓ ${t(session.single ? 'shots.ok_single' : 'shots.ok')}</button></p>`;
+      center(rev);
+      return;
+    }
     panel.querySelector('.shot-say').innerHTML = side === 'front'
       ? `<b>${t('shots.front_now')}</b><br><span class="muted small">${t('shots.front_how')}</span>`
       : `<b>${t('shots.now_back')}</b><br><span class="muted small">${t('shots.back_why')}</span>`;
-    panel.querySelector('[data-shots="skip"]').hidden = side !== 'back' || !!session.only;
+    panel.querySelector('[data-shots="skip"]').hidden = side !== 'back' || !!session.only || !!back;
   };
+  // The camera (or the review) in the middle of the screen.
+  const center = (el) => requestAnimationFrame(() => el?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
   const thumb = (blob) => `<img class="shot-thumb" src="${esc(URL.createObjectURL(blob))}" alt="">`;
 
   // only: 'front' or 'back' = one picture of that side (a new or missing one).
@@ -33,17 +56,19 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     refresh = say;
     side = only ?? 'front';
     prev = null; steady = 0; moved = true; best = 0;
-    front = null;
+    front = null; back = null; reviewing = false;
     panel.hidden = false;
     panel.innerHTML = `${intro ? `<p class="shot-intro">${intro}</p>` : ''}
       <div class="shot-live"><video muted playsinline></video><div class="shot-guide"></div><div class="shot-flash"></div>
         <div class="shot-meter"><i></i></div></div>
       <p class="shot-say"></p>
+      <div class="shot-review" hidden></div>
       <p class="row"><button class="btn primary" data-shots="snap">📸 ${t('shots.snap')}</button>
         <button class="btn" data-shots="skip" hidden>${t('shots.skip')}</button>
         <button class="btn" data-shots="end">${t('shots.end')}</button></p>
       <ul class="shot-done"></ul>`;
     video = panel.querySelector('video');
+    center(panel.querySelector('.shot-live'));
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1440 } } });
       video.srcObject = stream;
@@ -53,6 +78,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
       return fallback();
     }
     say();
+    center(panel.querySelector('.shot-live'));
     since = Date.now();
     timer = setInterval(tick, 120);
   }
@@ -60,7 +86,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   // Still and sharp? Movement = mean change of a small grey copy between ticks;
   // sharpness = variance of its Laplacian (text and edges in focus score high).
   function tick() {
-    if (busy || !video.videoWidth) return;
+    if (busy || reviewing || !video.videoWidth) return;
     const w = 160, h = Math.round((w * video.videoHeight) / video.videoWidth);
     small.width = w; small.height = h;
     ctx.drawImage(video, 0, 0, w, h);
@@ -88,7 +114,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   }
 
   async function snap() {
-    if (busy || !video?.videoWidth) return;
+    if (busy || reviewing || !video?.videoWidth) return;
     busy = true;
     const c = document.createElement('canvas');
     c.width = video.videoWidth; c.height = video.videoHeight;
@@ -102,12 +128,28 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     busy = false;
   }
 
+  // Front, then back, then both are shown; a side taken again goes back to the review.
   function took(blob) {
-    if (session.only === 'front') { save(blob, null); return stop(); }
-    if (session.only === 'back') { save(null, blob); return stop(); }
-    if (side === 'front') { front = blob; side = 'back'; } else { save(front, blob); front = null; side = 'front'; }
-    if (side === 'front' && session.single) return stop();
+    if (side === 'front') front = blob; else back = blob;
+    if (side === 'front' && !session.only && !back) side = 'back';
+    else reviewing = true;
     refresh();
+  }
+
+  function again(s) {
+    reviewing = false; side = s;
+    moved = true; steady = 0; since = Date.now() + 800; // time to turn the book
+    refresh();
+    center(panel.querySelector('.shot-live'));
+  }
+
+  function keep() {
+    save(session.only === 'back' ? null : front, session.only === 'front' ? null : back);
+    front = null; back = null; reviewing = false; side = 'front';
+    if (session.single) return stop();
+    moved = false; since = Date.now();
+    refresh();
+    center(panel.querySelector('.shot-live'));
   }
 
   // In the background, so the next book can be photographed meanwhile.
@@ -128,10 +170,10 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   // No live camera: the camera app, one photo at a time.
   function fallback() {
     const cam = (s, label) => `<label class="btn primary">📷 ${label}<input type="file" accept="image/*" capture="environment" hidden data-side="${s}"></label>`;
-    panel.innerHTML = `<p class="shot-say"></p><p class="row"><span class="shot-cam"></span>
+    panel.innerHTML = `<p class="shot-say"></p><div class="shot-review" hidden></div><p class="row"><span class="shot-cam"></span>
       <button class="btn" data-shots="skip" hidden>${t('shots.skip')}</button><button class="btn" data-shots="end">${t('shots.end')}</button></p>
       <ul class="shot-done"></ul>`;
-    const show = () => { say(); panel.querySelector('.shot-cam').innerHTML = cam(side, t(side === 'front' ? 'shots.front_btn' : 'shots.back')); };
+    const show = () => { panel.querySelector('.shot-cam').innerHTML = cam(side, t(side === 'front' ? 'shots.front_btn' : 'shots.back')); say(); };
     refresh = show;
     panel.onchange = (e) => {
       const file = e.target.closest('input[data-side]')?.files[0];
@@ -160,11 +202,9 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     if (act === 'start') { onStart?.(); start(); }
     else if (act === 'snap') snap();
     else if (act === 'end') stop();
-    else if (act === 'skip' && front) {
-      save(front, null);
-      front = null; side = 'front'; moved = false; since = Date.now();
-      if (session.single) stop(); else refresh();
-    }
+    else if (act === 'skip' && front) { reviewing = true; refresh(); }
+    else if (act === 'ok') keep();
+    else if (act.startsWith('again-')) again(act.slice(6));
   });
   panel.hidden = true;
   return { start, stop };

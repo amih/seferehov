@@ -56,7 +56,7 @@ export default defineConfig({
         scope: '/',
         display: 'standalone',
         orientation: 'portrait',
-        background_color: '#fbf6ef',
+        background_color: '#9a5b2e', // Android paints its button bar with it: white buttons need a dark bar
         theme_color: '#9a5b2e',
         categories: ['books', 'education', 'lifestyle'],
         icons: [

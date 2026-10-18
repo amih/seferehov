@@ -312,6 +312,11 @@ button.big-btn { font: inherit; text-align: start; width: 100%; }
 @keyframes shot-flash { from { opacity: .9; } to { opacity: 0; } }
 .shot-meter { position: absolute; left: 12%; right: 12%; bottom: 4%; height: 6px; background: rgba(255, 255, 255, .3); border-radius: 3px; overflow: hidden; }
 .shot-meter i { display: block; height: 100%; width: 0; background: var(--green); transition: width .12s linear; }
+.shot-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 10px; margin: 0 0 8px; }
+.shot-pair figure { margin: 0; text-align: center; }
+.shot-pair img, .shot-none { width: 100%; aspect-ratio: 3 / 4; object-fit: contain; background: #000; border-radius: 8px; display: block; }
+.shot-none { display: grid; place-items: center; background: var(--line); color: var(--muted); }
+.shot-pair figcaption { margin-top: 6px; }
 .shot-done { list-style: none; padding: 0; margin: 8px 0 0; }
 .shot-done li { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); }
 .shot-done .shot-thumb { width: 40px; height: 54px; }
