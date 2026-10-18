@@ -86,7 +86,8 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     panel.hidden = false;
     panel.innerHTML = `${intro ? `<p class="shot-intro">${intro}</p>` : ''}
       <div class="shot-live"><video muted playsinline></video><div class="shot-guide"></div><div class="shot-flash"></div>
-        <div class="shot-meter"><i></i></div></div>
+        <div class="shot-meter"><i></i></div><p class="shot-hint" hidden></p>
+        <button class="shot-torch" data-shots="torch" hidden aria-label="${t('shots.torch')}">🔦</button></div>
       <p class="shot-say"></p>
       <div class="shot-review" hidden></div>
       <p class="row"><button class="btn primary" data-shots="snap">📸 ${t('shots.snap')}</button>
@@ -100,6 +101,8 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
       stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1440 } } });
       video.srcObject = stream;
       await video.play();
+      const track = stream.getVideoTracks()[0];
+      if (track.getCapabilities?.().torch) panel.querySelector('.shot-torch').hidden = false;
     } catch {
       stopCamera();
       return fallback();
@@ -138,10 +141,17 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
       }
     }
     const sharp = sq / n - (sum / n) ** 2;
+    // A reflection (a patch of burnt-out white) or too little light spoils the small print.
+    let bright = 0, burnt = 0;
+    for (let i = 0; i < g.length; i++) { bright += g[i]; if (g[i] > 250) burnt++; }
+    const hint = burnt / g.length > 0.03 ? 'shots.glare' : bright / g.length < 60 ? 'shots.dark' : null;
+    const hintEl = panel.querySelector('.shot-hint');
+    hintEl.hidden = !hint;
+    if (hint) hintEl.textContent = t(hint);
     best = Math.max(best * 0.98, sharp);
     if (diff > 10) { moved = true; steady = 0; } else if (diff < 3.5) steady++; else steady = Math.max(0, steady - 1);
     // After a photo, the book has to move (turned over, or the next one) before the next.
-    const ready = moved && Date.now() - since > 1200 && sharp > 15 && sharp >= 0.7 * best;
+    const ready = !hint && moved && Date.now() - since > 1200 && sharp > 15 && sharp >= 0.7 * best;
     panel.querySelector('.shot-meter i').style.width = `${ready ? Math.min(100, (steady / 8) * 100) : 0}%`;
     if (ready && steady >= 8) snap();
   }
@@ -149,16 +159,38 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   async function snap() {
     if (busy || reviewing || !video?.videoWidth) return;
     busy = true;
-    const c = document.createElement('canvas');
-    c.width = video.videoWidth; c.height = video.videoHeight;
-    c.getContext('2d').drawImage(video, 0, 0);
-    const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9));
+    const blob = await still();
     const flash = panel.querySelector('.shot-flash');
     flash.classList.remove('on'); void flash.offsetWidth; flash.classList.add('on');
     navigator.vibrate?.(40);
     moved = false; steady = 0; since = Date.now();
     took(blob);
     busy = false;
+  }
+
+  // A real photo where the browser can take one (sharper and less noisy than a frame
+  // of the video), else the current frame of the video.
+  async function still() {
+    const track = stream?.getVideoTracks()[0];
+    if (track && 'ImageCapture' in window) {
+      try {
+        const photo = await new ImageCapture(track).takePhoto();
+        if (photo?.size) return photo;
+      } catch { /* not supported by this camera: the video frame below */ }
+    }
+    const c = document.createElement('canvas');
+    c.width = video.videoWidth; c.height = video.videoHeight;
+    c.getContext('2d').drawImage(video, 0, 0);
+    return new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9));
+  }
+
+  let torch = false;
+  async function toggleTorch() {
+    const track = stream?.getVideoTracks()[0];
+    if (!track) return;
+    torch = !torch;
+    await track.applyConstraints({ advanced: [{ torch }] }).catch(() => { torch = false; });
+    panel.querySelector('.shot-torch')?.classList.toggle('on', torch);
   }
 
   // Front, then back, then both are shown; a side taken again goes back to the review.
@@ -224,6 +256,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
 
   function stopCamera() {
     clearInterval(timer);
+    torch = false;
     stream?.getTracks().forEach((tr) => tr.stop());
     stream = null;
   }
@@ -241,6 +274,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     const act = b.dataset.shots;
     if (act === 'start') { onStart?.(); start(); }
     else if (act === 'snap') snap();
+    else if (act === 'torch') toggleTorch();
     else if (act === 'end') stop();
     else if (act === 'skip' && front) { reviewing = true; refresh(); }
     else if (act === 'nocode') endHunt();

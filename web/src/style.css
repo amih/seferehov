@@ -311,6 +311,9 @@ button.big-btn { font: inherit; text-align: start; width: 100%; }
 .shot-flash.on { animation: shot-flash .35s ease-out; }
 @keyframes shot-flash { from { opacity: .9; } to { opacity: 0; } }
 .shot-meter { position: absolute; left: 12%; right: 12%; bottom: 4%; height: 6px; background: rgba(255, 255, 255, .3); border-radius: 3px; overflow: hidden; }
+.shot-hint { position: absolute; left: 8px; right: 8px; top: 8px; margin: 0; padding: 6px 10px; border-radius: 8px; background: rgba(0, 0, 0, .65); color: #fff; font-size: .9rem; text-align: center; }
+.shot-torch { position: absolute; inset-inline-end: 8px; bottom: 14%; width: 44px; height: 44px; border: 0; border-radius: 50%; background: rgba(0, 0, 0, .45); font-size: 1.3rem; }
+.shot-torch.on { background: #ffd54a; }
 .shot-meter i { display: block; height: 100%; width: 0; background: var(--green); transition: width .12s linear; }
 .shot-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 10px; margin: 0 0 8px; }
 .shot-pair figure { margin: 0; text-align: center; }

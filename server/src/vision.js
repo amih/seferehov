@@ -1,4 +1,5 @@
 import sharp from 'sharp';
+import { fixHebrew } from './hebfix.js';
 import { readBarcodes } from 'zxing-wasm/reader';
 import { config } from './config.js';
 import { normalizeIsbn, normalizeDanacode } from './util.js';
@@ -109,7 +110,7 @@ export async function readCoverText(buffer) {
   const text = (await generate(await prepare(buffer, 0, 1600), TEXT_PROMPT, 1200)).trim();
   if (!/[\u0590-\u05FF]/.test(text)) return { text, hebrew: false };
   const better = await surya(buffer).catch(() => '') || await tesseract(buffer).catch(() => '');
-  return { text: better || text, hebrew: true };
+  return { text: better ? await fixHebrew(better) : text, hebrew: true };
 }
 
 async function surya(buffer) {
