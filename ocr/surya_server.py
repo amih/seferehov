@@ -8,6 +8,7 @@ Listens on 127.0.0.1 only. One image at a time (~30 s on the CPU).
 import io
 import json
 import os
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -27,7 +28,9 @@ def read(image):
         [page] = recognizer([image], det_predictor=detector, math_mode=False)
     # Top to bottom; Surya gives each line's box.
     lines = sorted(page.text_lines, key=lambda l: (l.bbox[1], -l.bbox[2]))
-    return [l.text.replace("<br>", "\n").strip() for l in lines if l.text.strip()]
+    # Surya marks bold or italic print with HTML tags: plain text only.
+    texts = [re.sub(r"</?(b|i|u|sup|sub|math)>", "", l.text.replace("<br>", "\n")).strip() for l in lines]
+    return [t for t in texts if t]
 
 
 class Handler(BaseHTTPRequestHandler):
