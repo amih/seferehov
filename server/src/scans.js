@@ -7,7 +7,7 @@ import { config } from './config.js';
 import { one, many, q, tx } from './db.js';
 import { requireUser } from './auth.js';
 import { lookupIsbn, lookupTitle, findOrCreateBook } from './books.js';
-import { readBooks, readCover, readIsbnBarcodes, normTitle } from './vision.js';
+import { readBooks, readCover, readIsbnBarcodes, normTitle, sameTitle } from './vision.js';
 import { pickFrames } from './frames.js';
 import { cropCover } from './covers.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
@@ -343,13 +343,19 @@ async function processCover(scan) {
   for (const [i, b] of [front, back].entries()) if (b) await keepCopy(b, scan.id, i).catch((err) => log.warn({ err, scan: scan.id }, 'keep copy failed'));
   const read = await readCover(front, back);
   let book = null, lookupId = null, isbn = null, danacode = null;
-  for (const code of [scan.book_code, read.isbn].filter(Boolean)) {
+  // A Danacode read from print may be misread: its book counts only if its title matches
+  // the front cover. Barcodes and ISBNs have check digits and are trusted.
+  let doubtful = null;
+  for (const code of [scan.book_code, ...(read.codes ?? [])].filter(Boolean)) {
     const r = await lookupIsbn(code, 'scan').catch(() => ({}));
+    const trusted = !read.unchecked?.includes(code) || code === scan.book_code || !read.title || !r.book || sameTitle(r.book.title, read.title);
+    if (!trusted) { doubtful ??= r; continue; }
     isbn ??= r.isbn ?? null;
     danacode ??= r.danacode ?? null;
     lookupId = r.lookupId ?? lookupId;
     if ((book = r.book ?? null)) break;
   }
+  if (!book && !isbn && !danacode && doubtful) ({ isbn = null, danacode = null } = doubtful);
   if (!book && read.title) {
     const r = await lookupTitle(read.title, read.author, 'scan').catch(() => ({}));
     book = r.book ?? null;

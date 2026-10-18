@@ -52,15 +52,45 @@ export async function readBooks(buffer, { spines = true } = {}) {
 // to decode; the printed digits are read well, and an ISBN's check digit catches misreads.
 const FRONT_PROMPT = 'This is the front cover of one book. Read its title and author exactly as printed, in the original language and script (do not translate). Answer one line: TITLE | AUTHOR. If unreadable answer NONE.';
 const BACK_PROMPT = 'This is the back cover of a book. Find the ISBN, or the Israeli Danacode (דאנאקוד), printed on it, usually next to the barcode. Answer one line: ISBN <digits> or DANACODE <digits>. If there is neither, answer NONE.';
+// codes: every ISBN/Danacode found, surest first (barcodes, then printed digits).
+// unchecked: the printed Danacodes among them — no check digit, so the caller trusts
+// one only when the catalogue's title for it matches the front cover.
 export async function readCover(front, back = null) {
   let book = null;
   for (const angle of [0, 90, 270]) {
     [book] = parseBooks((await generate(await prepare(front, angle), FRONT_PROMPT, 120)).trim().split('\n')[0]);
     if (book && book.quality !== 'low') break;
   }
-  let code = (back && (await readBookCodes(back))[0]) || (await readBookCodes(front))[0] || null;
-  if (!code && back) code = parsePrintedCode(await generate(await prepare(back, 0, 1600), BACK_PROMPT, 40));
-  return { title: book?.title ?? null, author: book?.author ?? null, quality: book?.quality ?? 'low', isbn: code };
+  const codes = [...(back ? await readBookCodes(back) : []), ...await readBookCodes(front)];
+  const fromBarcodes = codes.length;
+  if (!codes.length && back) {
+    const printed = parsePrintedCode(await generate(await prepare(back, 0, 1600), BACK_PROMPT, 40));
+    // Surya reads Hebrew print (the Danacode line) better than the vision model.
+    const ocr = !printed || !normalizeIsbn(printed) ? codesInText(await surya(back).catch(() => '')) : [];
+    codes.push(...ocr, ...(printed ? [printed] : []));
+  }
+  const unique = [...new Set(codes)];
+  // Barcodes and ISBNs carry a check digit; a Danacode read from print does not.
+  const unchecked = fromBarcodes ? [] : unique.filter((c) => !normalizeIsbn(c));
+  return { title: book?.title ?? null, author: book?.author ?? null, quality: book?.quality ?? 'low', isbn: unique[0] ?? null, codes: unique, unchecked };
+}
+
+// ISBNs and Danacodes in OCR text: "ISBN 978-…", "דאנאקוד: 239-597", "מסת"ב …".
+export function codesInText(text) {
+  const out = [];
+  for (const line of String(text ?? '').split('\n')) {
+    for (const m of line.matchAll(/(?:ISBN|מסת"?ב)[^\dX]{0,6}([\dX][\dX\s-]{8,20})/gi)) {
+      const c = normalizeIsbn(m[1]);
+      if (c) out.push(c);
+    }
+    if (/דא?נאקוד|דנקוד|danacode/i.test(line)) {
+      for (const m of line.matchAll(/\b(\d{1,4}\s?-\s?\d{2,7})\b/g)) {
+        const c = normalizeDanacode(m[1]);
+        if (c) out.push(c);
+      }
+    }
+  }
+  return [...new Set(out)];
 }
 
 // "ISBN 978-0-385-54647-8" / "DANACODE 239-597" → the ISBN-13 or the Danacode's 12 digits.
@@ -71,14 +101,22 @@ export function parsePrintedCode(answer) {
   return m[1].toUpperCase() === 'ISBN' ? normalizeIsbn(digits) ?? normalizeDanacode(digits) : normalizeDanacode(digits) ?? normalizeIsbn(digits);
 }
 
-// All the text printed on one cover photo, for the book page. Hebrew is read by
-// Tesseract (the vision model invents Hebrew text it cannot make out); everything else
-// by the vision model, which copies Latin print almost perfectly.
+// All the text printed on one cover photo, for the book page. Hebrew is read by Surya
+// OCR (ocr/surya_server.py; Tesseract if it is down): the vision model invents Hebrew
+// text it cannot make out, but copies Latin print almost perfectly.
 const TEXT_PROMPT = 'Transcribe all the text printed on this book cover, exactly as printed, in its original language and script (do not translate). Keep paragraphs. Skip barcodes. Output only the text.';
 export async function readCoverText(buffer) {
   const text = (await generate(await prepare(buffer, 0, 1600), TEXT_PROMPT, 1200)).trim();
   if (!/[\u0590-\u05FF]/.test(text)) return { text, hebrew: false };
-  return { text: await tesseract(buffer).catch(() => '') || text, hebrew: true };
+  const better = await surya(buffer).catch(() => '') || await tesseract(buffer).catch(() => '');
+  return { text: better || text, hebrew: true };
+}
+
+async function surya(buffer) {
+  const jpeg = await sharp(buffer).rotate().resize(2400, 2400, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 92 }).toBuffer();
+  const res = await fetch(`${config.ocrUrl}/ocr`, { method: 'POST', body: jpeg, signal: AbortSignal.timeout(300_000) });
+  if (!res.ok) throw new Error(`ocr ${res.status}`);
+  return (await res.json()).text?.trim() ?? '';
 }
 
 async function tesseract(buffer) {
@@ -159,7 +197,7 @@ export function rotatePoint([x, y], W, H, deg) {
 
 const LOCATE_PROMPT = (title) => `Locate the book spine or cover with the title "${title.replace(/"/g, '')}" in this image. Output JSON: [{"bbox_2d":[x1,y1,x2,y2]}]`;
 // Same book? Most words of the shorter title appear in the other one.
-function sameTitle(a, b) {
+export function sameTitle(a, b) {
   const [x, y] = [normTitle(a).split(' '), normTitle(b).split(' ')].map((w) => w.filter(Boolean));
   const [short, long] = x.length <= y.length ? [x, new Set(y)] : [y, new Set(x)];
   return short.length > 0 && short.filter((w) => long.has(w)).length / short.length >= 0.5;

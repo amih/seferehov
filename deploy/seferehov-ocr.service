@@ -1,0 +1,20 @@
+# Surya OCR for cover texts (ocr/surya_server.py). Install:
+#   python3 -m venv APP_DIR-ocr-venv && APP_DIR-ocr-venv/bin/pip install -r APP_DIR/ocr/requirements.txt
+#   copy to /etc/systemd/system/ (replace APP_USER/APP_DIR), systemctl enable --now seferehov-ocr
+[Unit]
+Description=Seferehov cover OCR (Surya)
+After=network.target
+
+[Service]
+User=APP_USER
+WorkingDirectory=APP_DIR/ocr
+Environment=TORCH_DEVICE=cpu OMP_NUM_THREADS=36 OCR_PORT=3872
+ExecStart=APP_DIR-ocr-venv/bin/python surya_server.py
+# A background job: about 80% of the cores, and the lowest priority.
+CPUQuota=3800%
+Nice=19
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

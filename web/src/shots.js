@@ -11,12 +11,14 @@ import { t, lang } from './i18n.js';
 // onBook({ front, back, isbn }) in the background, which resolves to a line to show.
 // While the camera is on, it also looks for the barcode: a whole back cover in one
 // photo leaves the barcode too small to decode from the still, but the live picture,
-// read many times a second, usually catches it.
+// read many times a second, usually catches it. If it has not by the time the back
+// cover is taken, the reader is asked for a close-up of the barcode for a few seconds.
 // Without a live camera, the phone's camera app is used instead, one photo at a time.
 export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   let stream = null, video = null, timer = null, side = 'front', front = null, back = null, preset = null, busy = false;
   let reviewing = false;
   let liveCode = null, lastCode = null, looking = false, ticks = 0;
+  let hunting = false, huntUntil = 0; // after the back cover: a few seconds for a close-up of the barcode
   let session = {}; // this time only: { intro, single, onBook }
   const small = document.createElement('canvas');
   const ctx = small.getContext('2d', { willReadFrequently: true });
@@ -27,7 +29,8 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     const live = panel.querySelector('.shot-live');
     if (live) live.hidden = reviewing;
     panel.querySelector('.shot-cam')?.toggleAttribute('hidden', reviewing);
-    panel.querySelector('[data-shots="snap"]')?.toggleAttribute('hidden', reviewing);
+    panel.querySelector('[data-shots="snap"]')?.toggleAttribute('hidden', reviewing || hunting);
+    panel.querySelector('[data-shots="nocode"]')?.toggleAttribute('hidden', !hunting);
     const rev = panel.querySelector('.shot-review');
     rev.hidden = !reviewing;
     if (reviewing) {
@@ -41,6 +44,11 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
       }).join('')}</div>
         <p class="row"><button class="btn primary" data-shots="ok">✓ ${t(session.single ? 'shots.ok_single' : 'shots.ok')}</button></p>`;
       center(rev);
+      return;
+    }
+    if (hunting) {
+      panel.querySelector('.shot-say').innerHTML = `<b>${t('shots.code_close')}</b><br><span class="muted small">${t('shots.code_close_how')}</span>`;
+      panel.querySelector('[data-shots="skip"]').hidden = true;
       return;
     }
     panel.querySelector('.shot-say').innerHTML = side === 'front'
@@ -74,7 +82,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     refresh = say;
     side = only ?? 'front';
     prev = null; steady = 0; moved = true; best = 0;
-    front = null; back = null; reviewing = false; liveCode = null;
+    front = null; back = null; reviewing = false; liveCode = null; hunting = false;
     panel.hidden = false;
     panel.innerHTML = `${intro ? `<p class="shot-intro">${intro}</p>` : ''}
       <div class="shot-live"><video muted playsinline></video><div class="shot-guide"></div><div class="shot-flash"></div>
@@ -83,6 +91,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
       <div class="shot-review" hidden></div>
       <p class="row"><button class="btn primary" data-shots="snap">📸 ${t('shots.snap')}</button>
         <button class="btn" data-shots="skip" hidden>${t('shots.skip')}</button>
+        <button class="btn" data-shots="nocode" hidden>${t('shots.no_code')}</button>
         <button class="btn" data-shots="end">${t('shots.end')}</button></p>
       <ul class="shot-done"></ul>`;
     video = panel.querySelector('video');
@@ -104,6 +113,11 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   // Still and sharp? Movement = mean change of a small grey copy between ticks;
   // sharpness = variance of its Laplacian (text and edges in focus score high).
   function tick() {
+    if (hunting) {
+      lookForCode();
+      if (liveCode || Date.now() > huntUntil) endHunt();
+      return;
+    }
     if (busy || reviewing || !video.videoWidth) return;
     if (++ticks % 4 === 0) lookForCode();
     const w = 160, h = Math.round((w * video.videoHeight) / video.videoWidth);
@@ -151,7 +165,13 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   function took(blob) {
     if (side === 'front') front = blob; else back = blob;
     if (side === 'front' && !session.only && !back) side = 'back';
+    else if (side === 'back' && stream && !liveCode && !preset) { hunting = true; huntUntil = Date.now() + 6000; }
     else reviewing = true;
+    refresh();
+  }
+  function endHunt() {
+    hunting = false;
+    reviewing = true;
     refresh();
   }
 
@@ -223,6 +243,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     else if (act === 'snap') snap();
     else if (act === 'end') stop();
     else if (act === 'skip' && front) { reviewing = true; refresh(); }
+    else if (act === 'nocode') endHunt();
     else if (act === 'ok') keep();
     else if (act.startsWith('again-')) again(act.slice(6));
   });

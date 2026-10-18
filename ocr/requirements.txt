@@ -1,0 +1,6 @@
+# Surya OCR on the CPU. 0.17 runs in-process (later versions need Docker with an NVIDIA
+# runtime); it needs transformers 4.56 and a torch of the same generation.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.7.1
+transformers==4.56.2
+surya-ocr==0.17.1

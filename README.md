@@ -42,7 +42,7 @@ npm run dev:web               # app on :5173
 One home server runs everything: nginx, the API (systemd `seferehov`, port 3870), PostGIS in Docker, Ollama, and the monthly catalogue refresh (`seferehov-ol-refresh.timer`).
 
 - **Deploy**: `deploy/deploy.sh` — refuses a dirty tree, builds, rsyncs to `APP_DIR` on the server (from gitignored `deploy/target.private`: `SSH=user@host APP_DIR=/path`), runs migrations, restarts `seferehov`.
-- **First install**: copy `deploy/seferehov.service` and `deploy/seferehov-ol-refresh.{service,timer}` to `/etc/systemd/system/` (replace `APP_USER`/`APP_DIR`), and `deploy/nginx.conf` to `/etc/nginx/sites-available/` (replace `HOST`, `APP_DIR`).
+- **First install**: copy `deploy/seferehov.service`, `deploy/seferehov-ocr.service` (Surya OCR for Hebrew cover texts; venv steps in the file) and `deploy/seferehov-ol-refresh.{service,timer}` to `/etc/systemd/system/` (replace `APP_USER`/`APP_DIR`), and `deploy/nginx.conf` to `/etc/nginx/sites-available/` (replace `HOST`, `APP_DIR`).
 - **Server `.env`**: `BASE_URL=https://seferehov.com`, SMTP (`noreply@seferehov.com`), Google sign-in, `NLI_API_KEY`, `ADMIN_EMAILS`. Google sign-in needs `BASE_URL/api/auth/google/callback` listed as a redirect URI in the Google Cloud console.
 
 ## How updates reach installed apps

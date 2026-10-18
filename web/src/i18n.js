@@ -560,6 +560,9 @@ const he = {
   'mybooks.add_how': 'אין צורך להקליד כלום. אנחנו מזהים את הספר מהתמונות ברקע (זה לוקח כמה דקות), ואחר כך כל ספר יחכה לך ב"ספרים לאישור" — שם אפשר לאשר אותו או לתקן את השם והסופר.',
   'mybooks.empty2': 'עוד אין ספרים ברשימה.',
   'shots.code_seen': '✓ הברקוד נקרא',
+  'shots.code_close': 'קרבו את המצלמה לברקוד',
+  'shots.code_close_how': 'כמה שניות, עד שהוא ייקרא. אין ברקוד? נמשיך לבד בעוד רגע.',
+  'shots.no_code': 'אין ברקוד',
 };
 
 const en = {
@@ -1118,6 +1121,9 @@ const en = {
   'mybooks.add_how': 'No typing needed. We work out which book it is from the photos in the background (it takes a few minutes). Then each book waits for you in "Books to approve", where you can confirm it or fix the title and author.',
   'mybooks.empty2': 'No books on the list yet.',
   'shots.code_seen': '✓ Barcode read',
+  'shots.code_close': 'Bring the camera close to the barcode',
+  'shots.code_close_how': 'A few seconds, until it is read. No barcode? We carry on by ourselves in a moment.',
+  'shots.no_code': 'No barcode',
 };
 
 const DICT = { he, en };

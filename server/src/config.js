@@ -24,6 +24,8 @@ export const config = {
     url: (env.OLLAMA_URL || 'http://127.0.0.1:11434').replace(/\/$/, ''),
     model: env.VISION_MODEL || 'qwen3-vl:8b-instruct',
   },
+  // Surya OCR service (ocr/surya_server.py) for Hebrew cover text.
+  ocrUrl: (env.OCR_URL || 'http://127.0.0.1:3872').replace(/\/$/, ''),
   // Checks public texts for door codes, phone numbers etc. Same model = no GPU swap.
   privacyModel: env.PRIVACY_MODEL || env.VISION_MODEL || 'qwen3-vl:8b-instruct',
   google: {
