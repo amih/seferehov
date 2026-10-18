@@ -5,6 +5,7 @@ const LANGS = ['he', 'en'];
 
 const he = {
   'app.name': 'ספרחוב',
+  'app.brand': 'סֵפֶרְחוֹב',
   'app.title': 'ספרחוב — ספריות רחוב לידך',
   'nav.map': 'מפה',
   'nav.add': 'הוספה',
@@ -634,6 +635,7 @@ const en = {
   'updated': ({ v }) => `Updated to version ${v}`,
 
   'app.name': 'Seferehov',
+  'app.brand': 'Seferehov',
   'app.title': 'Seferehov — free street libraries near you',
   'about.title': 'About Seferehov',
   'about.lead_html': '<strong>Seferehov</strong> (Hebrew for “street books”). A shared map of free street libraries — book boxes, little free libraries, shelves in lobbies and parks — and the books on their shelves right now.',

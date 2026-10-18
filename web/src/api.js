@@ -1,3 +1,4 @@
+import { dontTrackThisDevice } from './analytics.js';
 import { checkForUpdate, maybeApply } from './update.js';
 
 export class ApiError extends Error {
@@ -29,6 +30,9 @@ export async function api(path, { method = 'GET', json, form } = {}) {
 
 let me;
 export async function getMe(force = false) {
-  if (!me || force) me = api('/api/me').then((r) => r.user).catch(() => null);
+  if (!me || force) {
+    me = api('/api/me').then((r) => r.user).catch(() => null);
+    me.then((u) => { if (u?.trust_level >= 3) dontTrackThisDevice(); });
+  }
   return me;
 }

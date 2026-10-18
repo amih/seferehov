@@ -2,6 +2,7 @@ import { api, getMe } from '../api.js';
 import { navigate } from '../nav.js';
 import { esc, toast } from '../ui.js';
 import { lang } from '../i18n.js';
+import { tracked } from '../analytics.js';
 
 // For the admin only (English): the public pages search engines see, cover texts that
 // wait for a check, readers' reviews (to hide one), and how the app is used (counts
@@ -97,7 +98,7 @@ export default async function adminView(root) {
       ${bars(a.daily, (d) => d.reports + d.home_books, max, (d) => `${day(d.day)}: ${d.reports} reports, ${d.home_books} at home, ${d.active_readers} active readers`)}
       ${m?.error ? `<p class="note">Matomo: ${esc(m.error)}</p>` : m ? `
         <h2>Visitors (Matomo)</h2>
-        <p>${n(visits.reduce((s, d) => s + d.visits, 0))} visits in 30 days</p>
+        <p>${n(visits.reduce((s, d) => s + d.visits, 0))} visits in 30 days${tracked() ? '' : ' · this device is not counted'}</p>
         ${bars(visits, (d) => d.visits, vmax, (d) => `${d.day}: ${d.visits} visits`)}
         <h3>Top pages</h3>${table(['Page', 'Views'], m.pages.map((p) => [esc(p.url), n(p.hits)]))}
         <h3>Where visitors came from</h3>${table(['Source', 'Visits'], m.referrers.map((r) => [esc(r.type), n(r.visits)]))}

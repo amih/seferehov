@@ -47,8 +47,8 @@ export default defineConfig({
       },
       manifest: {
         id: '/',
-        name: 'ספרחוב — ספריות רחוב',
-        short_name: 'ספרחוב',
+        name: 'סֵפֶרְחוֹב — ספריות רחוב',
+        short_name: 'סֵפֶרְחוֹב',
         description: 'מפה משותפת של ספריות רחוב: מוצאים ארון ספרים קרוב, רואים אילו ספרים יש בו, ומוסיפים את מה שמצאתם.',
         lang: 'he',
         dir: 'rtl',
