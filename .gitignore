@@ -6,3 +6,4 @@ uploads/
 *.private
 .env.*.local
 server/scan-keep/
+__pycache__/
