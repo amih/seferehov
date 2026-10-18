@@ -3,7 +3,7 @@ import { initUpdates, maybeApply } from './update.js';
 import { startQueue, onQueueChange, flush } from './queue.js';
 import { toast } from './ui.js';
 import { api, getMe } from './api.js';
-import { navigate } from './nav.js';
+import { navigate, mapUnderneath, closeLayer } from './nav.js';
 import { trackPageView } from './analytics.js';
 import { t, applyLang } from './i18n.js';
 import mapView from './views/map.js';
@@ -60,7 +60,7 @@ async function render() {
   const me = await getMe();
   if (me && !me.screen_name && !['/me', '/about'].includes(path)) {
     sessionStorage.setItem('seferehov:next', location.pathname + location.search);
-    history.replaceState(null, '', '/me?welcome=1');
+    history.replaceState(history.state, '', '/me?welcome=1');
     return render();
   }
   // A fresh element per screen: listeners a screen added to it go with it.
@@ -86,7 +86,7 @@ document.addEventListener('click', (e) => {
   e.preventDefault();
   navigate(url.pathname + url.search + url.hash);
 });
-window.addEventListener('popstate', render);
+window.addEventListener('popstate', () => { if (!closeLayer()) render(); });
 window.addEventListener('seferehov:navigate', render);
 
 const badge = document.getElementById('queue-badge');
@@ -126,4 +126,5 @@ window.addEventListener('online', async () => {
   if (sent.length) toast(t('queue.uploaded', { n: sent.length }));
 });
 document.getElementById('app-version').textContent = __APP_VERSION__;
+mapUnderneath();
 render();

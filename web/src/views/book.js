@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { navigate } from '../nav.js';
+import { navigate, backCloses } from '../nav.js';
 import { esc, timeAgo, toast, confirmDialog, getPosition } from '../ui.js';
 import { t } from '../i18n.js';
 import { watchDialog } from '../watch.js';
@@ -117,17 +117,17 @@ function renderBook(root, { b, photos, again, back, status, actions, wire, photo
     ${pics.length ? `<div class="gallery">${pics.map((p, i) => `
       <figure class="${p.wide ? 'wide' : ''}"><button class="pic" data-i="${i}" aria-label="${esc(p.label)}"><img src="${esc(p.url)}" alt="" loading="${i ? 'lazy' : 'eager'}"></button><figcaption>${esc(p.label)}</figcaption></figure>`).join('')}</div>
       ${pics.length > 1 ? `<p class="muted small center">${t('book.swipe', { n: pics.length })}</p>` : ''}` : '<div class="nocover big">📖</div>'}
+    <div class="add-photos" hidden>
+      ${!b.back_url && !latest('back') ? `<p class="note">${t('book.no_back')}</p>` : ''}
+      <p class="row"><button class="btn ${!b.back_url && !latest('back') ? '' : 'small'}" data-new="front">📷 ${t('book.new_front')}</button>
+        <button class="btn ${!b.back_url && !latest('back') ? 'primary' : 'small'}" data-new="back">📷 ${t('book.new_back')}</button></p></div>
+    <div class="shots" id="shots" hidden></div>
     <h1>${esc(b.title)}</h1>
     <p>${esc((b.authors ?? []).join(', '))}${b.year ? ` · ${b.year}` : ''}${b.publisher ? ` · ${esc(b.publisher)}` : ''}</p>
     ${status}
     ${b.description ? `<h2>${t('book.blurb')}</h2><p class="desc blurb" dir="auto">${esc(b.description)}</p>`
       : b.details_pending ? `<p class="progress-line small"><span class="spinner"></span> ${t('book.looking')}</p>` : `<p class="muted small">${t('book.no_blurb')}</p>`}
     ${actions}
-    <div class="add-photos" hidden>
-      ${!b.back_url && !latest('back') ? `<p class="note">${t('book.no_back')}</p>` : ''}
-      <p class="row"><button class="btn ${!b.back_url && !latest('back') ? '' : 'small'}" data-new="front">📷 ${t('book.new_front')}</button>
-        <button class="btn ${!b.back_url && !latest('back') ? 'primary' : 'small'}" data-new="back">📷 ${t('book.new_back')}</button></p></div>
-    <div class="shots" id="shots" hidden></div>
     ${b.isbn13 ? `<p class="muted small" dir="ltr">ISBN ${esc(b.isbn13)}</p>` : ''}
     ${b.details_source ? `<p class="muted small">${t('book.source', { src: esc(b.details_source) })}</p>` : ''}
   </section>`;
@@ -174,7 +174,8 @@ function viewer(pics, start) {
   const img = el.querySelector('img');
   const show = () => { img.src = pics[i].url; el.querySelector('.viewer-cap').textContent = `${pics[i].label} (${i + 1}/${pics.length})`; };
   const step = (d) => { i = (i + d + pics.length) % pics.length; show(); };
-  const close = () => { el.remove(); document.removeEventListener('keydown', onKey); };
+  const remove = () => { el.remove(); document.removeEventListener('keydown', onKey); };
+  const close = backCloses(remove); // the phone's back button closes it too
   const onKey = (e) => { if (e.key === 'Escape') close(); if (e.key === 'ArrowLeft') step(-1); if (e.key === 'ArrowRight') step(1); };
   el.addEventListener('click', (e) => {
     if (e.target.closest('.x')) close();
