@@ -129,6 +129,7 @@ function renderBook(root, { b, photos, again, back, status, actions, wire, photo
     ${b.description ? `<h2>${t('book.blurb')}</h2><p class="desc blurb" dir="auto">${esc(b.description)}</p>`
       : b.details_pending ? `<p class="progress-line small"><span class="spinner"></span> ${t('book.looking')}</p>` : `<p class="muted small">${t('book.no_blurb')}</p>`}
     ${actions}
+    ${(b.authors ?? []).length ? `<p class="row">${b.authors.slice(0, 2).map((a) => `<button class="link" data-watch-author="${esc(a)}">${esc(t('watch.author_button', { author: a }))}</button>`).join('')}</p>` : ''}
     <div id="review-box"></div>
     ${b.isbn13 ? `<p class="muted small" dir="ltr">ISBN ${esc(b.isbn13)}</p>` : ''}
     ${b.id ? `<p class="small"><a href="/b/${b.id}">${t('book.public_page')}</a></p>` : ''}
@@ -136,6 +137,7 @@ function renderBook(root, { b, photos, again, back, status, actions, wire, photo
   </section>`;
 
   wire(root);
+  root.querySelectorAll('[data-watch-author]').forEach((el) => { el.onclick = () => watchDialog({ kind: 'author', query: el.dataset.watchAuthor }); });
   if (b.id) reviewBox(root.querySelector('#review-box'), b.id);
   root.querySelector('.gallery')?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-i]');

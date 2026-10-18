@@ -41,3 +41,20 @@ registerRoute(
   ({ url }) => url.hostname === 'covers.openlibrary.org' || url.hostname.endsWith('books.google.com'),
   new CacheFirst({ cacheName: 'covers', plugins: [new ExpirationPlugin({ maxEntries: 500, maxAgeSeconds: 60 * 86400 })] }),
 );
+
+// Phone notifications: a book someone waits for was reported on a shelf.
+self.addEventListener('push', (e) => {
+  let data = {};
+  try { data = e.data?.json() ?? {}; } catch { data = { title: e.data?.text() }; }
+  e.waitUntil(self.registration.showNotification(data.title || 'סֵפֶרְחוֹב', {
+    body: data.body || '', icon: '/icons/icon-v2-192.png', badge: '/icons/icon-v2-192.png', lang: 'he', dir: 'auto', data: { url: data.url || '/' },
+  }));
+});
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = new URL(e.notification.data?.url || '/', self.location.origin).href;
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    const open = list.find((c) => c.url.startsWith(self.location.origin));
+    return open ? open.navigate(url).then((c) => (c ?? open).focus()) : self.clients.openWindow(url);
+  }));
+});

@@ -83,7 +83,10 @@ export default async function searchView(root, _, query) {
   if (km) p.set('km', km);
   let books;
   try { ({ books } = await api(`/api/books/search?${p}`)); } catch (e) { out.innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
-  if (!books.length) { out.innerHTML = `<p>${t('find.none')}</p>`; return; }
+  // Not there yet (or not near): be told when a book with these words is reported.
+  const watchWords = text ? `<p class="row"><button class="btn" id="watch-words">${t('watch.words_button')}</button></p>` : '';
+  const wireWords = () => { const w = out.querySelector('#watch-words'); if (w) w.onclick = () => watchDialog({ kind: 'words', query: text, pos, km: km ?? 5 }); };
+  if (!books.length) { out.innerHTML = `<p>${t('find.none')}</p>${watchWords}`; wireWords(); return; }
   out.innerHTML = `<ul class="books found">${books.map((b, i) => `
     <li>
       ${b.cover_url ? `<img src="${esc(b.cover_url)}" alt="" loading="lazy">` : '<div class="nocover">📖</div>'}
@@ -97,7 +100,8 @@ export default async function searchView(root, _, query) {
         ${b.waiting?.others ? `<span class="waiting">👥 ${t('watch.waiting', { n: b.waiting.others, mine: b.waiting.mine })}</span>` : ''}
         <button class="link" data-watch="${i}">${t(b.waiting?.mine ? 'watch.on' : 'watch.button')}</button>
       </div>
-    </li>`).join('')}</ul>`;
+    </li>`).join('')}</ul>${watchWords}`;
+  wireWords();
   out.onclick = (e) => {
     const b = e.target.closest('[data-watch]');
     if (b) watchDialog({ book: books[Number(b.dataset.watch)], pos, km: km ?? 5 });

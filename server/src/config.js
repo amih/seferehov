@@ -45,6 +45,12 @@ export const config = {
     siteId: env.MATOMO_SITE_ID || '',
     token: env.MATOMO_TOKEN || '',
   },
+  // Phone notifications (Web Push): npx web-push generate-vapid-keys. Optional.
+  vapid: {
+    publicKey: env.VAPID_PUBLIC || '',
+    privateKey: env.VAPID_PRIVATE || '',
+    subject: env.VAPID_SUBJECT || 'mailto:admin@example.com',
+  },
   // Sightings reported from farther than this go to review even for trusted users.
   maxReportDistanceM: 300,
 };

@@ -21,7 +21,7 @@ export async function currentUser(req) {
   if (!token) return null;
   return one(
     `SELECT u.id, u.email, u.screen_name, u.trust_level, u.avatar_path, u.avatar_source,
-            u.google_sub IS NOT NULL AS has_google, u.google_picture
+            u.google_sub IS NOT NULL AS has_google, u.google_picture, u.notify_email, u.notify_push
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = $1 AND s.expires_at > now()`,
     [sha256(token)],
@@ -188,6 +188,7 @@ export default async function authRoutes(app) {
         id: u.id, email: u.email, screen_name: u.screen_name, trust_level: u.trust_level,
         avatar: avatarUrl(u.avatar_path), avatar_source: u.avatar_source,
         has_google: u.has_google, can_use_google_picture: Boolean(u.google_picture),
+        notify_email: u.notify_email, notify_push: u.notify_push,
         ...stats,
       },
     };

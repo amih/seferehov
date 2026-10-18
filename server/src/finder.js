@@ -4,6 +4,7 @@ import { config } from './config.js';
 import { one, many, q } from './db.js';
 import { requireUser } from './auth.js';
 import { sendMail } from './mail.js';
+import { sendPush } from './push.js';
 import { parseLatLon } from './util.js';
 
 const KM_CHOICES = [1, 5, 20, 50];
@@ -99,9 +100,9 @@ export default async function finderRoutes(app) {
 
   app.get('/api/watches', { preHandler: requireUser() }, async (req) => ({
     watches: await many(
-      `SELECT w.id, w.scope, w.km, w.created_at, w.notified_at, b.id AS book_id, b.title, b.authors,
+      `SELECT w.id, w.kind, w.query, w.scope, w.km, w.created_at, w.notified_at, b.id AS book_id, b.title, b.authors,
               l.code, l.name AS location_name
-         FROM book_watches w JOIN books b ON b.id = w.book_id LEFT JOIN locations l ON l.id = w.location_id
+         FROM book_watches w LEFT JOIN books b ON b.id = w.book_id LEFT JOIN locations l ON l.id = w.location_id
         WHERE w.user_id = $1 ORDER BY w.created_at DESC`, [req.user.id]),
   }));
 
@@ -110,8 +111,13 @@ export default async function finderRoutes(app) {
     config: { rateLimit: { max: 60, timeWindow: '1 hour' } },
   }, async (req, reply) => {
     const { book_id, scope, code, lat, lon, km, lang } = req.body ?? {};
-    const book = await one('SELECT id FROM books WHERE id = $1', [Number(book_id)]);
-    if (!book || !['here', 'near', 'anywhere'].includes(scope)) return reply.code(400).send({ error: 'bad_request' });
+    // A book, or every book by an author, or every book with these words in its title.
+    const kind = ['author', 'words'].includes(req.body?.kind) ? req.body.kind : 'book';
+    const query = kind === 'book' ? null : (await one('SELECT search_norm($1) AS s', [String(req.body?.query ?? '').slice(0, 100)])).s;
+    const book = kind === 'book' ? await one('SELECT id FROM books WHERE id = $1', [Number(book_id)]) : null;
+    if ((kind === 'book' ? !book : !query || query.length < 2) || !['here', 'near', 'anywhere'].includes(scope)) {
+      return reply.code(400).send({ error: 'bad_request' });
+    }
     let locationId = null, center = null, radius = null;
     if (scope === 'here') {
       locationId = (await one(`SELECT id FROM locations WHERE code = $1 AND status = 'approved'`, [String(code ?? '').toUpperCase()]))?.id;
@@ -122,13 +128,24 @@ export default async function finderRoutes(app) {
       radius = KM_CHOICES.includes(Number(km)) ? Number(km) : null;
       if (!center || !radius) return reply.code(400).send({ error: 'bad_request' });
     }
+    const values = [req.user.id, book?.id ?? null, scope, locationId, center?.lat ?? null, center?.lon ?? null, radius, lang === 'en' ? 'en' : 'he'];
+    if (kind !== 'book') {
+      return {
+        watch: await one(
+          `INSERT INTO book_watches(user_id, book_id, scope, location_id, center, km, lang, kind, query)
+           VALUES ($1, $2, $3, $4, CASE WHEN $5::float8 IS NULL THEN NULL ELSE ST_MakePoint($6, $5)::geography END, $7, $8, $9, $10)
+           ON CONFLICT (user_id, kind, query) WHERE query IS NOT NULL DO UPDATE SET scope = EXCLUDED.scope, location_id = EXCLUDED.location_id,
+             center = EXCLUDED.center, km = EXCLUDED.km, lang = EXCLUDED.lang, created_at = now(), notified_at = NULL
+           RETURNING id`, [...values, kind, query]),
+      };
+    }
     const w = await one(
       `INSERT INTO book_watches(user_id, book_id, scope, location_id, center, km, lang)
        VALUES ($1, $2, $3, $4, CASE WHEN $5::float8 IS NULL THEN NULL ELSE ST_MakePoint($6, $5)::geography END, $7, $8)
        ON CONFLICT (user_id, book_id) DO UPDATE SET scope = EXCLUDED.scope, location_id = EXCLUDED.location_id,
          center = EXCLUDED.center, km = EXCLUDED.km, lang = EXCLUDED.lang, created_at = now(), notified_at = NULL
        RETURNING id`,
-      [req.user.id, book.id, scope, locationId, center?.lat ?? null, center?.lon ?? null, radius, lang === 'en' ? 'en' : 'he'],
+      values,
     );
     return { watch: w };
   });
@@ -143,11 +160,13 @@ export default async function finderRoutes(app) {
 const MAIL = {
   he: {
     subject: (title) => `📚 "${title}" נמצא על מדף`,
-    body: ({ title, lib, place, link }) => `שלום,\n\nהספר "${title}" דווח עכשיו על המדף ${/^[\u0590-\u05FF]/.test(lib) ? 'ב' : 'ב־'}${lib}${place ? ` (${place})` : ''}.\n\n${link}\n\nכדאי למהר — ספרים ברחוב לא מחכים הרבה זמן.\n\nלהפסקת ההתראות על הספר הזה: ${config.baseUrl}/me\n\nספרחוב`,
+    body: ({ title, lib, place, link }) => `שלום,\n\nהספר "${title}" דווח עכשיו על המדף ${/^[\u0590-\u05FF]/.test(lib) ? 'ב' : 'ב־'}${lib}${place ? ` (${place})` : ''}.\n\n${link}\n\nכדאי למהר — ספרים ברחוב לא מחכים הרבה זמן.\n\nלהפסקת ההתראות, או כדי לקבל אותן בטלפון במקום במייל: ${config.baseUrl}/me#notify\n\nספרחוב`,
+    push: ({ lib }) => `על המדף ${/^[\u0590-\u05FF]/.test(lib) ? 'ב' : 'ב־'}${lib} עכשיו`,
   },
   en: {
     subject: (title) => `📚 "${title}" is on a shelf`,
-    body: ({ title, lib, place, link }) => `Hi,\n\n"${title}" was just reported on the shelf at ${lib}${place ? ` (${place})` : ''}.\n\n${link}\n\nBetter hurry — street books do not wait long.\n\nTo stop alerts for this book: ${config.baseUrl}/me\n\nSeferehov`,
+    body: ({ title, lib, place, link }) => `Hi,\n\n"${title}" was just reported on the shelf at ${lib}${place ? ` (${place})` : ''}.\n\n${link}\n\nBetter hurry — street books do not wait long.\n\nTo stop these alerts, or to get them on your phone instead of by email: ${config.baseUrl}/me#notify\n\nSeferehov`,
+    push: ({ lib }) => `On the shelf at ${lib} now`,
   },
 };
 
@@ -165,20 +184,30 @@ async function notifyWatchers(log) {
   for (const s of todo) {
     if (s.status === 'approved' && (s.kind === 'seen' || s.kind === 'added')) {
       const hits = await many(
-        `SELECT w.id, w.lang, u.email, b.title, l.code, l.name AS lib, p.name AS place, p.name_he AS place_he
-           FROM book_watches w JOIN users u ON u.id = w.user_id JOIN books b ON b.id = w.book_id
+        // The book itself, any book by a watched author, or with all the watched words.
+        `SELECT DISTINCT ON (w.user_id) w.id, w.lang, w.user_id, u.email, u.notify_email, u.notify_push, b.title,
+                l.code, l.name AS lib, p.name AS place, p.name_he AS place_he
+           FROM books b JOIN book_watches w ON CASE w.kind
+                  WHEN 'book' THEN w.book_id = b.id
+                  WHEN 'author' THEN EXISTS (SELECT 1 FROM unnest(b.authors) a WHERE search_norm(a) LIKE '%' || w.query || '%')
+                  ELSE NOT EXISTS (SELECT 1 FROM unnest(string_to_array(w.query, ' ')) x WHERE position(x IN b.search) = 0) END
+           JOIN users u ON u.id = w.user_id
            JOIN locations l ON l.id = $2 LEFT JOIN places p ON p.id = l.place_id
-          WHERE w.book_id = $1 AND w.user_id IS DISTINCT FROM $3
+          WHERE b.id = $1 AND w.user_id IS DISTINCT FROM $3
             AND (w.notified_at IS NULL OR w.notified_at < now() - make_interval(hours => $4))
             AND (w.scope = 'anywhere' OR (w.scope = 'here' AND w.location_id = $2)
-                 OR (w.scope = 'near' AND ST_DWithin(w.center, l.geom, w.km * 1000)))`,
+                 OR (w.scope = 'near' AND ST_DWithin(w.center, l.geom, w.km * 1000)))
+          ORDER BY w.user_id, (w.kind = 'book') DESC`,
         [s.book_id, s.location_id, s.user_id, WATCH_QUIET_H]);
       for (const h of hits) {
         const T = MAIL[h.lang] ?? MAIL.he;
         const lib = h.lib || (h.lang === 'en' ? 'a street library' : 'ספריית רחוב');
         const place = h.lang === 'he' ? (h.place_he || h.place) : h.place;
         try {
-          await sendMail({ to: h.email, subject: T.subject(h.title), text: T.body({ title: h.title, lib, place, link: `${config.baseUrl}/l/${h.code}` }) }, log);
+          const link = `${config.baseUrl}/l/${h.code}`;
+          // Each way the reader chose on /me: the phone, email, or both.
+          if (h.notify_push) await sendPush(h.user_id, { title: `📚 ${h.title}`, body: T.push({ lib }), url: `/l/${h.code}` }, log);
+          if (h.notify_email) await sendMail({ to: h.email, subject: T.subject(h.title), text: T.body({ title: h.title, lib, place, link }) }, log);
           await q('UPDATE book_watches SET notified_at = now() WHERE id = $1', [h.id]);
         } catch (err) { log.error({ err }, 'watch mail failed'); }
       }

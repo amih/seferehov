@@ -394,3 +394,5 @@ body::after { content: ''; position: fixed; z-index: 3000; left: 0; right: 0; bo
 .star-pick button { background: none; border: 0; font-size: 1.8em; line-height: 1; color: var(--line); cursor: pointer; padding: 0 2px; }
 .star-pick button.on { color: var(--yellow); }
 .reader-books li { margin-bottom: 10px; }
+.notify-opts { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; }
+.notify-opts label.check { display: inline-flex; gap: 8px; align-items: center; }
