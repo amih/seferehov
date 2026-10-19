@@ -26,6 +26,9 @@ export const config = {
   },
   // Surya OCR service (ocr/surya_server.py) for Hebrew cover text.
   ocrUrl: (env.OCR_URL || 'http://127.0.0.1:3872').replace(/\/$/, ''),
+  // Real-ESRGAN (realesrgan-ncnn-vulkan, its models/ beside it) sharpens cover photos
+  // for showing. Unset = covers are shown as taken.
+  enhanceBin: env.ENHANCE_BIN || '',
   // Checks public texts for door codes, phone numbers etc. Same model = no GPU swap.
   privacyModel: env.PRIVACY_MODEL || env.VISION_MODEL || 'qwen3-vl:8b-instruct',
   google: {

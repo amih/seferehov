@@ -289,7 +289,7 @@ const BOOK_PHOTOS_SQL = `
      UNION
      SELECT unnest(ARRAY[m.photo_id, m.back_photo_id]) FROM my_books m WHERE m.book_id = $1)
      AND p.kind IN ('cover', 'back')
-     AND (p.path ~ '_c[a-z0-9]+\\.webp$' OR EXISTS (SELECT 1 FROM sightings s WHERE s.book_id = $1 AND s.status = 'approved' AND p.id IN (s.photo_id, s.back_photo_id)))
+     AND (COALESCE(p.orig_path, p.path) ~ '_c[a-z0-9]+\\.webp$' OR EXISTS (SELECT 1 FROM sightings s WHERE s.book_id = $1 AND s.status = 'approved' AND p.id IN (s.photo_id, s.back_photo_id)))
    ORDER BY p.created_at DESC`;
 
 // The text read from the book's public cover photos (newest of each side), once it may be

@@ -2,12 +2,14 @@
 // public book pages. The vision model is shared with the shelf scans, so this waits
 // while any scan is queued or being read, and lets a fresh photo be cropped first.
 // Clean Latin-script reads are shown at once; Hebrew reads (rough) and anything that
-// looks like a model loop wait for an admin on /admin.
+// looks like a model loop wait for an admin on /admin. With nothing left to read, the
+// read covers are sharpened for showing (enhance.js), one at a time.
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { config } from './config.js';
 import { one, q } from './db.js';
 import { readCoverText } from './vision.js';
+import { enhanceNext } from './enhance.js';
 
 let log = console;
 let busy = false;
@@ -27,11 +29,14 @@ async function next() {
       const waiting = await one(`SELECT 1 FROM scans WHERE status IN ('queued', 'processing') LIMIT 1`);
       if (waiting) return;
       const p = await one(
-        `SELECT id, path FROM photos
+        `SELECT id, COALESCE(orig_path, path) AS path FROM photos
           WHERE ocr_at IS NULL AND kind IN ('cover', 'back')
             AND (cropped_at IS NOT NULL OR created_at < now() - interval '1 hour')
           ORDER BY created_at DESC LIMIT 1`);
-      if (!p) return;
+      if (!p) {
+        try { if (await enhanceNext()) continue; } catch (err) { log.warn({ err }, 'cover enhance failed'); continue; }
+        return;
+      }
       let r;
       try {
         r = await readCoverText(await readFile(join(config.uploadDir, p.path)));

@@ -3,11 +3,11 @@ import { navigate } from '../nav.js';
 import { esc, toast, avatarHtml, contactHtml } from '../ui.js';
 import { t } from '../i18n.js';
 import { levelOf } from '../levels.js';
-import { pushSupported, isIos, installed, currentSub, enablePush, disablePush } from '../push.js';
 
 const NAME_ERRORS = ['invalid_screen_name', 'screen_name_taken'];
 
 export default async function meView(root, _, query) {
+  if (location.hash === '#notify') return navigate('/settings#notify', { replace: true }); // links in older e-mails
   const me = await getMe(true);
   if (!me) return navigate('/login', { replace: true });
   const welcome = query.get('welcome');
@@ -46,17 +46,11 @@ export default async function meView(root, _, query) {
       <div><strong>${me.sightings}</strong><span>${t('stat.reports')}</span></div>
     </div>
     ${me.trust_level === 0 ? `<p class="muted small">${t('me.first')}</p>` : ''}
-    <h2 id="notify">🔔 ${t('notify.title')}</h2>
-    <p>${t('notify.lead')}</p>
-    <div class="notify-opts">
-      <label class="check"><input type="checkbox" id="n-push"> 📱 ${t('notify.phone')}</label> <span class="muted small" id="n-push-state"></span>
-      <label class="check"><input type="checkbox" id="n-email" ${me.notify_email ? 'checked' : ''}> ✉️ ${t('notify.email')}</label>
-    </div>
-    <p class="muted small" id="n-note" hidden></p>
     <h2>${t('watch.mine')}</h2>
     <ul class="watches" id="watches"><li class="muted">${t('loading')}</li></ul>
     <p class="row">
       ${me.trust_level >= 2 ? `<a class="btn" href="/review">${t('me.review')}</a>` : ''}
+      <a class="btn" href="/settings">⚙️ ${t('settings.title')}</a>
       <a class="btn" href="/about">${esc(t('me.about'))}</a>
       <button class="btn" id="logout">${t('me.logout')}</button>
     </p>
@@ -116,39 +110,6 @@ export default async function meView(root, _, query) {
       showWatches();
     };
     showWatches().then(() => { if (location.hash === '#watches') watchList.scrollIntoView({ block: 'center' }); });
-  }
-
-  // Phone: on only when this device has an address and the reader wants it.
-  const nPush = root.querySelector('#n-push');
-  if (nPush) {
-    const note = (key) => { const n = root.querySelector('#n-note'); n.hidden = !key; if (key) n.textContent = t(key); };
-    const showPush = async () => {
-      const sub = await currentSub().catch(() => null);
-      nPush.checked = !!sub && me.notify_push;
-      root.querySelector('#n-push-state').textContent = nPush.checked ? t('notify.on_this') : '';
-    };
-    if (!pushSupported()) { nPush.disabled = true; note(isIos() && !installed() ? 'notify.ios' : 'notify.unsupported'); }
-    else if (Notification.permission === 'denied') { nPush.disabled = true; note('notify.denied'); }
-    else showPush();
-    nPush.onchange = async () => {
-      nPush.disabled = true;
-      try {
-        if (nPush.checked) {
-          const ok = await enablePush();
-          if (!ok) note(Notification.permission === 'denied' ? 'notify.denied' : 'notify.unsupported');
-          await api('/api/me/notify', { method: 'POST', json: { push: true } });
-          me.notify_push = true;
-        } else {
-          await disablePush();
-        }
-      } catch (e) { toast(e.message); }
-      nPush.disabled = false;
-      showPush();
-    };
-    root.querySelector('#n-email').onchange = async (e) => {
-      await api('/api/me/notify', { method: 'POST', json: { email: e.target.checked } }).then(() => toast(t('saved')), (err) => toast(err.message));
-    };
-    if (location.hash === '#notify') root.querySelector('#notify').scrollIntoView({ block: 'start' });
   }
 
   root.querySelector('#logout')?.addEventListener('click', async () => {

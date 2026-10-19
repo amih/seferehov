@@ -18,6 +18,7 @@ import aboutView from './views/about.js';
 import queueView from './views/queue.js';
 import barcodeView from './views/barcode.js';
 import bookView, { myBookView } from './views/book.js';
+import settingsView from './views/settings.js';
 import editLocationView from './views/edit-location.js';
 import pageView from './views/page.js';
 import { initMenu } from './menu.js';
@@ -43,6 +44,7 @@ const routes = [
   [/^\/duplicates$/, duplicatesView],
   [/^\/login$/, loginView],
   [/^\/me$/, meView],
+  [/^\/settings$/, settingsView],
   [/^\/top$/, topView],
   [/^\/review$/, reviewView],
   [/^\/admin$/, adminView],

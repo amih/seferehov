@@ -160,12 +160,12 @@ export default async function finderRoutes(app) {
 const MAIL = {
   he: {
     subject: (title) => `📚 "${title}" נמצא על מדף`,
-    body: ({ title, lib, place, link }) => `שלום,\n\nהספר "${title}" דווח עכשיו על המדף ${/^[\u0590-\u05FF]/.test(lib) ? 'ב' : 'ב־'}${lib}${place ? ` (${place})` : ''}.\n\n${link}\n\nכדאי למהר — ספרים ברחוב לא מחכים הרבה זמן.\n\nלהפסקת ההתראות, או כדי לקבל אותן בטלפון במקום במייל: ${config.baseUrl}/me#notify\n\nספרחוב`,
+    body: ({ title, lib, place, link }) => `שלום,\n\nהספר "${title}" דווח עכשיו על המדף ${/^[\u0590-\u05FF]/.test(lib) ? 'ב' : 'ב־'}${lib}${place ? ` (${place})` : ''}.\n\n${link}\n\nכדאי למהר — ספרים ברחוב לא מחכים הרבה זמן.\n\nלהפסקת ההתראות, או כדי לקבל אותן בטלפון במקום במייל: ${config.baseUrl}/settings#notify\n\nספרחוב`,
     push: ({ lib }) => `על המדף ${/^[\u0590-\u05FF]/.test(lib) ? 'ב' : 'ב־'}${lib} עכשיו`,
   },
   en: {
     subject: (title) => `📚 "${title}" is on a shelf`,
-    body: ({ title, lib, place, link }) => `Hi,\n\n"${title}" was just reported on the shelf at ${lib}${place ? ` (${place})` : ''}.\n\n${link}\n\nBetter hurry — street books do not wait long.\n\nTo stop these alerts, or to get them on your phone instead of by email: ${config.baseUrl}/me#notify\n\nSeferehov`,
+    body: ({ title, lib, place, link }) => `Hi,\n\n"${title}" was just reported on the shelf at ${lib}${place ? ` (${place})` : ''}.\n\n${link}\n\nBetter hurry — street books do not wait long.\n\nTo stop these alerts, or to get them on your phone instead of by email: ${config.baseUrl}/settings#notify\n\nSeferehov`,
     push: ({ lib }) => `On the shelf at ${lib} now`,
   },
 };
