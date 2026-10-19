@@ -405,3 +405,12 @@ body::after { content: ''; position: fixed; z-index: 3000; left: 0; right: 0; bo
 .cover-text-box { margin: 10px 0; }
 .cover-text-box summary { cursor: pointer; font-weight: 600; }
 .cover-text-box .desc { white-space: pre-line; }
+.check-confirmed { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.check-confirmed a { display: flex; align-items: center; gap: 6px; padding: 4px 8px 4px 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); text-decoration: none; font-size: .9em; max-width: 100%; }
+.check-confirmed img, .check-confirmed .nocover { width: 28px; height: 40px; object-fit: cover; border-radius: 3px; font-size: 18px; }
+.check-fresh, .check-missing { list-style: none; padding: 0; }
+.check-fresh li, .check-missing li { border: 1px solid var(--line); border-radius: 10px; background: var(--card); padding: 10px; margin: 10px 0; }
+.check-fresh .spine img { display: block; max-width: 100%; max-height: 160px; border-radius: 6px; }
+.check-missing li { display: flex; gap: 10px; align-items: flex-start; }
+.check-missing li > img, .check-missing li > .nocover { width: 54px; height: 78px; object-fit: cover; border-radius: 4px; flex: none; }
+.check-missing p { margin: 2px 0; }

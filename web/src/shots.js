@@ -287,8 +287,8 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
 
 // A book no catalogue knows (or with no barcode read): its covers go to the server,
 // which reads them; the book then waits in the approval queue.
-export async function sendCovers({ code = null, kind = 'seen', pos = null, isbn = null, front, back, owner = null, friend_name: friend = null }) {
-  const fields = { code, kind, isbn, owner, friend_name: friend, lang: lang(), lat: pos?.lat ?? '', lon: pos?.lon ?? '' };
+export async function sendCovers({ code = null, kind = 'seen', pos = null, isbn = null, front, back, owner = null, friend_name: friend = null, replaces = null }) {
+  const fields = { code, kind, isbn, owner, friend_name: friend, replaces, lang: lang(), lat: pos?.lat ?? '', lon: pos?.lon ?? '' };
   const files = { photo: front, back };
   try {
     if (!navigator.onLine) throw new TypeError('offline');

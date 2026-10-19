@@ -45,11 +45,13 @@ export default async function addBookView(root, [code], query) {
     if (b) { mode = b.dataset.k; showMode(); }
   };
 
+  let photos = 0, videos = 0;
   const queueLink = root.querySelector('#queue-link');
   async function showQueue() {
     try {
       const c = await api('/api/queue/count');
-      queueLink.innerHTML = c.open + c.later || c.processing ? `<a class="btn" href="/queue">📥 ${t('queue.link', c)}</a>` : '';
+      queueLink.innerHTML = `${photos + videos ? `<a class="btn primary" href="/l/${code}/check">🔎 ${t('check.title')}</a> ` : ''}${
+        c.open + c.later || c.processing ? `<a class="btn" href="/queue">📥 ${t('queue.link', c)}</a>` : ''}`;
     } catch { /* offline */ }
   }
   showQueue();
@@ -92,7 +94,6 @@ export default async function addBookView(root, [code], query) {
       li.textContent = `⚠️ ${label} — ${e.status === 413 ? t('addbook.too_large') : e.message}`;
     }
   }
-  let photos = 0, videos = 0;
   root.querySelector('#shelf').onchange = async (e) => {
     const picked = [...e.target.files].slice(0, 8);
     e.target.value = '';

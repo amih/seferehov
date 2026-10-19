@@ -5,7 +5,7 @@ import { one, many, q, tx } from './db.js';
 import { requireUser } from './auth.js';
 import { lookupIsbn, findOrCreateBook, withCode } from './books.js';
 import { missingParts } from './details.js';
-import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
+import { locationByCode, visibleTo, distanceTo, splitAuthors, PRESENT_BOOKS_SQL } from './locations.js';
 import { initialStatus, awardSighting } from './moderation.js';
 import { parseLatLon } from './util.js';
 import { readForm } from './multipart.js';
@@ -83,12 +83,80 @@ export async function approveItem(item, scan, user, { title, author } = {}) {
 }
 
 // A scan is finished once none of its books waits for a decision.
-async function closeIfDone(scanId) {
+export async function closeIfDone(scanId) {
   await q(
     `UPDATE scans SET status = 'confirmed' WHERE id = $1 AND status = 'done'
        AND NOT EXISTS (SELECT 1 FROM scan_items WHERE scan_id = $1 AND (decision IS NULL OR decision = 'later'))`,
     [scanId],
   );
+}
+
+// Shelf photos at a library: a book the photos found that is already on that library's
+// shelf needs no approval: it is marked seen now (unless this reader reported it seen in
+// the last few hours). Returns how many were confirmed.
+export async function autoConfirmKnown(scan) {
+  if (!scan.location_id || scan.kind !== 'seen' || !['photo', 'video'].includes(scan.source)) return 0;
+  const items = await many(
+    `SELECT i.* FROM scan_items i
+      WHERE i.scan_id = $2 AND i.decision IS NULL AND i.book_id IN (SELECT id FROM (${PRESENT_BOOKS_SQL}) p)`,
+    [scan.location_id, scan.id],
+  );
+  if (!items.length) return 0;
+  const user = await one('SELECT * FROM users WHERE id = $1', [scan.user_id]);
+  for (const item of items) {
+    const recent = await one(
+      `SELECT id FROM sightings WHERE user_id = $1 AND location_id = $2 AND book_id = $3 AND kind = 'seen'
+          AND created_at > now() - interval '3 hours' LIMIT 1`,
+      [user.id, scan.location_id, item.book_id],
+    );
+    const sighting = recent ? null : (await approveItem(item, scan, user))?.sighting;
+    await q(`UPDATE scan_items SET decision = 'approved', decided_at = now(), outcome = 'kept', auto = true, sighting_id = $2 WHERE id = $1`,
+      [item.id, sighting?.id ?? recent?.id ?? null]);
+  }
+  await closeIfDone(scan.id);
+  return items.length;
+}
+
+// What a reader's shelf photos at one library said, over the last few hours (several
+// uploads are one visit): books confirmed as still there, spines no catalogue knew
+// (worth taking out for cover photos), and, once the photos are enough to judge, the
+// books listed here that none of them showed.
+const SESSION_HOURS = 3;
+const ENOUGH_PHOTOS = 3;
+export async function shelfCheck(user, loc) {
+  const scans = await many(
+    `SELECT id, status, media, created_at FROM scans
+      WHERE user_id = $1 AND location_id = $2 AND source IN ('photo', 'video')
+        AND created_at > now() - make_interval(hours => $3) ORDER BY created_at`,
+    [user.id, loc.id, SESSION_HOURS],
+  );
+  if (!scans.length) return { scans: 0 };
+  const ids = scans.map((x) => x.id);
+  const processing = scans.filter((x) => ['queued', 'processing'].includes(x.status)).length;
+  const media = scans.flatMap((x) => (typeof x.media === 'string' ? JSON.parse(x.media) : x.media) ?? []);
+  const photos = media.filter((m) => m.type === 'image').length;
+  const enough = media.some((m) => m.type === 'video') || photos >= ENOUGH_PHOTOS;
+  const items = await many(
+    `SELECT i.id, i.title, i.author, i.crop_path, i.frame_path, i.book_id, i.decision, i.auto, b.title AS book_title, b.cover_url
+       FROM scan_items i LEFT JOIN books b ON b.id = i.book_id
+      WHERE i.scan_id = ANY($1::uuid[]) ORDER BY i.id`,
+    [ids],
+  );
+  const pic = (p) => p && `/uploads/${p}`;
+  const confirmed = items.filter((i) => i.auto).map((i) => ({ id: i.book_id, title: i.book_title, cover_url: i.cover_url }));
+  const fresh = items.filter((i) => !i.book_id && (i.decision == null || i.decision === 'later'))
+    .map((i) => ({ id: i.id, title: i.title, author: i.author, crop: pic(i.crop_path), frame: pic(i.frame_path) }));
+  let missing = [];
+  if (enough && !processing) {
+    const shown = new Set(items.map((i) => i.book_id).filter(Boolean));
+    // Answered since the visit began (still here / gone): not asked again.
+    const answered = new Set((await many(
+      `SELECT DISTINCT book_id FROM sightings WHERE user_id = $1 AND location_id = $2 AND created_at >= $3`,
+      [user.id, loc.id, scans[0].created_at])).map((r) => r.book_id));
+    missing = (await many(PRESENT_BOOKS_SQL, [loc.id])).filter((b) => !shown.has(b.id) && !answered.has(b.id))
+      .map((b) => ({ id: b.id, title: b.title, authors: b.authors, cover_url: b.cover_url, last_seen: b.last_seen }));
+  }
+  return { scans: scans.length, processing, photos, enough, enoughPhotos: ENOUGH_PHOTOS, confirmed, fresh, missing };
 }
 
 // The same book is often found more than once: in two photos, in the video frames and
@@ -181,6 +249,12 @@ export default async function approvalRoutes(app) {
     );
     await closeIfDone(item.scan_id);
     return { status: result?.sighting?.status ?? null, ...(await counts(req.user.id)) };
+  });
+
+  app.get('/api/locations/:code/shelf-check', { preHandler: requireUser() }, async (req, reply) => {
+    const loc = await locationByCode(req.params.code);
+    if (!visibleTo(loc, req.user)) return reply.code(404).send({ error: 'not_found' });
+    return shelfCheck(req.user, loc);
   });
 
   // One scanned barcode: looked up now, then waits in the queue like any other book.

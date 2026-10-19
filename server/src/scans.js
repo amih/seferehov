@@ -13,7 +13,7 @@ import { cropCover } from './covers.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
 import { initialStatus, awardSighting } from './moderation.js';
 import { parseLatLon, normalizeIsbn, normalizeDanacode } from './util.js';
-import { mergeDuplicates } from './approvals.js';
+import { mergeDuplicates, autoConfirmKnown, closeIfDone } from './approvals.js';
 import { ownerOf } from './mybooks.js';
 import { sendMail } from './mail.js';
 
@@ -113,6 +113,15 @@ export default async function scanRoutes(app) {
     if (!media.some((m) => m.path === '0.img') || loc === undefined) {
       await rm(dir, { recursive: true, force: true });
       return reply.code(loc === undefined ? 404 : 400).send({ error: loc === undefined ? 'not_found' : 'no_media' });
+    }
+    // Covers of a book whose spine was read but found in no catalogue: they take its place.
+    if (fields.replaces) {
+      const r = await one(
+        `UPDATE scan_items i SET decision = 'merged', decided_at = now() FROM scans s
+          WHERE i.id = $1 AND s.id = i.scan_id AND s.user_id = $2 AND (i.decision IS NULL OR i.decision = 'later')
+          RETURNING i.scan_id`,
+        [Number(fields.replaces) || 0, req.user.id]);
+      if (r) await closeIfDone(r.scan_id);
     }
     const distance = loc ? await distanceTo(loc.id, parseLatLon(fields.lat, fields.lon)) : null;
     const bookCode = normalizeIsbn(fields.isbn) ?? normalizeDanacode(fields.isbn);
@@ -260,14 +269,14 @@ async function emailFinished() {
     `UPDATE scans s SET notified_at = now()
        FROM users u, locations l
       WHERE s.user_id = u.id AND l.id = s.location_id AND s.notified_at IS NULL AND s.source <> 'cover'
-        AND s.status IN ('done','failed') AND s.finished_at < now() - interval '2 minutes'
+        AND s.status IN ('done','confirmed','failed') AND s.finished_at < now() - interval '2 minutes'
         AND s.finished_at > now() - interval '1 day'
       RETURNING s.id, s.status, s.lang, u.email, l.code,
                 (SELECT count(*)::int FROM scan_items i WHERE i.scan_id = s.id) AS n`,
   );
   for (const r of rows) {
-    const T = READY_TEXT[r.lang === 'en' ? 'en' : 'he'][r.status === 'done' && r.n ? 'done' : 'failed'];
-    const url = r.status === 'done' && r.n ? `${config.baseUrl}/queue` : `${config.baseUrl}/l/${r.code}/add`;
+    const T = READY_TEXT[r.lang === 'en' ? 'en' : 'he'][r.status !== 'failed' && r.n ? 'done' : 'failed'];
+    const url = r.status !== 'failed' && r.n ? `${config.baseUrl}/l/${r.code}/check` : `${config.baseUrl}/l/${r.code}/add`;
     await sendMail({ to: r.email, subject: T.subject, text: T.body(r.n, url) }, log);
   }
 }
@@ -289,6 +298,7 @@ async function drain() {
     try {
       await processScan(scan);
       await q(`UPDATE scans SET status = 'done', finished_at = now() WHERE id = $1`, [scan.id]);
+      await autoConfirmKnown(scan).catch((err) => log.warn({ err, scan: scan.id }, 'auto confirm'));
       await mergeDuplicates(scan.user_id).catch((err) => log.warn({ err, scan: scan.id }, 'merge duplicates'));
     } catch (err) {
       log.error({ err, scan: scan.id }, 'scan failed');
