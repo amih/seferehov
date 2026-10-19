@@ -2,6 +2,7 @@ import { api, getMe } from '../api.js';
 import { navigate } from '../nav.js';
 import { esc, toast, confirmDialog } from '../ui.js';
 import { t } from '../i18n.js';
+import { todoTabs } from '../todo.js';
 
 // Books that look like the same book entered twice: keep the better record (the
 // other's sightings, pictures and codes move to it), fix title and author entered
@@ -27,6 +28,7 @@ export default async function duplicatesView(root) {
       </div>`;
     root.innerHTML = `
     <section class="page">
+      ${todoTabs('duplicates')}
       <h1>${t('dup.title')}</h1>
       <p class="muted">${t('dup.lead')}</p>
       ${d.pairs.length ? d.pairs.map((p) => `

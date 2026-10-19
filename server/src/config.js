@@ -70,5 +70,9 @@ export const POINTS = {
   edit: 20, // a change to a library, once approved
   review: 10, // a reviewer's decision
   bookReview: 30, // a written review of a book (once per book)
+  spine: 20, // a spine found in no catalogue, once someone photographed that book's covers
+  spineCovers: 50, // the covers of a book whose spine another reader found
 };
+// Admins get points divided by this.
+export const ADMIN_POINTS_DIVISOR = 10;
 export const KARMA_DAY_CAP = 1000;

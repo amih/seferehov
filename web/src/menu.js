@@ -1,4 +1,5 @@
-import { api, getMe } from './api.js';
+import { getMe } from './api.js';
+import { todoCounts } from './todo.js';
 import { esc, avatarHtml, CONTACT_EMAIL } from './ui.js';
 import { t } from './i18n.js';
 
@@ -11,7 +12,8 @@ export function initMenu() {
 
 async function open() {
   const me = await getMe();
-  const waiting = me ? await api('/api/queue/count').then((c) => c.open + c.later).catch(() => 0) : 0;
+  const todo = me ? await todoCounts().catch(() => null) : null;
+  const waiting = todo ? ['mine', 'review', 'duplicates', 'texts'].reduce((n, k) => n + (todo[k] ?? 0), 0) : 0;
   // The list opens with the reader: their own picture and screen name, or "sign in".
   const items = [
     me ? [avatarHtml(me, 30), me.screen_name || t('menu.me'), '/me', 'me'] : ['👤', 'menu.signin', '/login'],
@@ -21,9 +23,8 @@ async function open() {
     ['➕', 'menu.add', '/add'],
     ['🏆', 'menu.top', '/top'],
     ['🌍', 'menu.places', '/places'],
-    ...(waiting ? [['📥', 'menu.queue', '/queue', null, waiting]] : []),
+    ...(waiting || me?.trust_level >= 2 ? [['📥', 'todo.title', '/queue', null, waiting]] : []),
     ...(me ? [['🔔', 'menu.watches', '/me#watches']] : []),
-    ...(me?.trust_level >= 2 ? [['✅', 'menu.review', '/review'], ['🧩', 'menu.duplicates', '/duplicates']] : []),
     ...(me?.trust_level >= 3 ? [['📊', 'menu.admin', '/admin']] : []),
     ['ℹ️', 'menu.about', '/about'],
     ['✉️', 'menu.feedback', `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(t('contact.subject'))}&body=${encodeURIComponent(`${t('contact.greeting')}\n\n`)}`],

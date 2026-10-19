@@ -2,6 +2,7 @@ import { api, getMe } from '../api.js';
 import { navigate } from '../nav.js';
 import { esc, timeAgo, toast } from '../ui.js';
 import { t } from '../i18n.js';
+import { todoTabs } from '../todo.js';
 
 const flag = (f) => (f ? `<p class="note">⚠️ ${t('review.private')}: ${(f.snippets ?? []).map((x) => `<mark>${esc(x)}</mark>`).join(' ')} <span class="muted small">${esc(f.reason ?? '')}</span></p>` : '');
 const yesNo = (v) => t(v ? 'review.yes' : 'review.no');
@@ -27,6 +28,7 @@ export default async function reviewView(root) {
   const who = (r) => esc(r.by_name);
   root.innerHTML = `
   <section class="page">
+    ${todoTabs('review')}
     <h1>${t('review.title')}</h1>
     <h2>${t('review.libs')} <span class="count">${locations.length}</span></h2>
     <ul class="review">${locations.map((l) => `

@@ -3,6 +3,7 @@ import { navigate } from '../nav.js';
 import { esc, toast } from '../ui.js';
 import { lang } from '../i18n.js';
 import { tracked } from '../analytics.js';
+import { todoTabs } from '../todo.js';
 
 // For the admin only (English): the public pages search engines see, cover texts that
 // wait for a check, readers' reviews (to hide one), how the app is used (counts) with
@@ -17,6 +18,7 @@ export default async function adminView(root) {
   let data = null;
 
   root.innerHTML = `<section class="page admin" dir="ltr" lang="en">
+    <div dir="auto" lang="${lang()}">${todoTabs('texts')}</div>
     <h1>Admin</h1>
     <div class="seg" id="tabs">${TABS.map(([k, label]) => `<button data-k="${k}">${label}</button>`).join('')}</div>
     <div id="body"><p class="muted">Loading…</p></div></section>`;

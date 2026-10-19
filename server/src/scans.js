@@ -114,22 +114,25 @@ export default async function scanRoutes(app) {
       await rm(dir, { recursive: true, force: true });
       return reply.code(loc === undefined ? 404 : 400).send({ error: loc === undefined ? 'not_found' : 'no_media' });
     }
-    // Covers of a book whose spine was read but found in no catalogue: they take its place.
-    if (fields.replaces) {
+    // Covers of a book whose spine was read at this library but found in no catalogue (by
+    // this reader, or by another on an earlier visit): they take the spine's place.
+    let replaces = null;
+    if (fields.replaces && loc) {
       const r = await one(
         `UPDATE scan_items i SET decision = 'merged', decided_at = now() FROM scans s
-          WHERE i.id = $1 AND s.id = i.scan_id AND s.user_id = $2 AND (i.decision IS NULL OR i.decision = 'later')
-          RETURNING i.scan_id`,
-        [Number(fields.replaces) || 0, req.user.id]);
-      if (r) await closeIfDone(r.scan_id);
+          WHERE i.id = $1 AND s.id = i.scan_id AND s.location_id = $2 AND i.book_id IS NULL
+            AND (i.decision IS NULL OR i.decision = 'later')
+          RETURNING i.id, i.scan_id`,
+        [Number(fields.replaces) || 0, loc.id]);
+      if (r) { replaces = r.id; await closeIfDone(r.scan_id); }
     }
     const distance = loc ? await distanceTo(loc.id, parseLatLon(fields.lat, fields.lon)) : null;
     const bookCode = normalizeIsbn(fields.isbn) ?? normalizeDanacode(fields.isbn);
     await q(
-      `INSERT INTO scans(id, location_id, user_id, kind, media, distance_m, lang, source, book_code, owner, friend_name)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'cover', $8, $9, $10)`,
+      `INSERT INTO scans(id, location_id, user_id, kind, media, distance_m, lang, source, book_code, owner, friend_name, replaces_item)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'cover', $8, $9, $10, $11)`,
       [id, loc?.id ?? null, req.user.id, fields.kind === 'added' ? 'added' : 'seen', JSON.stringify(media.sort((a, b) => a.path.localeCompare(b.path))),
-        distance, fields.lang === 'en' ? 'en' : 'he', bookCode, ...(loc ? [null, null] : Object.values(ownerOf(fields)))],
+        distance, fields.lang === 'en' ? 'en' : 'he', bookCode, ...(loc ? [null, null] : Object.values(ownerOf(fields))), replaces],
     );
     wake();
     return { scan: { id, status: 'queued' } };

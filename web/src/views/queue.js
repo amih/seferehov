@@ -3,6 +3,7 @@ import { navigate } from '../nav.js';
 import { esc, toast } from '../ui.js';
 import { t } from '../i18n.js';
 import { ownerLabel } from '../mybooks.js';
+import { todoTabs } from '../todo.js';
 
 // Books waiting for the reader's approval, from all their photos, videos and barcodes:
 // one at a time, with a large picture. Approve, decline, or set aside for later.
@@ -53,6 +54,7 @@ export default async function queueView(root) {
     if (!current) {
       root.innerHTML = `
       <section class="page">
+        ${todoTabs('mine')}
         <h1>${t('queue.title')}</h1>
         <div id="qhead">${header()}</div>
         <p class="note">${counts.processing ? t('queue.wait_more') : skipped.size ? t('queue.only_later', { n: skipped.size }) : t('queue.empty')}</p>
@@ -67,6 +69,7 @@ export default async function queueView(root) {
     const big = i.crop || i.frame || i.cover_url;
     root.innerHTML = `
     <section class="page approve">
+      ${todoTabs('mine')}
       <h1>${t('queue.title')}</h1>
       <div id="qhead">${header()}</div>
       <p class="muted small">${(i.sources?.length ? i.sources : [i.source]).map((x) => esc(t(`queue.from_${x}`))).join(' + ')} · ${i.code ? `<a href="/l/${i.code}">${esc(i.location_name || t('free_library'))}</a>` : `<a href="/books">${t('queue.my_books')}</a>${i.owner && i.owner !== 'mine' ? ` · ${ownerLabel(i)}` : ''}`}${i.decision === 'later' ? ` · ${t('queue.was_later')}` : ''}</p>

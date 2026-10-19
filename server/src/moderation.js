@@ -1,4 +1,4 @@
-import { config, POINTS, KARMA_DAY_CAP } from './config.js';
+import { config, POINTS, KARMA_DAY_CAP, ADMIN_POINTS_DIVISOR } from './config.js';
 import { q } from './db.js';
 
 // Content from trusted users is published straight away unless something
@@ -14,10 +14,13 @@ export function locationStatus(user) {
 }
 
 // At most KARMA_DAY_CAP points a day, so tapping buttons cannot make anyone a Guardian.
+// Admins get a tenth: they need no encouragement, and readers should lead the board.
 export async function award(db, { userId, points, reason, refType, refId, by = null }) {
   if (!userId) return;
-  const { today } = (await db.query(
-    `SELECT COALESCE(sum(points), 0)::int AS today FROM karma_events WHERE user_id = $1 AND created_at > date_trunc('day', now())`, [userId])).rows[0];
+  const { today, admin } = (await db.query(
+    `SELECT COALESCE((SELECT sum(points) FROM karma_events WHERE user_id = $1 AND created_at > date_trunc('day', now())), 0)::int AS today,
+            (SELECT trust_level >= 3 FROM users WHERE id = $1) AS admin`, [userId])).rows[0];
+  if (admin && points > 0) points = Math.max(1, Math.round(points / ADMIN_POINTS_DIVISOR));
   points = Math.min(points, KARMA_DAY_CAP - today);
   if (points <= 0) return;
   await db.query(

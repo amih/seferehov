@@ -414,3 +414,8 @@ body::after { content: ''; position: fixed; z-index: 3000; left: 0; right: 0; bo
 .check-missing li { display: flex; gap: 10px; align-items: flex-start; }
 .check-missing li > img, .check-missing li > .nocover { width: 54px; height: 78px; object-fit: cover; border-radius: 4px; flex: none; }
 .check-missing p { margin: 2px 0; }
+.todo-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.todo-tabs:empty { display: none; }
+.todo-tabs a { padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--ink); text-decoration: none; font-size: .92em; }
+.todo-tabs a.on { background: var(--wood); color: #fff; border-color: var(--wood); }
+.todo-tabs a.on .count { background: #fff; color: var(--wood); }

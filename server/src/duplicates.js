@@ -6,7 +6,7 @@ import { requireUser } from './auth.js';
 
 // same = same title and author; swapped = title and author in each other's fields;
 // similar = close spelling of both.
-const PAIRS_SQL = `
+export const PAIRS_SQL = `
   WITH bk AS (
     SELECT id, search_norm(title) AS t, search_norm(COALESCE(authors[1], '')) AS a, isbn13 FROM books)
   SELECT x.id AS a, y.id AS b,

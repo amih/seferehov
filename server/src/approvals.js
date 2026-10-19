@@ -6,7 +6,9 @@ import { requireUser } from './auth.js';
 import { lookupIsbn, findOrCreateBook, withCode } from './books.js';
 import { missingParts } from './details.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors, PRESENT_BOOKS_SQL } from './locations.js';
-import { initialStatus, awardSighting } from './moderation.js';
+import { initialStatus, awardSighting, award } from './moderation.js';
+import { POINTS } from './config.js';
+import { PAIRS_SQL } from './duplicates.js';
 import { parseLatLon } from './util.js';
 import { readForm } from './multipart.js';
 import { normTitle } from './vision.js';
@@ -75,12 +77,33 @@ export async function approveItem(item, scan, user, { title, author } = {}) {
     )).rows[0];
     if (status === 'approved') {
       await awardSighting(db, { userId: user.id, locationId: scan.location_id, bookId: book.id, kind: scan.kind, sightingId: s.id });
+      if (scan.replaces_item) await awardSpine(db, scan, user.id, s.id);
       await db.query('UPDATE locations SET last_checked_at = now() WHERE id = $1', [scan.location_id]);
     }
     return s;
   });
   return { sighting, book, edited };
 }
+
+// Covers for a spine found in no catalogue: the reader who found the spine gets points
+// whoever took the covers, and a reader who took them for someone else's spine gets more.
+async function awardSpine(db, scan, userId, sightingId) {
+  const finder = (await db.query(
+    'SELECT s.user_id FROM scan_items i JOIN scans s ON s.id = i.scan_id WHERE i.id = $1', [scan.replaces_item])).rows[0]?.user_id;
+  if (!finder) return;
+  await award(db, { userId: finder, points: POINTS.spine, reason: 'spine', refType: 'sighting', refId: sightingId });
+  if (finder !== userId) await award(db, { userId, points: POINTS.spineCovers, reason: 'spine_covers', refType: 'sighting', refId: sightingId });
+}
+
+// Spines read at a library that no catalogue knew and nobody has photographed the
+// covers of yet: shown on the library page, for whoever comes by next.
+export const OPEN_SPINES_SQL = `
+  SELECT i.id, i.title, i.author, i.crop_path, i.frame_path, i.created_at, s.user_id
+    FROM scan_items i JOIN scans s ON s.id = i.scan_id
+   WHERE s.location_id = $1 AND s.source IN ('photo', 'video') AND s.status IN ('done', 'confirmed')
+     AND i.book_id IS NULL AND i.quality <> 'low' AND (i.decision IS NULL OR i.decision = 'later')
+     AND i.crop_path IS NOT NULL AND i.created_at > now() - interval '60 days'
+   ORDER BY i.created_at DESC LIMIT 12`;
 
 // A scan is finished once none of its books waits for a decision.
 export async function closeIfDone(scanId) {
@@ -201,8 +224,30 @@ export async function mergeDuplicates(userId) {
   }
 }
 
+// Pairs of books that may be the same: slow to find, so counted at most every 10 minutes.
+let dupes = { at: 0, n: 0 };
+async function duplicateCount() {
+  if (dupes.at < Date.now() - 600_000) dupes = { at: Date.now(), n: (await many(PAIRS_SQL)).length };
+  return dupes.n;
+}
+
 export default async function approvalRoutes(app) {
   app.get('/api/queue/count', { preHandler: requireUser() }, async (req) => counts(req.user.id));
+
+  // Everything waiting for this reader, by list (only the lists they may work on).
+  app.get('/api/todo', { preHandler: requireUser() }, async (req) => {
+    const c = await counts(req.user.id);
+    const r = { mine: c.open + c.later, processing: c.processing };
+    if (req.user.trust_level >= 2) {
+      r.review = (await one(
+        `SELECT (SELECT count(*) FROM locations WHERE status = 'pending')
+              + (SELECT count(*) FROM sightings s JOIN locations l ON l.id = s.location_id WHERE s.status = 'pending' AND l.status = 'approved')
+              + (SELECT count(*) FROM location_edits WHERE status = 'pending') AS n`)).n * 1;
+      r.duplicates = await duplicateCount();
+    }
+    if (req.user.trust_level >= 3) r.texts = (await one(`SELECT count(*)::int AS n FROM photos WHERE ocr_status = 'review'`)).n;
+    return r;
+  });
 
   // Undecided books first (oldest first), then the ones set aside for later.
   app.get('/api/queue', { preHandler: requireUser() }, async (req) => {

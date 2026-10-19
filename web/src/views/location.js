@@ -3,6 +3,7 @@ import { esc, getPosition, timeAgo, toast, avatarHtml, noStringsNote, confirmDia
 import { navigate } from '../nav.js';
 import { t, lang } from '../i18n.js';
 import { rememberList } from '../pager.js';
+import { bookShots, sendCovers } from '../shots.js';
 
 const STATES = ['ok', 'messy', 'damaged', 'empty', 'missing'];
 const STALE_MS = 182 * 86400_000; // not seen for half a year: maybe gone
@@ -14,7 +15,7 @@ export default async function locationView(root, [code]) {
     root.innerHTML = `<section class="page"><h1>${t('loc.notfound')}</h1><p>${t(e.status === 404 ? 'loc.notfound_404' : 'offline')}</p><p><a href="/">${t('back.map')}</a></p></section>`;
     return;
   }
-  const { location: l, books, taken = [], activity, my_pending, my_pending_edits, my_scans = [] } = data;
+  const { location: l, books, taken = [], activity, my_pending, my_pending_edits, my_scans = [], spines = [] } = data;
   const readyScan = my_scans.find((x) => x.status === 'done');
   const busyScan = my_scans.find((x) => x.status === 'queued' || x.status === 'processing');
   const me = await getMe();
@@ -40,9 +41,17 @@ export default async function locationView(root, [code]) {
     <p class="row"><a class="btn" href="/l/${l.code}/edit">${t('loc.edit')}</a></p>
     ${my_pending ? `<p class="note">${t('loc.my_pending', { n: my_pending })}</p>` : ''}
     ${my_pending_edits ? `<p class="note">${t('loc.my_pending_edits', { n: my_pending_edits })}</p>` : ''}
-    ${readyScan ? `<p><a class="btn primary" href="/queue">${t('loc.scan_ready')}</a></p>`
+    ${readyScan ? `<p><a class="btn primary" href="/l/${l.code}/check">${t('loc.scan_ready')}</a></p>`
       : busyScan ? `<p class="note"><a href="/queue">${t('loc.scan_waiting')}</a></p>` : ''}
     ${noStringsNote()}
+
+    ${spines.length ? `<h2>📕 ${t('spines.title')} <span class="count">${spines.length}</span></h2>
+    <p>${t('spines.lead')}</p>
+    <ul class="check-fresh" id="spines">${spines.map((i) => `<li data-item="${i.id}">
+      <a href="${esc(i.frame || i.crop)}" target="_blank" class="spine"><img src="${esc(i.crop)}" alt="" loading="lazy"></a>
+      <p dir="auto"><b>${esc(i.title)}</b>${i.author ? ` · ${esc(i.author)}` : ''} <span class="muted small">· ${timeAgo(i.created_at)}${i.mine ? ` · ${t('spines.yours')}` : ''}</span></p>
+      <p><button class="btn primary small" data-covers="${i.id}">📷 ${t('check.take_out')}</button></p></li>`).join('')}</ul>
+    <div class="shots" id="shots" hidden></div>` : ''}
 
     <h2>${t('loc.shelf')} <span class="count">${books.length}</span></h2>
     ${books.length ? '' : `<p class="muted">${t('loc.no_books')}</p>`}
@@ -104,6 +113,25 @@ export default async function locationView(root, [code]) {
 
   rememberList(root);
 
+  // Spines nobody could identify yet: whoever is here takes the book out for its covers.
+  let shots = null;
+  const spineList = root.querySelector('#spines');
+  if (spineList) {
+    shots = bookShots({ on: root, panel: root.querySelector('#shots') });
+    spineList.onclick = async (e) => {
+      const c = e.target.closest('[data-covers]');
+      if (!c || needLogin()) return;
+      const li = c.closest('li');
+      const pos = await getPosition({ timeout: 8000 }).catch(() => null);
+      shots.start({ single: true, intro: t('check.covers_intro', { title: esc(li.querySelector('b').textContent) }), onBook: async ({ front, back, isbn }) => {
+        const line = await sendCovers({ code, kind: 'seen', pos, isbn, front, back, replaces: c.dataset.covers });
+        li.remove();
+        toast(t('spines.sent'));
+        return line;
+      } });
+    };
+  }
+
   root.querySelector('.books').onclick = async (e) => {
     const btn = e.target.closest('button[data-kind]');
     if (!btn || needLogin()) return;
@@ -121,4 +149,5 @@ export default async function locationView(root, [code]) {
       if (r.sighting.status === 'approved' && btn.dataset.kind === 'seen') { li.classList.remove('stale'); btn.remove(); }
     } catch (err) { toast(err.message); }
   };
+  return () => shots?.stop();
 }

@@ -1,6 +1,7 @@
 import { config, POINTS } from './config.js';
 import { one, many, tx } from './db.js';
 import { coverTexts } from './seo.js';
+import { OPEN_SPINES_SQL } from './approvals.js';
 import { requireUser } from './auth.js';
 import { savePhoto, photoUrls, avatarUrl } from './photos.js';
 import { bookDetails } from './details.js';
@@ -152,6 +153,8 @@ export default async function locationRoutes(app) {
         place: loc.place_id ? await one('SELECT id, slug, name, name_he FROM places WHERE id = $1', [loc.place_id]) : null,
       },
       books, taken, activity, my_pending: pending.n, my_pending_edits: pending.edits, my_scans: scans,
+      spines: (await many(OPEN_SPINES_SQL, [loc.id])).map(({ crop_path, frame_path, user_id, ...i }) => ({
+        ...i, crop: `/uploads/${crop_path}`, frame: frame_path && `/uploads/${frame_path}`, mine: user_id === req.user?.id })),
     };
   });
 
