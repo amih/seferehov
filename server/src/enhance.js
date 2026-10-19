@@ -74,10 +74,10 @@ async function nextScanPicture() {
   const r = await one(
     `SELECT x.rel, x.spine FROM (
        SELECT i.crop_path AS rel, true AS spine, s.created_at FROM scan_items i JOIN scans s ON s.id = i.scan_id
-        WHERE s.status = 'done' AND i.crop_path IS NOT NULL
+        WHERE s.status IN ('done', 'confirmed') AND i.crop_path IS NOT NULL
        UNION ALL
        SELECT i.frame_path, false, s.created_at FROM scan_items i JOIN scans s ON s.id = i.scan_id
-        WHERE s.status = 'done' AND i.frame_path IS NOT NULL AND s.source <> 'cover') x
+        WHERE s.status IN ('done', 'confirmed') AND i.frame_path IS NOT NULL AND s.source <> 'cover') x
       WHERE x.rel !~ ${SHARPENED} AND NOT EXISTS (SELECT 1 FROM enhanced_files f WHERE f.orig = x.rel)
       ORDER BY x.spine DESC, x.created_at DESC LIMIT 1`);
   if (!r) return false;
