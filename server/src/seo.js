@@ -281,7 +281,7 @@ async function libraryPage(lng, T, code) {
 
 // Cover photos that may be shown publicly: those reported at a library, and those taken
 // at home only when they were cut out to the cover itself (nothing of the home shows).
-const BOOK_PHOTOS_SQL = `
+export const BOOK_PHOTOS_SQL = `
   SELECT p.id, p.kind, p.path, p.thumb_path, p.ocr_text, p.ocr_status, p.created_at FROM photos p
    WHERE p.id IN (
      SELECT unnest(ARRAY[s.photo_id, s.back_photo_id]) FROM sightings s JOIN locations l ON l.id = s.location_id
@@ -356,6 +356,7 @@ async function bookPage(lng, T, id) {
     html: `<article class="book-public">
       <h1 dir="auto">${esc(b.title)}</h1>
       ${authors ? `<p class="lead" dir="auto">${esc(authors)}</p>` : ''}
+      <div id="fix-box"></div>
       ${frontUrl || backUrl ? `<div class="book-covers">${[[frontUrl, T('seo.book_front')], [backUrl, T('seo.book_back')]].filter(([u]) => u)
         .map(([u, cap]) => `<figure><a href="${esc(u)}"><img src="${esc(u)}" alt="${esc(`${cap}: ${b.title}`)}" loading="lazy"></a><figcaption>${cap}</figcaption></figure>`).join('')}</div>` : ''}
       <dl class="book-facts">

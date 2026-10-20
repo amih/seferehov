@@ -12,6 +12,7 @@ import { PAIRS_SQL, LOCATION_PAIRS_SQL } from './duplicates.js';
 import { parseLatLon } from './util.js';
 import { readForm } from './multipart.js';
 import { normTitle } from './vision.js';
+import { fixesToVote } from './fixes.js';
 
 const UNDO_DAYS = 14;
 
@@ -240,6 +241,7 @@ export default async function approvalRoutes(app) {
   app.get('/api/todo', { preHandler: requireUser() }, async (req) => {
     const c = await counts(req.user.id);
     const r = { mine: c.open + c.later, processing: c.processing };
+    if (req.user.trust_level >= 1) r.fixes = await fixesToVote(req.user);
     if (req.user.trust_level >= 2) {
       r.review = (await one(
         `SELECT (SELECT count(*) FROM locations WHERE status = 'pending')

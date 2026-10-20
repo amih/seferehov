@@ -10,7 +10,7 @@ export function initMenu() {
   document.addEventListener('seferehov:me', () => getMe(true)); // name or picture changed
 }
 
-const waitingIn = (todo) => (todo ? ['mine', 'review', 'duplicates', 'libraries', 'texts'].reduce((n, k) => n + (todo[k] ?? 0), 0) : 0);
+const waitingIn = (todo) => (todo ? ['mine', 'review', 'fixes', 'duplicates', 'libraries', 'texts'].reduce((n, k) => n + (todo[k] ?? 0), 0) : 0);
 
 // Opens at once, with the last known counts; the to-do count is brought up to date after.
 async function open() {

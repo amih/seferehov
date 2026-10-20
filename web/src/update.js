@@ -51,7 +51,7 @@ export function initUpdates() {
   setInterval(checkForUpdate, 60 * 60 * 1000);
 }
 
-const BUSY_SCREENS = /^\/(queue|review|duplicates|books\/add|l\/[^/]+\/(add|barcode|check))\/?$/;
+const BUSY_SCREENS = /^\/(queue|review|fixes|duplicates|books\/add|l\/[^/]+\/(add|barcode|check))\/?$/;
 
 function onWaiting() {
   waiting = true;

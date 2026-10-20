@@ -7,6 +7,7 @@ import { pagerHtml, attachPager, loadBook } from '../pager.js';
 import { bookShots } from '../shots.js';
 import { placeBook, ownerLabel } from '../mybooks.js';
 import { reviewBox } from '../review.js';
+import { fixBox } from '../fixes.js';
 
 // One book at one library: large pictures (photos taken at the shelf, the front and
 // back covers found online), the back-cover text, and whether it is still there.
@@ -125,6 +126,7 @@ function renderBook(root, { b, photos, texts, again, back, status, actions, wire
     <div class="shots" id="shots" hidden></div>
     <h1>${esc(b.title)}</h1>
     <p>${esc((b.authors ?? []).join(', '))}${b.year ? ` · ${b.year}` : ''}${b.publisher ? ` · ${esc(b.publisher)}` : ''}</p>
+    <div id="fix-box"></div>
     ${status}
     ${b.description ? `<h2>${t('book.blurb')}</h2><p class="desc blurb" dir="auto">${esc(b.description)}</p>`
       : b.details_pending ? `<p class="progress-line small"><span class="spinner"></span> ${t('book.looking')}</p>` : `<p class="muted small">${t('book.no_blurb')}</p>`}
@@ -141,6 +143,7 @@ function renderBook(root, { b, photos, texts, again, back, status, actions, wire
   wire(root);
   root.querySelectorAll('[data-watch-author]').forEach((el) => { el.onclick = () => watchDialog({ kind: 'author', query: el.dataset.watchAuthor }); });
   if (b.id) reviewBox(root.querySelector('#review-box'), b.id);
+  if (b.id) fixBox(root.querySelector('#fix-box'), b.id, { onSaved: again });
   root.querySelector('.gallery')?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-i]');
     if (btn) viewer(pics, Number(btn.dataset.i));

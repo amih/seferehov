@@ -452,3 +452,18 @@ body::after { content: ''; position: fixed; z-index: 3000; left: 0; right: 0; bo
 .todo-tabs a.on .count { background: #fff; color: var(--wood); }
 
 .activity-list { list-style: none; margin: 0; padding: 4px 0; display: grid; gap: 4px; }
+
+/* Fixes to a book's details */
+.fix-row { margin: 4px 0 8px; }
+.fix-sheet { max-width: 560px; }
+.fix-form textarea { width: 100%; font: inherit; }
+.fix-text { display: flex; gap: 10px; align-items: flex-start; }
+.fix-text img { width: 72px; border-radius: 4px; flex: none; }
+.fix-text label { flex: 1; min-width: 0; }
+.fix-list { list-style: none; padding: 0; margin: 0; }
+.fix-list li { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.fix-list li p { margin: 2px 0; }
+.fix-list .s-reverted, .fix-list .s-rejected, .fix-list .s-withdrawn { opacity: .65; }
+.fix-diff { overflow-wrap: anywhere; white-space: pre-line; }
+.fix-old { text-decoration: line-through; color: var(--muted, #777); }
+.fix-votes .fix-diff { display: inline; }

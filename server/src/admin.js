@@ -150,7 +150,7 @@ async function readers() {
 }
 
 // One reader's last 50 actions, newest first: scans, reports, home books, reviews,
-// libraries added, library checks and alerts.
+// libraries added, library checks, book fixes and alerts.
 async function readerActivity(userId) {
   return many(
     `SELECT * FROM (
@@ -162,6 +162,7 @@ async function readerActivity(userId) {
        UNION ALL SELECT r.updated_at, 'review', CASE WHEN r.rating IS NOT NULL THEN r.rating || '★' END, NULL, NULL, r.book_id FROM book_reviews r WHERE r.user_id = $1
        UNION ALL SELECT l.created_at, 'new library', l.status, l.code, l.name, NULL FROM locations l WHERE l.created_by = $1
        UNION ALL SELECT c.created_at, 'library check', c.state, l.code, l.name, NULL FROM location_checks c JOIN locations l ON l.id = c.location_id WHERE c.user_id = $1
+       UNION ALL SELECT f.created_at, 'book fix', f.field || ' · ' || f.status || ' · ' || left(COALESCE(f.new_value, ''), 60), NULL, NULL, f.book_id FROM book_fixes f WHERE f.user_id = $1
        UNION ALL SELECT w.created_at, 'alert', w.kind || COALESCE(' · ' || w.query, ''), NULL, NULL, w.book_id FROM book_watches w WHERE w.user_id = $1
      ) a LEFT JOIN LATERAL (SELECT title FROM books WHERE id = a.book_id) b ON true
      ORDER BY at DESC LIMIT 50`, [userId]);

@@ -161,7 +161,8 @@ async function lookUp(book) {
     if (found.front_url && found.back_url && found.description) break;
   }
   return one(
-    `UPDATE books SET front_url = $2, back_url = $3, description = $4, details_source = $5, details_at = now()
+    `UPDATE books SET front_url = $2, back_url = $3, details_source = $5, details_at = now(),
+            description = CASE WHEN 'description' = ANY(fixed_fields) THEN description ELSE $4 END
       WHERE id = $1 RETURNING *`,
     [book.id, found.front_url, found.back_url, found.description?.slice(0, 4000) ?? null, found.sources.join(', ') || null],
   );

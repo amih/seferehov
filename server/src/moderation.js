@@ -56,7 +56,8 @@ export async function maybePromote(db, userId) {
     `UPDATE users SET trust_level = 1
       WHERE id = $1 AND trust_level = 0
         AND (SELECT count(*) FROM locations WHERE created_by = $1 AND status = 'approved')
-          + (SELECT count(*) FROM sightings WHERE user_id = $1 AND status = 'approved') >= $2`,
+          + (SELECT count(*) FROM sightings WHERE user_id = $1 AND status = 'approved')
+          + (SELECT count(*) FROM book_fixes WHERE user_id = $1 AND status IN ('live', 'superseded')) >= $2`,
     [userId, config.trustThreshold],
   );
 }

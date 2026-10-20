@@ -1,6 +1,6 @@
 import { api, getMe } from '../api.js';
 import { navigate } from '../nav.js';
-import { esc, toast } from '../ui.js';
+import { esc, toast, confirmDialog } from '../ui.js';
 import { lang } from '../i18n.js';
 import { tracked } from '../analytics.js';
 import { todoTabs } from '../todo.js';
@@ -162,12 +162,21 @@ export default async function adminView(root) {
         <b>${esc(a.what)}</b>${a.detail ? ` <span class="muted small">${esc(a.detail)}</span>` : ''}
         ${a.book_id ? ` · <a href="/b/${a.book_id}" dir="auto">${esc(a.title ?? `#${a.book_id}`)}</a>` : ''}
         ${a.code ? ` · <a href="/l/${esc(a.code)}" dir="auto">${esc(a.place || a.code)}</a>` : ''}</li>`).join('')}</ul>` : '<p class="muted small">Nothing yet.</p>';
+      row.firstElementChild.insertAdjacentHTML('beforeend', `<p><button class="btn small danger" data-revert-fixes="${btn.dataset.activity}">↩ Undo all this reader's book fixes</button></p>`);
     } catch (err) { row.firstElementChild.innerHTML = `<p class="note">${esc(err.message)}</p>`; }
   }
 
   body.addEventListener('click', async (e) => {
     const act = e.target.closest('[data-activity]');
     if (act) { toggleActivity(act); return; }
+    const rf = e.target.closest('[data-revert-fixes]');
+    if (rf) {
+      if (!await confirmDialog('Undo every live book fix by this reader and reject their waiting ones?', 'Undo all')) return;
+      rf.disabled = true;
+      await api(`/api/admin/readers/${rf.dataset.revertFixes}/revert-fixes`, { method: 'POST', json: {} })
+        .then((r) => toast(`${r.undone} undone, ${r.rejected} rejected`), (err) => { toast(err.message); rf.disabled = false; });
+      return;
+    }
     const h = e.target.closest('[data-hide]');
     if (h) {
       await api(`/api/admin/reviews/${h.closest('[data-review]').dataset.review}`, { method: 'POST', json: { hidden: h.dataset.hide === '1' } })

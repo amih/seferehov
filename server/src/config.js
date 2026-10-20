@@ -72,6 +72,9 @@ export const POINTS = {
   bookReview: 30, // a written review of a book (once per book)
   spine: 20, // a spine found in no catalogue, once someone photographed that book's covers
   spineCovers: 50, // the covers of a book whose spine another reader found
+  fix: 5, // a correction to a book, once it is live
+  fixKept: 5, // ... and again when nobody undid it for FIX_KEEP_DAYS
+  fixVote: 2, // a vote on another reader's correction
 };
 // Admins get points divided by this.
 export const ADMIN_POINTS_DIVISOR = 10;
