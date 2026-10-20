@@ -8,7 +8,7 @@ import { missingParts } from './details.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors, PRESENT_BOOKS_SQL } from './locations.js';
 import { initialStatus, awardSighting, award } from './moderation.js';
 import { POINTS } from './config.js';
-import { PAIRS_SQL } from './duplicates.js';
+import { PAIRS_SQL, LOCATION_PAIRS_SQL } from './duplicates.js';
 import { parseLatLon } from './util.js';
 import { readForm } from './multipart.js';
 import { normTitle } from './vision.js';
@@ -244,6 +244,7 @@ export default async function approvalRoutes(app) {
               + (SELECT count(*) FROM sightings s JOIN locations l ON l.id = s.location_id WHERE s.status = 'pending' AND l.status = 'approved')
               + (SELECT count(*) FROM location_edits WHERE status = 'pending') AS n`)).n * 1;
       r.duplicates = await duplicateCount();
+      r.libraries = (await many(LOCATION_PAIRS_SQL)).length;
     }
     if (req.user.trust_level >= 3) r.texts = (await one(`SELECT count(*)::int AS n FROM photos WHERE ocr_status = 'review'`)).n;
     return r;

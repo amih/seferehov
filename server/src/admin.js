@@ -149,8 +149,27 @@ async function readers() {
       ORDER BY u.created_at DESC LIMIT 500`);
 }
 
+// One reader's last 50 actions, newest first: scans, reports, home books, reviews,
+// libraries added, library checks and alerts.
+async function readerActivity(userId) {
+  return many(
+    `SELECT * FROM (
+       SELECT s.created_at AS at, 'scan' AS what, s.source || ' · ' || s.status AS detail, l.code, l.name AS place, NULL::bigint AS book_id
+         FROM scans s LEFT JOIN locations l ON l.id = s.location_id WHERE s.user_id = $1
+       UNION ALL SELECT s.created_at, 'report', s.kind || ' · ' || s.status, l.code, l.name, b.id
+         FROM sightings s JOIN locations l ON l.id = s.location_id JOIN books b ON b.id = s.book_id WHERE s.user_id = $1
+       UNION ALL SELECT m.created_at, 'home book', NULL, NULL, NULL, m.book_id FROM my_books m WHERE m.user_id = $1
+       UNION ALL SELECT r.updated_at, 'review', CASE WHEN r.rating IS NOT NULL THEN r.rating || '★' END, NULL, NULL, r.book_id FROM book_reviews r WHERE r.user_id = $1
+       UNION ALL SELECT l.created_at, 'new library', l.status, l.code, l.name, NULL FROM locations l WHERE l.created_by = $1
+       UNION ALL SELECT c.created_at, 'library check', c.state, l.code, l.name, NULL FROM location_checks c JOIN locations l ON l.id = c.location_id WHERE c.user_id = $1
+       UNION ALL SELECT w.created_at, 'alert', w.kind || COALESCE(' · ' || w.query, ''), NULL, NULL, w.book_id FROM book_watches w WHERE w.user_id = $1
+     ) a LEFT JOIN LATERAL (SELECT title FROM books WHERE id = a.book_id) b ON true
+     ORDER BY at DESC LIMIT 50`, [userId]);
+}
+
 export default async function adminRoutes(app) {
   app.get('/api/admin/readers', { preHandler: requireUser(ADMIN) }, async () => ({ readers: await readers() }));
+  app.get('/api/admin/readers/:id', { preHandler: requireUser(ADMIN) }, async (req) => ({ activity: await readerActivity(Number(req.params.id)) }));
 
   app.get('/api/admin/overview', { preHandler: requireUser(ADMIN) }, async () => ({
     seo: await seoPages(),

@@ -98,7 +98,9 @@ export default async function addLocationView(root) {
     root.querySelector('[data-step="0"] [data-next]').disabled = false;
   };
 
+  let sending = false;
   async function submit(force = false, confirmPrivate = false) {
+    if (sending) return; // a double tap would add the library twice
     if (!photo) { show(0); return toast(t('wiz.need_photo')); }
     if (!pos) return toast(t('addloc.need_pos'));
     const fields = {
@@ -114,11 +116,14 @@ export default async function addLocationView(root) {
     const fd = new FormData();
     Object.entries(fields).forEach(([k, v]) => fd.append(k, v));
     if (photo) fd.append('photo', photo, 'photo.jpg');
+    const button = form.querySelector('[type="submit"]');
+    sending = true; button.disabled = true;
     try {
       const { location: l } = await api('/api/locations', { method: 'POST', form: fd });
       toast(t(l.status === 'approved' ? 'addloc.added_live' : 'addloc.added_review'));
       navigate(`/l/${l.code}`, { replace: true });
     } catch (e) {
+      sending = false; button.disabled = false;
       if (e.body?.error === 'private_info') {
         if (await privacyDialog(e.body.snippets)) submit(force, true);
         else { show(1); form.description.focus(); }

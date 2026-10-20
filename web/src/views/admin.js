@@ -97,9 +97,9 @@ export default async function adminView(root) {
       ['In today', count((r) => since(r.last_seen, 1))], ['In this week', count((r) => since(r.last_seen, 7))],
       ['Did something', count((r) => r.scans + r.reports + r.home_books + r.reviews)], ['Phone alerts on', count((r) => r.phones)]]
         .map(([k, v]) => `<div class="stat"><b>${n(v)}</b><span>${k}</span></div>`).join('')}</div>
-      <p class="muted small">Newest first. "Last in": last visit while signed in, or last report. Points: all time (this week).</p>
+      <p class="muted small">Newest first. "Last in": last visit while signed in, or last report. Points: all time (this week). ▸ shows what a reader did.</p>
       ${table(['Reader', 'Joined', 'Last in', 'Points', 'Scans', 'Reports', 'At home', 'Reviews', 'Libraries', 'Alerts', '📱'], readers.map((r) => [
-        `<a href="/r/${r.id}" dir="auto">${esc(r.screen_name || '(no name yet)')}</a><br><span class="muted small">${esc(r.email)}${r.google ? ' · G' : ''}${r.trust_level ? ` · ${LEVEL[r.trust_level]}` : ''}</span>`,
+        `<button class="link small" data-activity="${r.id}" aria-label="Activity">▸</button> <a href="/r/${r.id}" dir="auto">${esc(r.screen_name || '(no name yet)')}</a><br><span class="muted small">${esc(r.email)}${r.google ? ' · G' : ''}${r.trust_level ? ` · ${LEVEL[r.trust_level]}` : ''}</span>`,
         day(r.created_at), ago(r.last_seen), `${n(r.karma)}${r.week_points ? ` <span class="muted small">(+${n(r.week_points)})</span>` : ''}`,
         n(r.scans), n(r.reports), n(r.home_books), n(r.reviews), n(r.libraries), n(r.watches), r.phones ? '✓' : '']))}`;
   }
@@ -147,7 +147,27 @@ export default async function adminView(root) {
     }
   }
 
+  // A reader's own actions, in a row under theirs.
+  async function toggleActivity(btn) {
+    const tr = btn.closest('tr');
+    if (tr.nextElementSibling?.classList.contains('activity-row')) { tr.nextElementSibling.remove(); btn.textContent = '▸'; return; }
+    btn.textContent = '▾';
+    const row = document.createElement('tr');
+    row.className = 'activity-row';
+    row.innerHTML = `<td colspan="11"><p class="muted small">Loading…</p></td>`;
+    tr.after(row);
+    try {
+      const { activity } = await api(`/api/admin/readers/${btn.dataset.activity}`);
+      row.firstElementChild.innerHTML = activity.length ? `<ul class="activity-list">${activity.map((a) => `<li><span class="muted small">${esc(new Date(a.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))}</span>
+        <b>${esc(a.what)}</b>${a.detail ? ` <span class="muted small">${esc(a.detail)}</span>` : ''}
+        ${a.book_id ? ` · <a href="/b/${a.book_id}" dir="auto">${esc(a.title ?? `#${a.book_id}`)}</a>` : ''}
+        ${a.code ? ` · <a href="/l/${esc(a.code)}" dir="auto">${esc(a.place || a.code)}</a>` : ''}</li>`).join('')}</ul>` : '<p class="muted small">Nothing yet.</p>';
+    } catch (err) { row.firstElementChild.innerHTML = `<p class="note">${esc(err.message)}</p>`; }
+  }
+
   body.addEventListener('click', async (e) => {
+    const act = e.target.closest('[data-activity]');
+    if (act) { toggleActivity(act); return; }
     const h = e.target.closest('[data-hide]');
     if (h) {
       await api(`/api/admin/reviews/${h.closest('[data-review]').dataset.review}`, { method: 'POST', json: { hidden: h.dataset.hide === '1' } })

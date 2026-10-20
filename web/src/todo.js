@@ -3,12 +3,13 @@ import { esc } from './ui.js';
 import { t } from './i18n.js';
 
 // Everything that waits for the reader, in one place: their own books to approve, and for
-// reviewers and admins the reports to review, duplicate books and cover texts. One menu
+// reviewers and admins the reports to review, duplicate books and libraries, and cover texts. One menu
 // item; each list's page starts with tabs to the others (only those the reader may see).
 const TABS = [
   ['mine', '/queue', '📥'],
   ['review', '/review', '✅'],
   ['duplicates', '/duplicates', '🧩'],
+  ['libraries', '/duplicate-libraries', '📍'],
   ['texts', '/admin#texts', '🔤'],
 ];
 let last = null;

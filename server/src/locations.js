@@ -116,6 +116,11 @@ export default async function locationRoutes(app) {
 
   app.get('/api/locations/:code', async (req, reply) => {
     const loc = await locationByCode(req.params.code);
+    // Merged into another library (the same one, entered twice): its page now.
+    if (loc?.merged_into) {
+      const to = await one('SELECT code FROM locations WHERE id = $1', [loc.merged_into]);
+      if (to) return reply.code(404).send({ error: 'merged', code: to.code });
+    }
     if (!visibleTo(loc, req.user)) return reply.code(404).send({ error: 'not_found' });
     const photo = loc.photo_id && await one('SELECT path, thumb_path FROM photos WHERE id = $1', [loc.photo_id]);
     const books = await many(PRESENT_BOOKS_SQL, [loc.id]);
@@ -165,6 +170,14 @@ export default async function locationRoutes(app) {
     const { fields, files } = await readForm(req);
     const pos = parseLatLon(fields.lat, fields.lon);
     if (!pos) return reply.code(400).send({ error: 'location_required' });
+
+    // The same reader sending the same library twice (a double tap, a retry): the first one.
+    const again = await one(
+      `SELECT code, status FROM locations
+        WHERE created_by = $3 AND created_at > now() - interval '5 minutes'
+          AND ST_DWithin(geom, ST_MakePoint($1, $2)::geography, $4) LIMIT 1`,
+      [pos.lon, pos.lat, req.user.id, DUPLICATE_RADIUS_M]);
+    if (again) return { location: again };
 
     if (fields.force !== '1') {
       const dup = await one(

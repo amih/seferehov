@@ -5,8 +5,9 @@ import { esc, shrinkImage } from './ui.js';
 import { t, lang } from './i18n.js';
 
 // Photographing books one after another with the live camera: the front cover, turn the
-// book over, the back cover, next book. The picture is taken by itself once the camera
-// holds still on a sharp picture (a button takes it at once). Both pictures are then
+// book over, the back cover, next book. The picture is taken by itself the moment the
+// camera holds still on a sharp picture (a button takes it at once); a short animation
+// then shows turning the book over, or the next book coming. Both pictures are then
 // shown, to keep or to take one side again. Each book is handed to
 // onBook({ front, back, isbn }) in the background, which resolves to a line to show.
 // While the camera is on, it also looks for the barcode: a whole back cover in one
@@ -22,10 +23,12 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   let session = {}; // this time only: { intro, single, onBook }
   const small = document.createElement('canvas');
   const ctx = small.getContext('2d', { willReadFrequently: true });
-  let prev = null, steady = 0, moved = true, best = 0, since = 0;
+  let prev = null, steady = 0, moved = true, since = 0, lastSharp = 0;
   let refresh = () => {};
 
+  const title = (k) => { const el = panel.querySelector('.shot-title'); if (el) el.textContent = k ? t(k) : ''; };
   const say = () => {
+    title(reviewing ? null : hunting ? 'shots.title_code' : side === 'front' ? 'shots.title_front' : 'shots.title_back');
     const live = panel.querySelector('.shot-live');
     if (live) live.hidden = reviewing;
     panel.querySelector('.shot-cam')?.toggleAttribute('hidden', reviewing);
@@ -81,19 +84,21 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     session = { intro, single: single || !!only, only, onBook: own };
     refresh = say;
     side = only ?? 'front';
-    prev = null; steady = 0; moved = true; best = 0;
+    prev = null; steady = 0; moved = true;
     front = null; back = null; reviewing = false; liveCode = null; hunting = false;
     panel.hidden = false;
     panel.innerHTML = `${intro ? `<p class="shot-intro">${intro}</p>` : ''}
+      <h2 class="shot-title"></h2>
       <div class="shot-live"><video muted playsinline></video><div class="shot-guide"></div><div class="shot-flash"></div>
-        <div class="shot-meter"><i></i></div><p class="shot-hint" hidden></p>
+        <div class="shot-anim" hidden></div><p class="shot-hint" hidden></p>
+        <button class="shot-x" data-shots="end" aria-label="${t('shots.stop')}">✕</button>
         <button class="shot-torch" data-shots="torch" hidden aria-label="${t('shots.torch')}">🔦</button></div>
       <p class="shot-say"></p>
       <div class="shot-review" hidden></div>
       <p class="row"><button class="btn primary" data-shots="snap">📸 ${t('shots.snap')}</button>
         <button class="btn" data-shots="skip" hidden>${t('shots.skip')}</button>
-        <button class="btn" data-shots="nocode" hidden>${t('shots.no_code')}</button>
-        <button class="btn" data-shots="end">${t('shots.end')}</button></p>
+        <button class="btn" data-shots="nocode" hidden>${t('shots.no_code')}</button></p>
+      <button class="btn shot-stop" data-shots="end">■ ${t('shots.stop')}</button>
       <ul class="shot-done"></ul>`;
     video = panel.querySelector('video');
     center(panel.querySelector('.shot-live'));
@@ -109,12 +114,13 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     }
     say();
     center(panel.querySelector('.shot-live'));
-    since = Date.now();
+    since = Date.now() + 600; // the camera settles its exposure and focus
     timer = setInterval(tick, 120);
   }
 
   // Still and sharp? Movement = mean change of a small grey copy between ticks;
   // sharpness = variance of its Laplacian (text and edges in focus score high).
+  // Two still ticks in a row (a quarter of a second) are enough.
   function tick() {
     if (hunting) {
       lookForCode();
@@ -148,22 +154,24 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     const hintEl = panel.querySelector('.shot-hint');
     hintEl.hidden = !hint;
     if (hint) hintEl.textContent = t(hint);
-    best = Math.max(best * 0.98, sharp);
-    if (diff > 10) { moved = true; steady = 0; } else if (diff < 3.5) steady++; else steady = Math.max(0, steady - 1);
+    if (diff > 10) { moved = true; steady = 0; } else if (diff < 3.5) steady++; else steady = 0;
     // After a photo, the book has to move (turned over, or the next one) before the next.
-    const ready = !hint && moved && Date.now() - since > 1200 && sharp > 15 && sharp >= 0.7 * best;
-    panel.querySelector('.shot-meter i').style.width = `${ready ? Math.min(100, (steady / 8) * 100) : 0}%`;
-    if (ready && steady >= 8) snap();
+    // Not while the camera is still focusing (sharpness still changing from tick to tick).
+    const focused = Math.abs(sharp - lastSharp) <= 0.15 * Math.max(sharp, lastSharp);
+    lastSharp = sharp;
+    if (!hint && moved && Date.now() > since && sharp > 15 && focused && steady >= 2) snap(true);
   }
 
-  async function snap() {
+  // auto: the frame on screen right now (instant). The button asks the camera for a
+  // full photo, which can take a moment to focus.
+  async function snap(auto = false) {
     if (busy || reviewing || !video?.videoWidth) return;
     busy = true;
-    const blob = await still();
+    const blob = auto ? await frame() : await still();
     const flash = panel.querySelector('.shot-flash');
     flash.classList.remove('on'); void flash.offsetWidth; flash.classList.add('on');
     navigator.vibrate?.(40);
-    moved = false; steady = 0; since = Date.now();
+    moved = false; steady = 0; since = Date.now() + 300;
     took(blob);
     busy = false;
   }
@@ -178,6 +186,9 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
         if (photo?.size) return photo;
       } catch { /* not supported by this camera: the video frame below */ }
     }
+    return frame();
+  }
+  function frame() {
     const c = document.createElement('canvas');
     c.width = video.videoWidth; c.height = video.videoHeight;
     c.getContext('2d').drawImage(video, 0, 0);
@@ -193,10 +204,25 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     panel.querySelector('.shot-torch')?.classList.toggle('on', torch);
   }
 
+  // Over the camera for a moment: the book turning over, or the next book coming in.
+  // No photo is taken meanwhile.
+  function animate(kind) {
+    const el = panel.querySelector('.shot-anim');
+    if (!el || !stream) return;
+    el.className = `shot-anim ${kind}`;
+    el.innerHTML = kind === 'turn'
+      ? `<div class="anim-book"><i class="face front"></i><i class="face back"><b></b></i></div><p>↻ ${t('shots.anim_turn')}</p>`
+      : `<div class="anim-book out"><i class="face front"></i></div><div class="anim-book in"><i class="face front"></i></div><p>📕 ${t('shots.anim_next')}</p>`;
+    el.hidden = false;
+    since = Math.max(since, Date.now() + 1100);
+    clearTimeout(animate.timer);
+    animate.timer = setTimeout(() => { el.hidden = true; el.innerHTML = ''; }, 1100);
+  }
+
   // Front, then back, then both are shown; a side taken again goes back to the review.
   function took(blob) {
     if (side === 'front') front = blob; else back = blob;
-    if (side === 'front' && !session.only && !back) side = 'back';
+    if (side === 'front' && !session.only && !back) { side = 'back'; animate('turn'); }
     else if (side === 'back' && stream && !liveCode && !preset) { hunting = true; huntUntil = Date.now() + 6000; }
     else reviewing = true;
     refresh();
@@ -212,6 +238,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     moved = true; steady = 0; since = Date.now() + 800; // time to turn the book
     refresh();
     center(panel.querySelector('.shot-live'));
+    if (s === 'front') animate('turn');
   }
 
   function keep() {
@@ -222,6 +249,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     moved = false; since = Date.now();
     refresh();
     center(panel.querySelector('.shot-live'));
+    animate('next');
   }
 
   // In the background, so the next book can be photographed meanwhile.
@@ -242,8 +270,9 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   // No live camera: the camera app, one photo at a time.
   function fallback() {
     const cam = (s, label) => `<label class="btn primary">📷 ${label}<input type="file" accept="image/*" capture="environment" hidden data-side="${s}"></label>`;
-    panel.innerHTML = `<p class="shot-say"></p><div class="shot-review" hidden></div><p class="row"><span class="shot-cam"></span>
-      <button class="btn" data-shots="skip" hidden>${t('shots.skip')}</button><button class="btn" data-shots="end">${t('shots.end')}</button></p>
+    panel.innerHTML = `<h2 class="shot-title"></h2><p class="shot-say"></p><div class="shot-review" hidden></div><p class="row"><span class="shot-cam"></span>
+      <button class="btn" data-shots="skip" hidden>${t('shots.skip')}</button></p>
+      <button class="btn shot-stop" data-shots="end">■ ${t('shots.stop')}</button>
       <ul class="shot-done"></ul>`;
     const show = () => { panel.querySelector('.shot-cam').innerHTML = cam(side, t(side === 'front' ? 'shots.front_btn' : 'shots.back')); say(); };
     refresh = show;
@@ -273,7 +302,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     if (!b) return;
     const act = b.dataset.shots;
     if (act === 'start') { onStart?.(); start(); }
-    else if (act === 'snap') snap();
+    else if (act === 'snap') snap(false);
     else if (act === 'torch') toggleTorch();
     else if (act === 'end') stop();
     else if (act === 'skip' && front) { reviewing = true; refresh(); }

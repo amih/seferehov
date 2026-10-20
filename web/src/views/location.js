@@ -12,6 +12,7 @@ export default async function locationView(root, [code]) {
   root.innerHTML = `<section class="page"><p class="muted">${t('loading')}</p></section>`;
   let data;
   try { data = await api(`/api/locations/${code}`); } catch (e) {
+    if (e.body?.error === 'merged') return navigate(`/l/${e.body.code}`, { replace: true });
     root.innerHTML = `<section class="page"><h1>${t('loc.notfound')}</h1><p>${t(e.status === 404 ? 'loc.notfound_404' : 'offline')}</p><p><a href="/">${t('back.map')}</a></p></section>`;
     return;
   }

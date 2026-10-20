@@ -310,11 +310,37 @@ button.big-btn { font: inherit; text-align: start; width: 100%; }
 .shot-flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
 .shot-flash.on { animation: shot-flash .35s ease-out; }
 @keyframes shot-flash { from { opacity: .9; } to { opacity: 0; } }
-.shot-meter { position: absolute; left: 12%; right: 12%; bottom: 4%; height: 6px; background: rgba(255, 255, 255, .3); border-radius: 3px; overflow: hidden; }
 .shot-hint { position: absolute; left: 8px; right: 8px; top: 8px; margin: 0; padding: 6px 10px; border-radius: 8px; background: rgba(0, 0, 0, .65); color: #fff; font-size: .9rem; text-align: center; }
 .shot-torch { position: absolute; inset-inline-end: 8px; bottom: 14%; width: 44px; height: 44px; border: 0; border-radius: 50%; background: rgba(0, 0, 0, .45); font-size: 1.3rem; }
 .shot-torch.on { background: #ffd54a; }
-.shot-meter i { display: block; height: 100%; width: 0; background: var(--green); transition: width .12s linear; }
+/* What to photograph now, big, above the camera. */
+.shot-title { margin: 0 0 8px; text-align: center; font-size: 2rem; line-height: 1.15; font-weight: 800; }
+/* Stopping: a big red button under the camera, and ✕ on the camera itself. */
+.shot-stop { display: block; width: 100%; margin: 10px 0 0; padding: 14px; font-size: 1.15rem; font-weight: 700;
+  background: var(--red); border-color: var(--red); color: #fff; }
+.shot-x { position: absolute; inset-inline-start: 8px; top: 8px; width: 48px; height: 48px; border: 0; border-radius: 50%;
+  background: rgba(0, 0, 0, .6); color: #fff; font-size: 1.4rem; font-weight: 700; z-index: 2; }
+.shot-hint { z-index: 1; }
+/* Turning the book over / the next book, over the camera for a second. */
+.shot-anim { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 14px;
+  background: rgba(0, 0, 0, .55); perspective: 700px; pointer-events: none; overflow: hidden; }
+.shot-anim p { grid-row: 2; margin: 0; color: #fff; font-size: 1.5rem; font-weight: 800; text-shadow: 0 1px 4px #000; }
+.anim-book { position: relative; width: 34%; aspect-ratio: 2 / 3; transform-style: preserve-3d; grid-area: 1 / 1; }
+.anim-book .face { position: absolute; inset: 0; border-radius: 3px 8px 8px 3px; backface-visibility: hidden;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .5); }
+.anim-book .face.front { background: linear-gradient(90deg, #1e6b3a 0 9%, #2f9a57 9%); }
+.anim-book .face.front::after { content: ''; position: absolute; left: 22%; right: 12%; top: 18%; height: 10%; background: rgba(255, 255, 255, .85); border-radius: 2px;
+  box-shadow: 0 260% 0 -2px rgba(255, 255, 255, .55); }
+.anim-book .face.back { background: #e8efe9; transform: rotateY(180deg); }
+.anim-book .face.back b { position: absolute; right: 14%; bottom: 12%; width: 40%; height: 16%;
+  background: repeating-linear-gradient(90deg, #222 0 2px, transparent 2px 4px, #222 4px 5px, transparent 5px 8px); }
+.shot-anim.turn .anim-book { animation: book-turn 1s ease-in-out both; }
+@keyframes book-turn { 0%, 10% { transform: rotateY(0); } 90%, 100% { transform: rotateY(180deg); } }
+.shot-anim.next .anim-book.out { animation: book-out .55s ease-in both; }
+.shot-anim.next .anim-book.in { animation: book-in .55s .45s ease-out both; }
+@keyframes book-out { to { transform: translateX(-180%) rotate(-12deg); opacity: 0; } }
+@keyframes book-in { from { transform: translateX(180%) rotate(12deg); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .shot-anim .anim-book { animation-duration: .01s !important; } }
 .shot-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 10px; margin: 0 0 8px; }
 .shot-pair figure { margin: 0; text-align: center; }
 .shot-pair img, .shot-none { width: 100%; aspect-ratio: 3 / 4; object-fit: contain; background: #000; border-radius: 8px; display: block; }
@@ -419,3 +445,5 @@ body::after { content: ''; position: fixed; z-index: 3000; left: 0; right: 0; bo
 .todo-tabs a { padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--ink); text-decoration: none; font-size: .92em; }
 .todo-tabs a.on { background: var(--wood); color: #fff; border-color: var(--wood); }
 .todo-tabs a.on .count { background: #fff; color: var(--wood); }
+
+.activity-list { list-style: none; margin: 0; padding: 4px 0; display: grid; gap: 4px; }

@@ -28,6 +28,7 @@ import searchView from './views/search.js';
 import myBooksView, { addMyBooksView } from './views/my-books.js';
 import adminView from './views/admin.js';
 import duplicatesView from './views/duplicates.js';
+import duplicateLibrariesView from './views/duplicate-libraries.js';
 
 const routes = [
   [/^\/$/, mapView],
@@ -44,6 +45,7 @@ const routes = [
   [/^\/books\/add$/, addMyBooksView],
   [/^\/books\/(\d+)$/, myBookView],
   [/^\/duplicates$/, duplicatesView],
+  [/^\/duplicate-libraries$/, duplicateLibrariesView],
   [/^\/login$/, loginView],
   [/^\/me$/, meView],
   [/^\/settings$/, settingsView],

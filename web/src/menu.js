@@ -13,7 +13,7 @@ export function initMenu() {
 async function open() {
   const me = await getMe();
   const todo = me ? await todoCounts().catch(() => null) : null;
-  const waiting = todo ? ['mine', 'review', 'duplicates', 'texts'].reduce((n, k) => n + (todo[k] ?? 0), 0) : 0;
+  const waiting = todo ? ['mine', 'review', 'duplicates', 'libraries', 'texts'].reduce((n, k) => n + (todo[k] ?? 0), 0) : 0;
   // The list opens with the reader: their own picture and screen name, or "sign in".
   const items = [
     me ? [avatarHtml(me, 30), me.screen_name || t('menu.me'), '/me', 'me'] : ['👤', 'menu.signin', '/login'],
