@@ -12,6 +12,8 @@
 //    weighs 2, a trusted reader's 1; 2 for = live, 2 against = rejected.
 //  - A reader whose score falls below FIX_MIN_SCORE (after FIX_MIN_DECIDED decided
 //    fixes) can still suggest fixes but they always wait for votes, and cannot vote.
+//  - How many fixes a day grows with the record, in steps (FIX_DAY_STEPS); a low score
+//    drops to FIX_DAY_LOW.
 //  - Points only once a fix is live, more when nobody undid it for FIX_KEEP_DAYS;
 //    an undone fix loses both. Nothing for merely suggesting.
 import { POINTS } from './config.js';
@@ -27,7 +29,17 @@ const FIX_MIN_SCORE = 0.6;
 const FIX_MIN_DECIDED = 5;
 const FIX_VOTES_NEEDED = 2;
 const FIX_KEEP_DAYS = 30;
-const FIX_DAY_LIMIT = 30;
+// Fixes a day: the first step whose conditions the reader meets.
+const FIX_DAY_STEPS = [
+  { trust: 3, limit: 500 },
+  { trust: 2, limit: 100 },
+  { accepted: 50, score: 0.9, limit: 50 },
+  { accepted: 10, score: 0.8, limit: 25 },
+  { limit: 10 },
+];
+const FIX_DAY_LOW = 3;
+const dayLimit = (user, accepted, score, low) => (low ? FIX_DAY_LOW
+  : FIX_DAY_STEPS.find((s) => user.trust_level >= (s.trust ?? 0) && accepted >= (s.accepted ?? 0) && score >= (s.score ?? 0)).limit);
 const FIELDS = { title: 300, authors: 300, publisher: 200, year: 4, description: 4000, cover_text: 8000 };
 
 // The reader's fix record and what it allows.
@@ -47,7 +59,8 @@ export async function fixStanding(user) {
     live: !low && (user.trust_level >= 2 || (user.trust_level >= 1 && r.accepted >= FIX_LIVE_AFTER && score >= FIX_LIVE_SCORE)),
     can_vote: !low && user.trust_level >= 1,
     weight: user.trust_level >= 2 ? 2 : 1,
-    left_today: Math.max(0, FIX_DAY_LIMIT - r.today),
+    day_limit: dayLimit(user, r.accepted, score, low),
+    left_today: Math.max(0, dayLimit(user, r.accepted, score, low) - r.today),
   };
 }
 
