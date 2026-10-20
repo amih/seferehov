@@ -6,7 +6,9 @@ import { ownerLabel } from '../mybooks.js';
 import { todoTabs } from '../todo.js';
 
 // Books waiting for the reader's approval, from all their photos, videos and barcodes:
-// one at a time, with a large picture. Approve, decline, or set aside for later.
+// one at a time, with a large picture. Approve, decline, or set aside for later. The last
+// decision can be undone at once, and the last two weeks' from "Recent decisions": the
+// book comes back to the front of the queue, to be fixed and approved again.
 export default async function queueView(root) {
   const me = await getMe();
   if (!me) return navigate('/login?next=/queue', { replace: true });
@@ -18,6 +20,8 @@ export default async function queueView(root) {
   let current = null;
   let timer = null;
   let stopped = false;
+  let lastDone = null; // { id, title, decision }: the "undo" line above the next book
+  let readyAt = 0; // taps on a book just shown are ignored for a moment: they were meant for the one before
 
   async function load() {
     const r = await api('/api/queue');
@@ -42,8 +46,49 @@ export default async function queueView(root) {
     const left = items.filter((i) => !skipped.has(i.id)).length;
     const busy = processing.length
       ? `<p class="progress-line small"><span class="spinner"></span> ${t('queue.processing', { n: processing.length })}</p>` : '';
-    return `${left ? `<p class="queue-count">${t('queue.left', { n: left })}</p>` : ''}${busy}`;
+    const done = lastDone
+      ? `<p class="undo-line">${esc(t(`queue.just_${lastDone.decision}`, { title: lastDone.title }))} <button class="btn small" data-undo="${lastDone.id}">${t('queue.undo')}</button></p>` : '';
+    return `${done}${left ? `<p class="queue-count">${t('queue.left', { n: left })}</p>` : ''}${busy}`;
   }
+  const recentLink = () => `<p class="row"><button class="btn small" id="recent">${t('queue.recent')}</button></p>`;
+
+  async function undo(id) {
+    try {
+      const r = await api(`/api/queue/${id}/undo`, { method: 'POST', json: {} });
+      counts = { ...counts, ...r };
+      items = [r.item, ...items.filter((x) => x.id !== r.item.id)];
+      skipped.delete(r.item.id);
+      lastDone = null;
+      toast(t('queue.undone'));
+      render();
+      window.scrollTo(0, 0);
+    } catch (err) { toast(err.message); }
+  }
+
+  async function renderRecent() {
+    current = null;
+    root.innerHTML = `<section class="page"><h1>${t('queue.recent_title')}</h1><p class="muted">${t('loading')}</p></section>`;
+    let list = [];
+    try { list = (await api('/api/queue/recent')).items; } catch (err) { toast(err.message); }
+    root.innerHTML = `
+    <section class="page recent">
+      <p><button class="btn small" id="back">${t('queue.back_to_queue')}</button></p>
+      <h1>${t('queue.recent_title')}</h1>
+      <p class="muted small">${t('queue.recent_how')}</p>
+      ${list.length ? `<ul class="recent-list">${list.map((i) => `<li>
+        ${i.pic ? `<img src="${esc(i.pic)}" alt="">` : '<span class="nopic">📕</span>'}
+        <div><b dir="auto">${esc(i.title)}</b>${i.authors?.length ? `<br><span class="small" dir="auto">${esc(i.authors.join(', '))}</span>` : ''}
+          <br><span class="small muted">${t(`queue.was_${i.decision}`)} · ${i.code ? esc(i.location_name || t('free_library')) : t('queue.my_books')}</span></div>
+        ${i.undoable ? `<button class="btn small" data-undo="${i.id}">${t('queue.undo')}</button>` : `<span class="small muted">${t('queue.placed')}</span>`}
+      </li>`).join('')}</ul>` : `<p class="note">${t('queue.recent_none')}</p>`}
+    </section>`;
+    root.querySelector('#back').onclick = () => { render(); window.scrollTo(0, 0); };
+  }
+  root.addEventListener('click', (e) => {
+    const u = e.target.closest('[data-undo]');
+    if (u) { u.disabled = true; undo(Number(u.dataset.undo)); }
+    else if (e.target.closest('#recent')) { renderRecent(); window.scrollTo(0, 0); }
+  });
   function renderHeader() {
     const h = root.querySelector('#qhead');
     if (h) h.innerHTML = header();
@@ -59,6 +104,7 @@ export default async function queueView(root) {
         <div id="qhead">${header()}</div>
         <p class="note">${counts.processing ? t('queue.wait_more') : skipped.size ? t('queue.only_later', { n: skipped.size }) : t('queue.empty')}</p>
         <p class="row">${skipped.size ? `<button class="btn" id="again">${t('queue.again')}</button>` : ''}<a class="btn" href="/">${t('back.map')}</a></p>
+        ${recentLink()}
       </section>`;
       root.querySelector('#again')?.addEventListener('click', () => { skipped.clear(); render(); });
       return;
@@ -90,12 +136,14 @@ export default async function queueView(root) {
         <button class="btn" data-d="later">⏸ ${t('queue.later')}</button>
         <button class="btn danger" data-d="declined">✕ ${t('queue.decline')}</button>
       </div>
+      ${recentLink()}
     </section>`;
+    readyAt = Date.now() + 700;
 
     const form = root.querySelector('#f');
     root.querySelector('.decide').onclick = async (e) => {
       const b = e.target.closest('[data-d]');
-      if (!b) return;
+      if (!b || Date.now() < readyAt) return;
       const decision = b.dataset.d;
       const body = { decision };
       if (decision === 'approved') {
@@ -111,6 +159,7 @@ export default async function queueView(root) {
         counts = { ...counts, ...r };
         if (decision === 'later') skipped.add(i.id);
         else items = items.filter((x) => x.id !== i.id);
+        lastDone = decision === 'later' ? null : { id: i.id, decision, title: body.title || shownTitle };
         if (decision === 'approved' && r.status === 'pending') toast(t('loc.thanks_review'));
         render();
         window.scrollTo(0, 0);

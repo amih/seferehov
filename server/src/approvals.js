@@ -13,6 +13,8 @@ import { parseLatLon } from './util.js';
 import { readForm } from './multipart.js';
 import { normTitle } from './vision.js';
 
+const UNDO_DAYS = 14;
+
 const ITEM_SQL = `
   SELECT i.id, i.title, i.author, i.isbn13, i.via, i.matched, i.quality, i.frame_path, i.crop_path, i.back_path, i.decision, i.sources,
          s.id AS scan_id, s.kind, s.source, s.owner, s.friend_name, l.code, l.name AS location_name,
@@ -62,9 +64,9 @@ export async function approveItem(item, scan, user, { title, author } = {}) {
   const photoId = covers ? await photoOf(item.frame_path, user.id, 'cover') : null;
   const backPhotoId = covers ? await photoOf(item.back_path, user.id, 'back') : null;
   if (!scan.location_id) { // one of the reader's own books (My books)
-    await q('INSERT INTO my_books(user_id, book_id, photo_id, back_photo_id, owner, friend_name) VALUES ($1, $2, $3, $4, COALESCE($5, \'mine\'), $6)',
+    const mine = await one('INSERT INTO my_books(user_id, book_id, photo_id, back_photo_id, owner, friend_name) VALUES ($1, $2, $3, $4, COALESCE($5, \'mine\'), $6) RETURNING id',
       [user.id, book.id, photoId, backPhotoId, scan.owner, scan.friend_name]);
-    return { sighting: null, book, edited };
+    return { sighting: null, myBookId: mine.id, book, edited };
   }
   const loc = await one('SELECT id, status FROM locations WHERE id = $1', [scan.location_id]);
   const far = scan.distance_m == null || scan.distance_m > config.maxReportDistanceM;
@@ -290,11 +292,60 @@ export default async function approvalRoutes(app) {
     // For the statistics: was the reading right? (declined = dropped)
     const outcome = decision === 'approved' ? (result.edited ? 'edited' : 'kept') : decision === 'declined' ? 'dropped' : null;
     await q(
-      `UPDATE scan_items SET decision = $2, decided_at = now(), outcome = $3, sighting_id = $4 WHERE id = $1`,
-      [item.id, decision, outcome, result?.sighting?.id ?? null],
+      `UPDATE scan_items SET decision = $2, decided_at = now(), outcome = $3, sighting_id = $4, my_book_id = $5 WHERE id = $1`,
+      [item.id, decision, outcome, result?.sighting?.id ?? null, result?.myBookId ?? null],
     );
     await closeIfDone(item.scan_id);
     return { status: result?.sighting?.status ?? null, ...(await counts(req.user.id)) };
+  });
+
+  // The reader's last decisions, newest first: a wrong tap can be undone, a title fixed.
+  app.get('/api/queue/recent', { preHandler: requireUser() }, async (req) => {
+    const items = await many(
+      `SELECT i.id, i.decision, i.decided_at, i.crop_path, i.frame_path, i.title AS read_title,
+              COALESCE(sb.title, mb.title, i.title) AS title, COALESCE(sb.authors, mb.authors) AS authors,
+              l.code, l.name AS location_name, m.placed_at
+         FROM scan_items i JOIN scans s ON s.id = i.scan_id LEFT JOIN locations l ON l.id = s.location_id
+         LEFT JOIN sightings si ON si.id = i.sighting_id LEFT JOIN books sb ON sb.id = si.book_id
+         LEFT JOIN my_books m ON m.id = i.my_book_id LEFT JOIN books mb ON mb.id = m.book_id
+        WHERE s.user_id = $1 AND i.decision IN ('approved', 'declined') AND i.decided_at > now() - interval '${UNDO_DAYS} days'
+        ORDER BY i.decided_at DESC, i.id DESC LIMIT 50`,
+      [req.user.id],
+    );
+    return {
+      items: items.map(({ crop_path, frame_path, placed_at, ...i }) => ({
+        ...i, pic: (crop_path || frame_path) && `/uploads/${crop_path || frame_path}`, undoable: !placed_at,
+      })),
+    };
+  });
+
+  // Undo: the sighting (and its points) or the My books entry goes, and the book waits
+  // in the queue again, to be approved (perhaps with a fixed title) or declined.
+  app.post('/api/queue/:id/undo', { preHandler: requireUser() }, async (req, reply) => {
+    const item = await one(
+      `SELECT i.*, m.placed_at FROM scan_items i JOIN scans s ON s.id = i.scan_id LEFT JOIN my_books m ON m.id = i.my_book_id
+        WHERE i.id = $1 AND s.user_id = $2 AND i.decision IN ('approved', 'declined')
+          AND i.decided_at > now() - interval '${UNDO_DAYS} days'`,
+      [Number(req.params.id), req.user.id],
+    );
+    if (!item) return reply.code(404).send({ error: 'not_found' });
+    if (item.placed_at) return reply.code(409).send({ error: 'already_placed' });
+    await tx(async (db) => {
+      if (item.sighting_id) {
+        const si = (await db.query('DELETE FROM sightings WHERE id = $1 RETURNING photo_id, back_photo_id', [item.sighting_id])).rows[0];
+        await db.query(`DELETE FROM karma_events WHERE ref_type = 'sighting' AND ref_id = $1`, [item.sighting_id]);
+        if (si) await db.query('DELETE FROM photos WHERE id = ANY($1)', [[si.photo_id, si.back_photo_id].filter(Boolean)]);
+      }
+      if (item.my_book_id) {
+        const m = (await db.query('DELETE FROM my_books WHERE id = $1 RETURNING photo_id, back_photo_id', [item.my_book_id])).rows[0];
+        if (m) await db.query('DELETE FROM photos WHERE id = ANY($1)', [[m.photo_id, m.back_photo_id].filter(Boolean)]);
+      }
+      await db.query(
+        `UPDATE scan_items SET decision = NULL, decided_at = NULL, outcome = NULL, sighting_id = NULL, my_book_id = NULL WHERE id = $1`, [item.id]);
+      await db.query(`UPDATE scans SET status = 'done' WHERE id = $1 AND status = 'confirmed'`, [item.scan_id]);
+    });
+    const back = await one(`${ITEM_SQL} WHERE i.id = $1`, [item.id]);
+    return { item: publicItem(back), ...(await counts(req.user.id)) };
   });
 
   app.get('/api/locations/:code/shelf-check', { preHandler: requireUser() }, async (req, reply) => {

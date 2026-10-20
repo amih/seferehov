@@ -14,6 +14,8 @@ const TABS = [
 ];
 let last = null;
 
+export const lastTodoCounts = () => last;
+
 export async function todoCounts() {
   last = await api('/api/todo');
   return last;

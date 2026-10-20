@@ -7,7 +7,9 @@ import { t } from './i18n.js';
 //     the foreground, every hour, and whenever the API reports a different version.
 //  2. A new worker installs in the background and waits.
 //  3. We switch to it only at a safe moment: right away if the app is hidden,
-//     otherwise on the next screen change — never while uploads are queued.
+//     otherwise on the next screen change — never while uploads are queued. On screens
+//     where the reader taps through one item after another (approving, the camera), not
+//     even when hidden: a reload under a finger turns the next tap into a wrong decision.
 //  4. After the reload, a toast says what version is now running.
 
 let reg = null;
@@ -44,14 +46,16 @@ export function initUpdates() {
 
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') checkForUpdate();
-    else maybeApply();
+    else maybeApply({ hidden: true });
   });
   setInterval(checkForUpdate, 60 * 60 * 1000);
 }
 
+const BUSY_SCREENS = /^\/(queue|review|duplicates|books\/add|l\/[^/]+\/(add|barcode|check))\/?$/;
+
 function onWaiting() {
   waiting = true;
-  if (document.visibilityState === 'hidden') maybeApply();
+  if (document.visibilityState === 'hidden') maybeApply({ hidden: true });
 }
 
 export function checkForUpdate() {
@@ -60,8 +64,9 @@ export function checkForUpdate() {
 
 // Called by the router on every screen change and when the app goes to the
 // background. Never switches while uploads are waiting in the offline queue.
-export async function maybeApply() {
+export async function maybeApply({ hidden = false } = {}) {
   if (!waiting || !reg?.waiting) return;
+  if (hidden && BUSY_SCREENS.test(location.pathname)) return;
   if (await pendingCount()) return;
   waiting = false;
   reg.waiting.postMessage({ type: 'SKIP_WAITING' });
