@@ -22,8 +22,10 @@ async function prepare(buffer, angle, size = 1280) {
 const ANGLES = [0, 90, 270];
 
 // Reads books from one photo or video frame with the vision model. Returns
-// [{title, author, isbn}]: each spine cut out, straightened and read on its own (far
-// better for Hebrew, which needs the pixels), plus one whole-image read.
+// [{title, author, isbn, crop, verified}]: each spine cut out, straightened and read on
+// its own (far better for Hebrew, which needs the pixels), plus one whole-image read.
+// verified: the cut-out's reading was confirmed by OCR (see readCrop); a book only the
+// whole-image read found, with no confirmed cut-out, has none.
 // { spines: false } reads only the whole image, at three angles (fast).
 export async function readBooks(buffer, { spines = true } = {}) {
   const all = [];
@@ -42,6 +44,7 @@ export async function readBooks(buffer, { spines = true } = {}) {
     const { data: upright, info } = await sharp(buffer).rotate().toBuffer({ resolveWithObject: true });
     for (const b of missing) {
       try { b.crop = await findSpine(upright, info.width, info.height, b.title); } catch { /* no cut-out */ }
+      if (b.crop) b.verified = true;
     }
   }
   return books;
@@ -114,10 +117,15 @@ export async function readCoverText(buffer) {
 }
 
 async function surya(buffer) {
+  return (await suryaRead(buffer)).text?.trim() ?? '';
+}
+// { text, lines, boxes: [{ text, bbox: [x1, y1, x2, y2], confidence }] } in the pixels
+// of the picture as sent (upright, at most 2400 px).
+async function suryaRead(buffer) {
   const jpeg = await sharp(buffer).rotate().resize(2400, 2400, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 92 }).toBuffer();
   const res = await fetch(`${config.ocrUrl}/ocr`, { method: 'POST', body: jpeg, signal: AbortSignal.timeout(300_000) });
   if (!res.ok) throw new Error(`ocr ${res.status}`);
-  return (await res.json()).text?.trim() ?? '';
+  return res.json();
 }
 
 async function tesseract(buffer) {
@@ -230,13 +238,102 @@ async function findSpine(upright, W, H, title) {
     box = [Math.max(0, box[0]), Math.max(0, box[1]), Math.min(w, box[2]), Math.min(h, box[3])];
   }
   const piece = await cut(img, w, h, box, Math.min(box[2] - box[0], box[3] - box[1]) * 0.06 + 6);
-  const bw = box[2] - box[0], bh = box[3] - box[1];
-  for (const angle of bh > bw * 1.3 ? [270, 90] : [0]) {
-    const jpeg = await sharp(piece).rotate(angle).resize(1280, 1280, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 90 }).toBuffer();
-    const [read] = parseBooks((await generate(jpeg, SPINE_PROMPT, 80)).trim().split('\n')[0]);
-    if (read && sameTitle(read.title, title)) return jpeg;
+  const read = await readCrop(piece, box[2] - box[0], box[3] - box[1], title);
+  if (!read) return null;
+  // Surya agreed with the title (verified), or, without Surya, the vision model reads it back.
+  return read.verified || (read.verified === null && sameTitle(read.title, title)) ? read.crop : null;
+}
+
+// One cut-out from a shelf photo: which way up it is, what it says, and a tight
+// picture of just that one book. The vision model reads it both ways up, Surya OCR
+// reads it both ways up, and the way where the two agree is the right one: each of
+// them invents text for print it cannot read (upside-down Hebrew comes out as Latin
+// letters), but they never invent the same text. The lines Surya found for the title
+// and author mark the one spine; the picture is cut down to that band, so neighbours
+// above and below are left out. With no agreement either way the cut-out is not used
+// (verified: false). If Surya is not running: the old way, the vision model alone
+// (verified: null). title: the book we are looking for (findSpine), read by the
+// vision model elsewhere.
+const ORIENT_OK = 0.5;
+async function readCrop(img, w, h, title = null) {
+  const spine = h > w * 1.3;
+  const angles = spine ? [270, 90] : [0, 180];
+  const tries = await Promise.all(angles.map(async (angle) => {
+    const jpeg = await sharp(img).rotate(angle).resize(1280, 1280, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 90 }).toBuffer();
+    const [read, ocr] = await Promise.all([
+      generate(jpeg, SPINE_PROMPT, 80).then((line) => (/^NONE\b/i.test(line.trim()) ? null : parseBooks(line.trim().split('\n')[0])[0] ?? null)),
+      suryaRead(jpeg).catch(() => null),
+    ]);
+    return { angle, jpeg, read, ocr };
+  }));
+  if (tries.some((x) => !x.ocr?.boxes)) {
+    // Surya is down: the vision model's reading alone, the clearer one.
+    const ok = tries.filter((x) => x.read).sort((a, b) => (a.read.quality === 'low') - (b.read.quality === 'low'))[0];
+    return ok ? { ...ok.read, crop: ok.jpeg, verified: null } : null;
   }
-  return null;
+  for (const x of tries) {
+    const want = title ? { title, author: x.read?.author } : x.read;
+    x.lines = want ? x.ocr.boxes.filter((b) => b.confidence >= 0.5).map((b) => ({ ...b, score: Math.max(overlap(want.title, b.text), 0.8 * overlap(want.author, b.text)) })) : [];
+    x.score = Math.max(0, ...x.lines.map((b) => b.score));
+  }
+  const best = tries.sort((a, b) => b.score - a.score)[0];
+  if (best.score < ORIENT_OK) return best.read ? { ...best.read, crop: null, verified: false } : null;
+  return { ...(best.read ?? { title, author: null, isbn: null, quality: 'medium' }), crop: spine ? await band(best.jpeg, best.lines) : best.jpeg, verified: true };
+}
+
+// How much of `want` shows up in `text`: the share of want's letter pairs found in it.
+export function overlap(want, text) {
+  const pairs = (s) => {
+    const n = normTitle(s).replace(/ /g, '');
+    return Array.from({ length: Math.max(0, n.length - 1) }, (_, i) => n.slice(i, i + 2));
+  };
+  const a = pairs(want);
+  if (a.length < 2) return 0;
+  const b = new Set(pairs(text));
+  return a.filter((p) => b.has(p)).length / a.length;
+}
+
+// The one spine in a level cut-out: the rows of the title (and author) lines, a little
+// more above and below for the spine's own edges, cut at the strongest straight edge
+// there (where the next spine starts).
+async function band(jpeg, lines) {
+  const hits = lines.filter((b) => b.score >= 0.4).sort((a, b) => b.score - a.score);
+  if (!hits.length) return jpeg;
+  const first = hits[0].bbox;
+  const lineH = first[3] - first[1];
+  // Lines of the same spine sit next to the best one, not a spine further on.
+  const mine = hits.filter((b) => b.bbox[1] < first[3] + lineH * 0.5 && b.bbox[3] > first[1] - lineH * 0.5);
+  let y1 = Math.min(...mine.map((b) => b.bbox[1])), y2 = Math.max(...mine.map((b) => b.bbox[3]));
+  // Never cut through other print on the same rows (a bigger title next to the author).
+  for (const b of lines) {
+    const [t, u] = [b.bbox[1], b.bbox[3]];
+    if (Math.min(u, y2) - Math.max(t, y1) > (u - t) * 0.5) { y1 = Math.min(y1, t); y2 = Math.max(y2, u); }
+  }
+  const { data, info } = await sharp(jpeg).greyscale().raw().toBuffer({ resolveWithObject: true });
+  const { width: W, height: H } = info;
+  const th = y2 - y1;
+  // Row edge strength: mean change from one row to the next, across the whole width.
+  const edge = (y) => {
+    let sum = 0;
+    for (let x = 0; x < W; x++) sum += Math.abs(data[(y + 1) * W + x] - data[y * W + x]);
+    return sum / W;
+  };
+  const rows = Array.from({ length: H - 1 }, (_, y) => edge(y));
+  const median = [...rows].sort((a, b) => a - b)[rows.length >> 1] || 1;
+  const strongest = (from, to) => {
+    let at = -1, top = median * 2;
+    for (let y = Math.max(0, Math.round(from)); y <= Math.min(H - 2, Math.round(to)); y++) if (rows[y] > top) { top = rows[y]; at = y; }
+    return at;
+  };
+  const up = strongest(y1 - th * 0.6, y1 - th * 0.08), down = strongest(y2 + th * 0.08, y2 + th * 0.6);
+  y1 = up >= 0 ? up : y1 - th * 0.3;
+  y2 = down >= 0 ? down + 1 : y2 + th * 0.3;
+  // A spine is at least half as thick again as its print.
+  const short = th * 1.5 - (y2 - y1);
+  if (short > 0) { y1 -= short / 2; y2 += short / 2; }
+  const top = Math.max(0, Math.floor(y1)), height = Math.min(H, Math.ceil(y2)) - top;
+  if (height < 12) return jpeg;
+  return sharp(jpeg).extract({ left: 0, top, width: W, height }).jpeg({ quality: 90 }).toBuffer();
 }
 
 // Books on a public shelf lean, and an upright box around a leaning spine takes in its
@@ -283,16 +380,9 @@ async function readSpines(buffer) {
 
   const books = [];
   for (const { img, w, h } of crops.slice(0, MAX_SPINES * 2)) {
-    // Spine text runs top-to-bottom on most books; try that first, then the other way.
-    let best = null;
-    for (const angle of h > w * 1.3 ? [270, 90] : [0]) {
-      const jpeg = await sharp(img).rotate(angle).resize(1280, 1280, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 90 }).toBuffer();
-      const line = (await generate(jpeg, SPINE_PROMPT, 80)).trim().split('\n')[0];
-      const [b] = /^NONE\b/i.test(line) ? [] : parseBooks(line);
-      if (b && (!best || (best.quality === 'low' && b.quality !== 'low'))) best = { ...b, crop: jpeg };
-      if (best && best.quality !== 'low') break;
-    }
-    if (best) books.push(best);
+    const b = await readCrop(img, w, h);
+    // A reading neither way up confirmed by OCR came from a jumble or upside-down print.
+    if (b && b.verified !== false) books.push(b);
   }
   return books;
 }
@@ -412,7 +502,7 @@ export function mergeBooks(books) {
     else if (b.title.length > dup.title.length && b.quality !== 'low') dup.title = b.title;
     dup.author ||= b.author;
     dup.isbn ||= b.isbn;
-    dup.crop ||= b.crop;
+    if (!dup.crop && b.crop) Object.assign(dup, { crop: b.crop, verified: b.verified });
   }
   return out.slice(0, MAX_LINES);
 }

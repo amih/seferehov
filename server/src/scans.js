@@ -411,7 +411,7 @@ async function processScan(scan) {
       hit.author ||= item.author;
       hit.isbn ||= item.isbn;
       if (hit.quality === 'low' && item.quality && item.quality !== 'low') hit.quality = item.quality;
-      hit.crop ||= item.crop;
+      if (!hit.crop && item.crop) Object.assign(hit, { crop: item.crop, verified: item.verified });
       return;
     }
     found.push({ ...item, key, frames: new Set([i]) });
@@ -445,6 +445,10 @@ async function processScan(scan) {
     // In a video every spine shows up in several frames; a title read only once
     // and found in no catalogue is most likely a misreading.
     if (!book && item.via === 'vision' && item.fromVideo && item.frames.size < 2) continue;
+    // A reading that OCR did not confirm on a cut-out of its own spine (only the whole
+    // shelf was read) is often invented: kept only when a catalogue knows the book and
+    // the title is long enough not to match some other book by chance.
+    if (item.via === 'vision' && item.verified === undefined && (!book || normTitle(item.title).replace(/ /g, '').length < 8)) continue;
     const title = item.title || book?.title || (isbn && `ISBN ${isbn}`);
     const quality = book ? 'high' : item.quality === 'low' ? 'low' : 'medium';
     if (title) rows.push({ item, book, title, isbn, quality, lookupId });

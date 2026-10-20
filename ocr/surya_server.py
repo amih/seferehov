@@ -2,7 +2,8 @@
 
 Surya reads Hebrew far better than Tesseract or the vision model (92% of the words of
 a vowel-pointed back cover, against 65% and invented text). The models load once;
-POST /ocr with the image bytes answers {"text": "...", "lines": [...]}.
+POST /ocr with the image bytes answers {"text": "...", "lines": [...], "boxes": [...]}:
+boxes are the lines with their [x1, y1, x2, y2] in pixels and Surya's confidence (0–1).
 Listens on 127.0.0.1 only. One image at a time (~30 s on the CPU).
 """
 import io
@@ -29,8 +30,12 @@ def read(image):
     # Top to bottom; Surya gives each line's box.
     lines = sorted(page.text_lines, key=lambda l: (l.bbox[1], -l.bbox[2]))
     # Surya marks bold or italic print with HTML tags: plain text only.
-    texts = [re.sub(r"</?(b|i|u|sup|sub|math)>", "", l.text.replace("<br>", "\n")).strip() for l in lines]
-    return [t for t in texts if t]
+    out = []
+    for l in lines:
+        text = re.sub(r"</?(b|i|u|sup|sub|math)>", "", l.text.replace("<br>", "\n")).strip()
+        if text:
+            out.append({"text": text, "bbox": [round(v) for v in l.bbox], "confidence": round(float(l.confidence or 0), 3)})
+    return out
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -42,10 +47,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_error(413)
         try:
             image = Image.open(io.BytesIO(self.rfile.read(size))).convert("RGB")
-            lines = read(image)
+            boxes = read(image)
         except Exception as err:  # a broken picture must not stop the service
             return self.send_error(400, str(err)[:200])
-        body = json.dumps({"text": "\n".join(lines), "lines": lines}, ensure_ascii=False).encode()
+        lines = [b["text"] for b in boxes]
+        body = json.dumps({"text": "\n".join(lines), "lines": lines, "boxes": boxes}, ensure_ascii=False).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
