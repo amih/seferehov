@@ -6,7 +6,8 @@ import { t, lang } from './i18n.js';
 
 // Photographing books one after another with the live camera: the front cover, turn the
 // book over, the back cover, next book. The picture is taken by itself the moment the
-// camera holds still on a sharp picture (a button takes it at once); a short animation
+// camera holds still on a sharp picture, or else the sharpest of the frames seen while
+// the book was held roughly still for a moment (a button takes it at once); a short animation
 // then shows turning the book over, or the next book coming. Both pictures are then
 // shown, to keep or to take one side again. Each book is handed to
 // onBook({ front, back, isbn }) in the background, which resolves to a line to show.
@@ -24,6 +25,9 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   const small = document.createElement('canvas');
   const ctx = small.getContext('2d', { willReadFrequently: true });
   let prev = null, steady = 0, moved = true, since = 0, lastSharp = 0;
+  // The sharpest full-size frame so far while the book is held roughly still, and since when.
+  let best = null, bestScore = 0, spare = null, window0 = 0;
+  const BEST_MS = 1200;
   let refresh = () => {};
 
   const title = (k) => { const el = panel.querySelector('.shot-title'); if (el) el.textContent = k ? t(k) : ''; };
@@ -84,7 +88,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     session = { intro, single: single || !!only, only, onBook: own };
     refresh = say;
     side = only ?? 'front';
-    prev = null; steady = 0; moved = true;
+    prev = null; steady = 0; moved = true; dropBest();
     front = null; back = null; reviewing = false; liveCode = null; hunting = false;
     panel.hidden = false;
     panel.innerHTML = `${intro ? `<p class="shot-intro">${intro}</p>` : ''}
@@ -120,7 +124,12 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
 
   // Still and sharp? Movement = mean change of a small grey copy between ticks;
   // sharpness = variance of its Laplacian (text and edges in focus score high).
-  // Two still ticks in a row (a quarter of a second) are enough.
+  // Sharpness is measured inside the guide frame, where the cover is, so a sharp table
+  // around a small, far-away book does not count. Two still ticks in a row (a quarter of
+  // a second) are enough; meanwhile, every frame that is roughly still is a candidate,
+  // and a moment after the first one the sharpest of them is taken — shaking hands,
+  // a white cover read as a reflection or a camera that keeps refocusing then no
+  // longer hold up the photo.
   function tick() {
     if (hunting) {
       lookForCode();
@@ -139,8 +148,9 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     if (prev?.length === g.length) { diff = 0; for (let i = 0; i < g.length; i++) diff += Math.abs(g[i] - prev[i]); diff /= g.length; }
     prev = g;
     let sum = 0, sq = 0, n = 0;
-    for (let y = 1; y < h - 1; y++) {
-      for (let x = 1; x < w - 1; x++) {
+    const x0 = Math.round(w * 0.12), x1 = w - x0, y0 = Math.round(h * 0.08), y1 = h - y0;
+    for (let y = Math.max(1, y0); y < Math.min(h - 1, y1); y++) {
+      for (let x = Math.max(1, x0); x < Math.min(w - 1, x1); x++) {
         const i = y * w + x;
         const l = 4 * g[i] - g[i - 1] - g[i + 1] - g[i - w] - g[i + w];
         sum += l; sq += l * l; n++;
@@ -154,20 +164,41 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     const hintEl = panel.querySelector('.shot-hint');
     hintEl.hidden = !hint;
     if (hint) hintEl.textContent = t(hint);
-    if (diff > 10) { moved = true; steady = 0; } else if (diff < 3.5) steady++; else steady = 0;
+    // A big change = a different picture: the frames kept so far are no longer of it.
+    if (diff > 10) { moved = true; steady = 0; dropBest(); } else if (diff < 3.5) steady++; else steady = 0;
     // After a photo, the book has to move (turned over, or the next one) before the next.
     // Not while the camera is still focusing (sharpness still changing from tick to tick).
     const focused = Math.abs(sharp - lastSharp) <= 0.15 * Math.max(sharp, lastSharp);
     lastSharp = sharp;
-    if (!hint && moved && Date.now() > since && sharp > 15 && focused && steady >= 2) snap(true);
+    if (!moved || Date.now() <= since) { dropBest(); return; }
+    if (!hint && sharp > 15 && focused && steady >= 2) { snap(true); return; }
+    if (diff < 8 && sharp > 8) {
+      const score = sharp * (1 - Math.min(0.5, (5 * burnt) / g.length)) * (focused ? 1 : 0.8);
+      if (score > bestScore) keepBest(score);
+      window0 ||= Date.now();
+    }
+    if (best && Date.now() - window0 >= BEST_MS) snap(true, best);
   }
 
-  // auto: the frame on screen right now (instant). The button asks the camera for a
-  // full photo, which can take a moment to focus.
-  async function snap(auto = false) {
+  // The frame now, full size, as the best candidate (two canvases, swapped, no copying).
+  function keepBest(score) {
+    const c = spare ?? document.createElement('canvas');
+    c.width = video.videoWidth; c.height = video.videoHeight;
+    c.getContext('2d').drawImage(video, 0, 0);
+    spare = best; best = c; bestScore = score;
+  }
+  function dropBest() {
+    if (best) spare = best;
+    best = null; bestScore = 0; window0 = 0;
+  }
+
+  // auto: the frame on screen right now, or the given one (instant). The button asks the
+  // camera for a full photo, which can take a moment to focus.
+  async function snap(auto = false, from = null) {
     if (busy || reviewing || !video?.videoWidth) return;
     busy = true;
-    const blob = auto ? await frame() : await still();
+    const blob = from ? await toJpeg(from) : auto ? await frame() : await still();
+    dropBest();
     const flash = panel.querySelector('.shot-flash');
     flash.classList.remove('on'); void flash.offsetWidth; flash.classList.add('on');
     navigator.vibrate?.(40);
@@ -192,8 +223,9 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     const c = document.createElement('canvas');
     c.width = video.videoWidth; c.height = video.videoHeight;
     c.getContext('2d').drawImage(video, 0, 0);
-    return new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9));
+    return toJpeg(c);
   }
+  const toJpeg = (c) => new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9));
 
   let torch = false;
   async function toggleTorch() {
@@ -286,6 +318,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   function stopCamera() {
     clearInterval(timer);
     torch = false;
+    best = null; spare = null; bestScore = 0; window0 = 0;
     stream?.getTracks().forEach((tr) => tr.stop());
     stream = null;
   }
