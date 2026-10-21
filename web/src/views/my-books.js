@@ -1,9 +1,11 @@
 import { api, getMe } from '../api.js';
 import { navigate } from '../nav.js';
 import { esc, timeAgo, toast, confirmDialog } from '../ui.js';
-import { t } from '../i18n.js';
+import { t, lang } from '../i18n.js';
+import { enqueue } from '../queue.js';
 import { placeBook, ownerLabel } from '../mybooks.js';
 import { bookShots, sendCovers } from '../shots.js';
+import { burstShots } from '../burst.js';
 import { rememberList } from '../pager.js';
 
 // The reader's own books, scanned at home. Later, "I left it in a library" reports it there.
@@ -70,9 +72,10 @@ export default async function myBooksView(root) {
   showLists();
 }
 
-// Adding books: one way only — photograph the front and the back, book after book.
-// A barcode the camera catches adds the book at once; anything else is read from the
-// covers in the background and waits in the approval queue, to confirm or fix.
+// Adding books: photograph the front and the back, book after book (a barcode the camera
+// catches adds the book at once; anything else is read from the covers), or the shelves
+// with photos taken by themselves (burst.js), read for spines. All but caught barcodes
+// are read in the background and wait in the approval queue, to confirm or fix.
 export async function addMyBooksView(root) {
   const me = await getMe();
   if (!me) return navigate('/login?next=/books/add', { replace: true });
@@ -82,10 +85,12 @@ export async function addMyBooksView(root) {
     <h1>${t('mybooks.add_title')}</h1>
     <div class="big-actions">
       <button class="big-btn primary" data-shots="start"><span>📕</span><b>${t('mybooks.add_big')}</b><small>${t('mybooks.add_big_note')}</small></button>
+      <button class="big-btn" id="burst"><span>📸</span><b>${t('mybooks.shelf_big')}</b><small>${t('add3.burst_note')}</small></button>
     </div>
     <p class="note">${t('mybooks.add_how')}</p>
     <p class="muted small">💡 ${t('mybooks.add_tips')}</p>
     <div class="shots" id="shots" hidden></div>
+    <div class="shots" id="burst-panel" hidden></div>
     <p id="queue-link"></p>
   </section>`;
   const queueLink = root.querySelector('#queue-link');
@@ -93,7 +98,7 @@ export async function addMyBooksView(root) {
     queueLink.innerHTML = c.open + c.later || c.processing ? `<a class="btn" href="/queue">📥 ${t('queue.link', c)}</a>` : '';
   }).catch(() => {});
   showQueue();
-  const shots = bookShots({ on: root, panel: root.querySelector('#shots'), onBook: async ({ front, back, isbn }) => {
+  const shots = bookShots({ on: root, panel: root.querySelector('#shots'), onStart: () => burst.stop(), onBook: async ({ front, back, isbn }) => {
     if (isbn && navigator.onLine) {
       const fd = new FormData();
       fd.append('isbn', isbn);
@@ -110,5 +115,32 @@ export async function addMyBooksView(root) {
     showQueue();
     return line;
   } });
-  return () => shots.stop();
+  const burst = burstShots({ panel: root.querySelector('#burst-panel'), onBatch: async (blobs) => {
+    const line = await sendShelf(blobs);
+    showQueue();
+    return line;
+  } });
+  root.querySelector('#burst').onclick = async () => {
+    shots.stop();
+    if (!await burst.start()) toast(t('burst.no_camera'));
+  };
+  return () => { shots.stop(); burst.stop(false); };
+}
+
+// Shelf photos taken at home: read for spines; the books found wait in the queue.
+async function sendShelf(blobs) {
+  const files = Object.fromEntries(blobs.map((b, i) => [`photo${i}`, b]));
+  const fields = { owner: 'mine', lang: lang() };
+  try {
+    if (!navigator.onLine) throw new TypeError('offline');
+    const fd = new FormData();
+    Object.entries(fields).forEach(([k, v]) => fd.append(k, v));
+    Object.entries(files).forEach(([k, b]) => fd.append(k, b, `${k}.jpg`));
+    await api('/api/my-books/scans', { method: 'POST', form: fd });
+    return `📤 ${esc(t('add3.photos_n', { n: blobs.length }))} — ${t('shots.reading_later')}`;
+  } catch (err) {
+    if (!(err instanceof TypeError)) return `⚠️ ${esc(err.status === 413 ? t('addbook.too_large') : err.message)}`;
+    await enqueue('/api/my-books/scans', fields, files, 'shelf');
+    return `💾 ${t('bc.saved_offline')}`;
+  }
 }

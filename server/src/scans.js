@@ -32,54 +32,15 @@ const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 const MAX_PHOTO_BYTES = 15 * 1024 * 1024;
 
 export default async function scanRoutes(app) {
-  // Shelf photos (up to 8) or one short video. Processed in the background.
-  app.post('/api/locations/:code/scans', {
-    preHandler: requireUser(),
-    bodyLimit: MAX_VIDEO_BYTES + 1024 * 1024,
-    config: { rateLimit: { max: 30, timeWindow: '1 hour' } },
-  }, async (req, reply) => {
+  // Shelf photos (up to 8) or one short video. Processed in the background. At a library,
+  // or with no library at home: the books found then become the reader's own (My books).
+  const shelf = { preHandler: requireUser(), bodyLimit: MAX_VIDEO_BYTES + 1024 * 1024, config: { rateLimit: { max: 30, timeWindow: '1 hour' } } };
+  app.post('/api/locations/:code/scans', shelf, async (req, reply) => {
     const loc = await locationByCode(req.params.code);
     if (!visibleTo(loc, req.user) || loc.status === 'removed') return reply.code(404).send({ error: 'not_found' });
-    if (!req.isMultipart()) return reply.code(400).send({ error: 'multipart_required' });
-
-    const id = crypto.randomUUID();
-    const dir = join(MEDIA_DIR, id);
-    await mkdir(dir, { recursive: true });
-    const media = [];
-    const fields = {};
-    try {
-      for await (const part of req.parts({ limits: { files: MAX_PHOTOS + 1, fileSize: MAX_VIDEO_BYTES } })) {
-        if (part.type !== 'file') { fields[part.fieldname] = part.value; continue; }
-        const ext = (part.filename ?? '').split('.').pop().toLowerCase();
-        const isVideo = part.mimetype?.startsWith('video/') || ['mp4', 'mov', 'webm', 'm4v', '3gp'].includes(ext);
-        const isImage = part.mimetype?.startsWith('image/') || ['jpg', 'jpeg', 'png', 'heic', 'webp'].includes(ext);
-        if (!isVideo && !isImage) { part.file.resume(); continue; }
-        if (isVideo && media.some((m) => m.type === 'video')) { part.file.resume(); continue; }
-        const name = `${media.length}.${isVideo ? 'video' : 'img'}`;
-        await pipeline(part.file, createWriteStream(join(dir, name)));
-        if (part.file.truncated || (!isVideo && part.file.bytesRead > MAX_PHOTO_BYTES)) throw Object.assign(new Error('too_large'), { statusCode: 413 });
-        media.push({ path: name, type: isVideo ? 'video' : 'image' });
-      }
-    } catch (err) {
-      await rm(dir, { recursive: true, force: true });
-      const status = err.statusCode === 413 || err.code === 'FST_REQ_FILE_TOO_LARGE' ? 413 : 400;
-      return reply.code(status).send({ error: status === 413 ? 'too_large' : 'bad_upload' });
-    }
-    if (!media.length) {
-      await rm(dir, { recursive: true, force: true });
-      return reply.code(400).send({ error: 'no_media' });
-    }
-    const distance = await distanceTo(loc.id, parseLatLon(fields.lat, fields.lon));
-    const kind = fields.kind === 'added' ? 'added' : 'seen';
-    const lang = fields.lang === 'en' ? 'en' : 'he';
-    await q(
-      `INSERT INTO scans(id, location_id, user_id, kind, media, distance_m, lang, source) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [id, loc.id, req.user.id, kind, JSON.stringify(media), distance, lang, media.some((m) => m.type === 'video') ? 'video' : 'photo'],
-    );
-    wake();
-    const ahead = (await one(`SELECT count(*)::int AS n FROM scans WHERE status IN ('queued','processing') AND id <> $1`, [id])).n;
-    return { scan: { id, status: 'queued', images: media.filter((m) => m.type === 'image').length, video: media.some((m) => m.type === 'video'), ahead } };
+    return receiveShelf(req, reply, loc);
   });
+  app.post('/api/my-books/scans', shelf, (req, reply) => receiveShelf(req, reply, null));
 
   // The front and back covers of one book no catalogue knew (or with no barcode): read in
   // the background, then the book waits in the queue. Without a library code the book
@@ -234,6 +195,48 @@ export default async function scanRoutes(app) {
   });
 }
 
+async function receiveShelf(req, reply, loc) {
+  if (!req.isMultipart()) return reply.code(400).send({ error: 'multipart_required' });
+  const id = crypto.randomUUID();
+  const dir = join(MEDIA_DIR, id);
+  await mkdir(dir, { recursive: true });
+  const media = [];
+  const fields = {};
+  try {
+    for await (const part of req.parts({ limits: { files: MAX_PHOTOS + 1, fileSize: MAX_VIDEO_BYTES } })) {
+      if (part.type !== 'file') { fields[part.fieldname] = part.value; continue; }
+      const ext = (part.filename ?? '').split('.').pop().toLowerCase();
+      const isVideo = part.mimetype?.startsWith('video/') || ['mp4', 'mov', 'webm', 'm4v', '3gp'].includes(ext);
+      const isImage = part.mimetype?.startsWith('image/') || ['jpg', 'jpeg', 'png', 'heic', 'webp'].includes(ext);
+      if (!isVideo && !isImage) { part.file.resume(); continue; }
+      if (isVideo && media.some((m) => m.type === 'video')) { part.file.resume(); continue; }
+      const name = `${media.length}.${isVideo ? 'video' : 'img'}`;
+      await pipeline(part.file, createWriteStream(join(dir, name)));
+      if (part.file.truncated || (!isVideo && part.file.bytesRead > MAX_PHOTO_BYTES)) throw Object.assign(new Error('too_large'), { statusCode: 413 });
+      media.push({ path: name, type: isVideo ? 'video' : 'image' });
+    }
+  } catch (err) {
+    await rm(dir, { recursive: true, force: true });
+    const status = err.statusCode === 413 || err.code === 'FST_REQ_FILE_TOO_LARGE' ? 413 : 400;
+    return reply.code(status).send({ error: status === 413 ? 'too_large' : 'bad_upload' });
+  }
+  if (!media.length) {
+    await rm(dir, { recursive: true, force: true });
+    return reply.code(400).send({ error: 'no_media' });
+  }
+  const distance = loc ? await distanceTo(loc.id, parseLatLon(fields.lat, fields.lon)) : null;
+  const kind = fields.kind === 'added' ? 'added' : 'seen';
+  const lang = fields.lang === 'en' ? 'en' : 'he';
+  await q(
+    `INSERT INTO scans(id, location_id, user_id, kind, media, distance_m, lang, source, owner, friend_name) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [id, loc?.id ?? null, req.user.id, kind, JSON.stringify(media), distance, lang, media.some((m) => m.type === 'video') ? 'video' : 'photo',
+      ...(loc ? [null, null] : Object.values(ownerOf(fields)))],
+  );
+  wake();
+  const ahead = (await one(`SELECT count(*)::int AS n FROM scans WHERE status IN ('queued','processing') AND id <> $1`, [id])).n;
+  return { scan: { id, status: 'queued', images: media.filter((m) => m.type === 'image').length, video: media.some((m) => m.type === 'video'), ahead } };
+}
+
 async function ownScan(req) {
   if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) return null;
   const scan = await one(
@@ -276,16 +279,18 @@ const READY_TEXT = {
 async function emailFinished() {
   const rows = await many(
     `UPDATE scans s SET notified_at = now()
-       FROM users u, locations l
-      WHERE s.user_id = u.id AND l.id = s.location_id AND s.notified_at IS NULL AND s.source <> 'cover'
+       FROM users u
+      WHERE s.user_id = u.id AND s.notified_at IS NULL AND s.source <> 'cover'
         AND s.status IN ('done','confirmed','failed') AND s.finished_at < now() - interval '2 minutes'
         AND s.finished_at > now() - interval '1 day'
-      RETURNING s.id, s.status, s.lang, u.email, l.code,
+      RETURNING s.id, s.status, s.lang, u.email, (SELECT code FROM locations WHERE id = s.location_id) AS code,
                 (SELECT count(*)::int FROM scan_items i WHERE i.scan_id = s.id) AS n`,
   );
   for (const r of rows) {
     const T = READY_TEXT[r.lang === 'en' ? 'en' : 'he'][r.status !== 'failed' && r.n ? 'done' : 'failed'];
-    const url = r.status !== 'failed' && r.n ? `${config.baseUrl}/l/${r.code}/check` : `${config.baseUrl}/l/${r.code}/add`;
+    // From home (My books): the books wait in the queue.
+    const url = !r.code ? `${config.baseUrl}${r.status !== 'failed' && r.n ? '/queue' : '/books/add'}`
+      : r.status !== 'failed' && r.n ? `${config.baseUrl}/l/${r.code}/check` : `${config.baseUrl}/l/${r.code}/add`;
     await sendMail({ to: r.email, subject: T.subject, text: T.body(r.n, url) }, log);
   }
 }

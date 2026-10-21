@@ -514,3 +514,7 @@ body::after { content: ''; position: fixed; z-index: 3000; left: 0; right: 0; bo
 .trace pre { white-space: pre-wrap; word-break: break-word; background: var(--paper); padding: 6px 8px; border-radius: 4px; margin: 4px 0; }
 .trace ol.books { margin: 4px 0; padding-inline-start: 22px; }
 @media (max-width: 600px) { .trace .callbody { flex-direction: column; } }
+.burst-count { position: absolute; inset-inline-end: 10px; bottom: 10px; min-width: 40px; padding: 4px 10px; border-radius: 20px; background: rgba(0, 0, 0, .65); color: #fff; font-weight: 700; text-align: center; }
+.burst-thumbs { display: flex; gap: 6px; overflow-x: auto; margin: 6px 0; }
+.burst-thumbs img { height: 64px; border-radius: 6px; flex: none; }
+.burst .shot-hint { inset-inline-start: 64px; }
