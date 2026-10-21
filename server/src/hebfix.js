@@ -74,3 +74,13 @@ export async function knownShare(text) {
     return null;
   }
 }
+
+// The vision model sometimes writes Hebrew back to front (each line in the order the
+// letters stand on the picture, left to right), mostly on tilted photos. Turned round
+// when that gives clearly more words hspell knows.
+export async function unreverse(text) {
+  if (!/[֐-׿]/.test(text)) return text;
+  const flipped = text.split('\n').map((l) => [...l].reverse().join('')).join('\n');
+  const [a, b] = await Promise.all([knownShare(text), knownShare(flipped)]);
+  return a != null && b != null && b > a + 0.3 ? flipped : text;
+}

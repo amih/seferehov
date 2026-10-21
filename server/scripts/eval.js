@@ -32,7 +32,7 @@ import { extname, join, resolve } from 'node:path';
 import sharp from 'sharp';
 import { config } from '../src/config.js';
 import { many, pool } from '../src/db.js';
-import { fixHebrew, knownShare } from '../src/hebfix.js';
+import { fixHebrew, knownShare, unreverse } from '../src/hebfix.js';
 import { makeSynth } from './eval-synth.js';
 import { generate, parseBooks, prepare, readCrop, suryaRead, tesseract, SPINE_PROMPT, TEXT_PROMPT } from '../src/vision.js';
 import { charAccuracy, mean, median, titleFound, TITLE_HIT, wordAccuracy, wordsFound, wordsReal } from './eval-score.js';
@@ -140,7 +140,7 @@ async function label() {
 }
 
 const COVER_ENGINES = {
-  vlm: async (buf) => (await generate(await prepare(buf, 0, 1600), TEXT_PROMPT, 1200)).trim(),
+  vlm: async (buf) => unreverse((await generate(await prepare(buf, 0, 1600), TEXT_PROMPT, 1200)).trim()),
   tesseract: (buf) => tesseract(buf),
   surya: async (buf) => (await suryaRead(buf)).text?.trim() ?? '',
 };

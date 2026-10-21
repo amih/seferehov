@@ -1,5 +1,5 @@
 import sharp from 'sharp';
-import { fixHebrew, LOOKALIKE } from './hebfix.js';
+import { fixHebrew, LOOKALIKE, unreverse } from './hebfix.js';
 import { readBarcodes } from 'zxing-wasm/reader';
 import { config } from './config.js';
 import { normalizeIsbn, normalizeDanacode } from './util.js';
@@ -116,7 +116,7 @@ export function parsePrintedCode(answer) {
 // text it cannot make out, but copies Latin print almost perfectly.
 export const TEXT_PROMPT = 'Transcribe all the text printed on this book cover, exactly as printed, in its original language and script (do not translate). Keep paragraphs. Skip barcodes. Output only the text.';
 export async function readCoverText(buffer) {
-  const text = (await generate(await prepare(buffer, 0, 1600), TEXT_PROMPT, 1200)).trim();
+  const text = await unreverse((await generate(await prepare(buffer, 0, 1600), TEXT_PROMPT, 1200)).trim());
   if (!/[\u0590-\u05FF]/.test(text)) {
     await step('cover-text', { note: 'no Hebrew in the vision model\'s reading: it is used as it is', text });
     return { text, hebrew: false };
