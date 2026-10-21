@@ -13,7 +13,7 @@ Skip spines you cannot read. Do not repeat a book. After the last book write END
 const MAX_LINES = 60;
 
 // Long side ~1280 px keeps spine text legible without blowing the context window.
-async function prepare(buffer, angle, size = 1280) {
+export async function prepare(buffer, angle, size = 1280) {
   return sharp(buffer).rotate().rotate(angle)
     .resize(size, size, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 88 }).toBuffer();
 }
@@ -108,7 +108,7 @@ export function parsePrintedCode(answer) {
 // All the text printed on one cover photo, for the book page. Hebrew is read by Surya
 // OCR (ocr/surya_server.py; Tesseract if it is down): the vision model invents Hebrew
 // text it cannot make out, but copies Latin print almost perfectly.
-const TEXT_PROMPT = 'Transcribe all the text printed on this book cover, exactly as printed, in its original language and script (do not translate). Keep paragraphs. Skip barcodes. Output only the text.';
+export const TEXT_PROMPT = 'Transcribe all the text printed on this book cover, exactly as printed, in its original language and script (do not translate). Keep paragraphs. Skip barcodes. Output only the text.';
 export async function readCoverText(buffer) {
   const text = (await generate(await prepare(buffer, 0, 1600), TEXT_PROMPT, 1200)).trim();
   if (!/[\u0590-\u05FF]/.test(text)) return { text, hebrew: false };
@@ -121,14 +121,14 @@ async function surya(buffer) {
 }
 // { text, lines, boxes: [{ text, bbox: [x1, y1, x2, y2], confidence }] } in the pixels
 // of the picture as sent (upright, at most 2400 px).
-async function suryaRead(buffer) {
+export async function suryaRead(buffer) {
   const jpeg = await sharp(buffer).rotate().resize(2400, 2400, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 92 }).toBuffer();
   const res = await fetch(`${config.ocrUrl}/ocr`, { method: 'POST', body: jpeg, signal: AbortSignal.timeout(300_000) });
   if (!res.ok) throw new Error(`ocr ${res.status}`);
   return res.json();
 }
 
-async function tesseract(buffer) {
+export async function tesseract(buffer) {
   const { execFile } = await import('node:child_process');
   const png = await sharp(buffer).rotate().resize(2400, 2400, { fit: 'inside' }).grayscale().png().toBuffer();
   return new Promise((resolve, reject) => {
@@ -149,7 +149,7 @@ export async function coverCorners(buffer) {
   return pts.length === 4 ? pts : null;
 }
 
-async function generate(jpeg, prompt, numPredict) {
+export async function generate(jpeg, prompt, numPredict) {
   const res = await fetch(`${config.vision.url}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -164,7 +164,7 @@ async function generate(jpeg, prompt, numPredict) {
 }
 
 const MAX_SPINES = 30;
-const SPINE_PROMPT = 'This is one book spine or cover. Read its title and author exactly as printed, in the original language and script. Answer one line: TITLE | AUTHOR. If unreadable answer NONE.';
+export const SPINE_PROMPT = 'This is one book spine or cover. Read its title and author exactly as printed, in the original language and script. Answer one line: TITLE | AUTHOR. If unreadable answer NONE.';
 const iou = (a, b) => {
   const w = Math.min(a[2], b[2]) - Math.max(a[0], b[0]);
   const h = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
@@ -255,7 +255,7 @@ async function findSpine(upright, W, H, title) {
 // (verified: null). title: the book we are looking for (findSpine), read by the
 // vision model elsewhere.
 const ORIENT_OK = 0.5;
-async function readCrop(img, w, h, title = null) {
+export async function readCrop(img, w, h, title = null) {
   const spine = h > w * 1.3;
   const angles = spine ? [270, 90] : [0, 180];
   const tries = await Promise.all(angles.map(async (angle) => {
