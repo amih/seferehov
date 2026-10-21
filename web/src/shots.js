@@ -27,7 +27,8 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   let prev = null, steady = 0, moved = true, since = 0, lastSharp = 0;
   // The sharpest full-size frame so far while the book is held roughly still, and since when.
   let best = null, bestScore = 0, spare = null, window0 = 0;
-  const BEST_MS = 1200;
+  const BEST_MS = 800;
+  let peak = 0, shotGrey = null, ready = 0; // ready: since when a photo may be taken // the recent sharpest (decays): sharp is judged against it, not a fixed number
   let refresh = () => {};
 
   const title = (k) => { const el = panel.querySelector('.shot-title'); if (el) el.textContent = k ? t(k) : ''; };
@@ -125,8 +126,9 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   // Still and sharp? Movement = mean change of a small grey copy between ticks;
   // sharpness = variance of its Laplacian (text and edges in focus score high).
   // Sharpness is measured inside the guide frame, where the cover is, so a sharp table
-  // around a small, far-away book does not count. Two still ticks in a row (a quarter of
-  // a second) are enough; meanwhile, every frame that is roughly still is a candidate,
+  // around a small, far-away book does not count. Sharp enough = near the sharpest seen
+  // lately (no fixed number: plain or square covers score low). Two still ticks in a row
+  // (a quarter of a second) are enough; meanwhile, every frame that is roughly still is a candidate,
   // and a moment after the first one the sharpest of them is taken — shaking hands,
   // a white cover read as a reflection or a camera that keeps refocusing then no
   // longer hold up the photo.
@@ -164,16 +166,31 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     const hintEl = panel.querySelector('.shot-hint');
     hintEl.hidden = !hint;
     if (hint) hintEl.textContent = t(hint);
+    // Moved on since the last photo: the picture now differs from it (however slowly the
+    // book was turned), and a sharpness peak of the last side no longer counts.
+    if (!moved && shotGrey?.length === g.length) {
+      let d = 0; for (let i = 0; i < g.length; i++) d += Math.abs(g[i] - shotGrey[i]);
+      if (d / g.length > 15) { moved = true; peak = 0; }
+    }
+    peak = Math.max(sharp, peak * 0.97);
     // A big change = a different picture: the frames kept so far are no longer of it.
-    if (diff > 10) { moved = true; steady = 0; dropBest(); } else if (diff < 3.5) steady++; else steady = 0;
+    // (A book held in one hand shakes by up to ~20; turning it over or the next book is far more.)
+    if (diff > 35) { moved = true; steady = 0; dropBest(); } else if (diff < 5) steady++; else steady = 0;
     // After a photo, the book has to move (turned over, or the next one) before the next.
     // Not while the camera is still focusing (sharpness still changing from tick to tick).
     const focused = Math.abs(sharp - lastSharp) <= 0.15 * Math.max(sharp, lastSharp);
     lastSharp = sharp;
-    if (!moved || Date.now() <= since) { dropBest(); return; }
-    if (!hint && sharp > 15 && focused && steady >= 2) { snap(true); return; }
-    if (diff < 8 && sharp > 8) {
-      const score = sharp * (1 - Math.min(0.5, (5 * burnt) / g.length)) * (focused ? 1 : 0.8);
+    if (!moved || Date.now() <= since) { dropBest(); ready = 0; return; }
+    ready ||= Date.now();
+    // Plain covers (one colour, little print) and small or square books leave less detail
+    // in the frame: sharp enough = near the recent best, above a low floor.
+    const sharpEnough = sharp > 5 && sharp >= 0.8 * peak;
+    if (!hint && sharpEnough && focused && steady >= 2) { snap(true); return; }
+    // The longer the wait, the more shake a candidate may have (a hand that never quite
+    // holds still still gets its photo within a second or two); the stillest win.
+    const limit = Math.min(30, 10 + 12 * (Date.now() - ready) / 1000);
+    if (diff < limit && sharp > 3) {
+      const score = sharp / (1 + diff / 4) * (1 - Math.min(0.5, (5 * burnt) / g.length)) * (focused ? 1 : 0.8);
       if (score > bestScore) keepBest(score);
       window0 ||= Date.now();
     }
@@ -202,7 +219,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     const flash = panel.querySelector('.shot-flash');
     flash.classList.remove('on'); void flash.offsetWidth; flash.classList.add('on');
     navigator.vibrate?.(40);
-    moved = false; steady = 0; since = Date.now() + 300;
+    moved = false; steady = 0; since = Date.now() + 300; shotGrey = prev; peak = 0;
     took(blob);
     busy = false;
   }
@@ -255,7 +272,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   function took(blob) {
     if (side === 'front') front = blob; else back = blob;
     if (side === 'front' && !session.only && !back) { side = 'back'; animate('turn'); }
-    else if (side === 'back' && stream && !liveCode && !preset) { hunting = true; huntUntil = Date.now() + 6000; }
+    else if (side === 'back' && stream && !liveCode && !preset) { hunting = true; huntUntil = Date.now() + 4000; }
     else reviewing = true;
     refresh();
   }
