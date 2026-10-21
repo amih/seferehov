@@ -518,3 +518,11 @@ body::after { content: ''; position: fixed; z-index: 3000; left: 0; right: 0; bo
 .burst-thumbs { display: flex; gap: 6px; overflow-x: auto; margin: 6px 0; }
 .burst-thumbs img { height: 64px; border-radius: 6px; flex: none; }
 .burst .shot-hint { inset-inline-start: 64px; }
+.seg a { background: var(--card); color: var(--ink); padding: 8px 14px; text-decoration: none; }
+.seg a.on { background: var(--wood); color: #fff; }
+.offer-form { display: grid; gap: 10px; }
+.offer-form label { display: grid; gap: 4px; }
+.offer-form input, .offer-form select, .dialog textarea { font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); width: 100%; box-sizing: border-box; }
+.offer-tag { color: var(--wood); font-weight: 600; }
+ul.offers { padding-inline-start: 18px; }
+ul.offers li { margin-bottom: 10px; }

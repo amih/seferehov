@@ -23,6 +23,7 @@ async function open() {
     ['🗺️', 'menu.map', '/'],
     ['🔍', 'menu.search', '/search'],
     ['📚', 'menu.mybooks', '/books'],
+    ['🏷️', 'menu.offers', '/offers'],
     ['➕', 'menu.add', '/add'],
     ['🏆', 'menu.top', '/top'],
     ['🌍', 'menu.places', '/places'],

@@ -11,13 +11,15 @@ import { parseLatLon } from './util.js';
 import { bookDetails, missingParts } from './details.js';
 
 const LIST_SQL = `
-  SELECT m.id, m.created_at, m.placed_at, m.owner, m.friend_name, b.id AS book_id, b.isbn13, b.title, b.authors, b.year,
+  SELECT m.id, m.created_at, m.placed_at, m.owner, m.friend_name, m.offer, m.price, m.condition, m.offer_note,
+         m.offer_place_id, op.name AS offer_place, op.name_he AS offer_place_he, b.id AS book_id, b.isbn13, b.title, b.authors, b.year,
          COALESCE(b.front_url, b.cover_url) AS cover_url, p.path, p.thumb_path,
          l.code, l.name AS location_name, s.status AS sighting_status
     FROM my_books m JOIN books b ON b.id = m.book_id
     LEFT JOIN photos p ON p.id = m.photo_id
     LEFT JOIN locations l ON l.id = m.location_id
-    LEFT JOIN sightings s ON s.id = m.sighting_id`;
+    LEFT JOIN sightings s ON s.id = m.sighting_id
+    LEFT JOIN places op ON op.id = m.offer_place_id`;
 const publicRow = ({ path, thumb_path, ...r }) => ({ ...r, photo: path ? photoUrls({ path, thumb_path }) : null });
 
 // Whose book: the reader's own, a friend's at the friend's home, or borrowed from a friend.

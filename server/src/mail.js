@@ -10,10 +10,10 @@ const transport = config.smtp.host
     })
   : null;
 
-export async function sendMail({ to, subject, text }, log) {
+export async function sendMail({ to, subject, text, replyTo }, log) {
   if (!transport) {
     log.info({ to, subject }, `mail (SMTP not configured):\n${text}`);
     return;
   }
-  await transport.sendMail({ from: config.smtp.from, to, subject, text });
+  await transport.sendMail({ from: config.smtp.from, to, subject, text, ...(replyTo ? { replyTo } : {}) });
 }

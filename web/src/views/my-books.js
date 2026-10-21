@@ -6,6 +6,7 @@ import { enqueue } from '../queue.js';
 import { placeBook, ownerLabel } from '../mybooks.js';
 import { bookShots, sendCovers } from '../shots.js';
 import { burstShots } from '../burst.js';
+import { offerDialog, offerLine } from '../offers.js';
 import { rememberList } from '../pager.js';
 
 // The reader's own books, scanned at home. Later, "I left it in a library" reports it there.
@@ -34,10 +35,13 @@ export default async function myBooksView(root) {
     try { d = await api('/api/my-books'); } catch { $('#lists').innerHTML = `<p class="note">${t('offline')}</p>`; return; }
     $('#lists').innerHTML = `
       <h2>${t('mybooks.home')} <span class="count">${d.home.length}</span></h2>
+      ${d.home.length ? `<p class="muted small">${t('offer.lead')} <a href="/offers">${t('offer.all_link')}</a></p>` : ''}
       ${d.home.length ? `<ul class="books">${d.home.map((r) => `
         <li data-id="${r.id}"><a href="/books/${r.id}" data-book>${cover(r)}</a><div class="meta">
           <a class="title-link" href="/books/${r.id}" data-book><strong>${esc(r.title)}</strong></a><span class="muted">${esc((r.authors ?? []).join(', '))}</span>
+          ${offerLine(r)}
           <span class="row"><button class="btn small primary" data-place="${r.id}">📍 ${t('mybooks.left_it')}</button>
+          <button class="btn small" data-offer="${r.id}">${r.offer ? `✎ ${t('offer.edit')}` : `🏷️ ${t('offer.btn')}`}</button>
           <button class="btn small" data-del="${r.id}" aria-label="${esc(t('mybooks.remove'))}">✕</button></span></div></li>`).join('')}</ul>`
         : `<p class="muted small">${t('mybooks.empty2')}</p>`}
       ${d.friends.length ? `<h2>${t('owner.friends_title')} <span class="count">${d.friends.length}</span></h2>
@@ -56,8 +60,11 @@ export default async function myBooksView(root) {
   }
   let homeRows = [];
   $('#lists').addEventListener('click', async (e) => {
-    const p = e.target.closest('[data-place]'), del = e.target.closest('[data-del]');
-    if (p) {
+    const p = e.target.closest('[data-place]'), del = e.target.closest('[data-del]'), off = e.target.closest('[data-offer]');
+    if (off) {
+      const item = homeRows.find((r) => r.id === Number(off.dataset.offer));
+      if (item && await offerDialog(item)) showLists();
+    } else if (p) {
       const item = homeRows.find((r) => r.id === Number(p.dataset.place));
       if (item && await placeBook(item)) showLists();
     } else if (del) {

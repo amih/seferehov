@@ -85,7 +85,8 @@ export default async function finderRoutes(app) {
     return { books: await searchBooks({ text, pos, km, lang: req.query.lang === 'en' ? 'en' : 'he', userId: req.user?.id }) };
   });
 
-  // Towns with libraries, for "search around a town" when the reader does not share a location.
+  // Towns with libraries, for "search around a town" when the reader does not share a
+  // location; any=1: every town (where an offered book is).
   app.get('/api/places/search', async (req) => {
     const text = String(req.query.q ?? '').trim().slice(0, 60);
     if (text.length < 2) return { places: [] };
@@ -93,8 +94,8 @@ export default async function finderRoutes(app) {
       `SELECT p.id, p.name, p.name_he, p.country, ST_Y(p.geom::geometry) AS lat, ST_X(p.geom::geometry) AS lon
          FROM places p
         WHERE (p.name ILIKE $1 || '%' OR p.name_he LIKE $1 || '%')
-          AND EXISTS (SELECT 1 FROM locations l WHERE l.place_id = p.id AND l.status = 'approved')
-        ORDER BY p.population DESC LIMIT 8`, [text]);
+          AND ($2 OR EXISTS (SELECT 1 FROM locations l WHERE l.place_id = p.id AND l.status = 'approved'))
+        ORDER BY p.population DESC LIMIT 8`, [text, req.query.any === '1']);
     return { places };
   });
 

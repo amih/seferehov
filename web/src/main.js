@@ -31,6 +31,7 @@ import duplicatesView from './views/duplicates.js';
 import duplicateLibrariesView from './views/duplicate-libraries.js';
 import fixesView from './views/fixes.js';
 import traceView from './views/trace.js';
+import offersView from './views/offers.js';
 
 const routes = [
   [/^\/$/, mapView],
@@ -46,6 +47,7 @@ const routes = [
   [/^\/books$/, myBooksView],
   [/^\/books\/add$/, addMyBooksView],
   [/^\/books\/(\d+)$/, myBookView],
+  [/^\/offers$/, offersView],
   [/^\/duplicates$/, duplicatesView],
   [/^\/duplicate-libraries$/, duplicateLibrariesView],
   [/^\/fixes$/, fixesView],

@@ -19,6 +19,7 @@ import { escapeHtml as esc } from './util.js';
 import { PRESENT_BOOKS_SQL, TAKEN_BOOKS_SQL } from './locations.js';
 import { normTitle } from './vision.js';
 import { BOOK_REVIEWS_SQL, READER_REVIEWS_SQL, QUESTIONS, hasText } from './reviews.js';
+import { OFFERS_SQL } from './offers.js';
 import { translate } from '../../web/src/i18n.js';
 import { levelOf } from '../../web/src/levels.js';
 
@@ -332,6 +333,7 @@ async function bookPage(lng, T, id) {
   if (!libs.length && !owned && !reviewed) return null; // only books readers reported or read have pages
   const photos = await many(BOOK_PHOTOS_SQL, [id]);
   const reviews = await many(BOOK_REVIEWS_SQL, [id]);
+  const offers = await many(`${OFFERS_SQL} AND m.book_id = $1 ORDER BY m.offer, m.price NULLS FIRST LIMIT 30`, [id]);
   const rated = reviews.filter((r) => r.rating);
   const avg = rated.length ? rated.reduce((a, r) => a + r.rating, 0) / rated.length : null;
   const written = reviews.filter((r) => hasText(r.answers));
@@ -378,6 +380,11 @@ async function bookPage(lng, T, id) {
       ${here.length ? `<ul>${here.map((l) => `<li><a href="${withLang(`/l/${l.code}`, lng)}">${esc(l.name || T('free_library'))}</a>${
         l.pname ? ` · ${esc((lng === 'he' && l.pname_he) || l.pname)}` : ''} · ${T('seo.seen_on', { date: fmtDate(l.created_at, lng) })}</li>`).join('')}</ul>`
         : `<p>${T('seo.book_nowhere')}</p>`}
+      ${offers.length ? `<h2>${T('offer.on_page')}</h2><ul class="offers">${offers.map((o) => `<li>
+        <b>${o.offer === 'give' ? `🎁 ${T('offer.give')}` : `🏷️ ${T('offer.sale')} · ₪${o.price}`}</b>${o.condition ? ` · ${T(`offer.cond_${o.condition}`)}` : ''}${
+        o.place ? ` · ${esc((lng === 'he' && o.place_he) || o.place)}` : ''} · <a href="${withLang(readerPath({ id: o.user_id, screen_name: o.screen_name }), lng)}">${esc(o.screen_name)}</a> · ${fmtDate(o.offered_at, lng)}
+        ${o.offer_note ? `<br><span class="small" dir="auto">${esc(o.offer_note)}</span>` : ''}
+        <br><button class="btn small" data-offer-contact="${o.id}" data-give="${o.offer === 'give' ? 1 : 0}">✉️ ${T(o.offer === 'give' ? 'offer.contact_give' : 'offer.contact_sale')}</button></li>`).join('')}</ul>` : ''}
       <h2>${T('seo.book_more')}</h2>
       <ul class="ext-links">${bookLinks(b).map(([n, u]) => `<li><a href="${esc(u)}" rel="noopener nofollow" target="_blank">${esc(n)}</a></li>`).join('')}</ul>
       <hr><p class="small">${T('shelves.note_html')}</p></article>`,
@@ -394,6 +401,9 @@ async function bookPage(lng, T, id) {
       ...(blurb ? { description: blurb.slice(0, 1000) } : {}),
       url: config.baseUrl + bookPath(b),
       ...(b.isbn13 ? { sameAs: [`https://openlibrary.org/isbn/${b.isbn13}`] } : {}),
+      ...(offers.length ? { offers: offers.map((o) => ({ '@type': 'Offer', price: o.offer === 'give' ? 0 : o.price, priceCurrency: 'ILS',
+        itemCondition: `https://schema.org/${o.condition === 'new' ? 'NewCondition' : 'UsedCondition'}`, availability: 'https://schema.org/InStock',
+        ...(o.place ? { availableAtOrFrom: { '@type': 'Place', name: o.place } } : {}) })) } : {}),
       ...(avg ? { aggregateRating: { '@type': 'AggregateRating', ratingValue: avg.toFixed(1), ratingCount: rated.length, bestRating: 5, worstRating: 1 } } : {}),
       ...(written.length ? { review: written.slice(0, 20).map((r) => ({
         '@type': 'Review',
