@@ -97,7 +97,7 @@ form{display:flex;flex-direction:column;padding:12px;gap:8px}textarea{flex:1;fon
 @media(max-width:800px){body{grid-template-columns:1fr;height:auto}textarea{min-height:60vh}}</style>
 <a href="/img/${item.file.slice(4)}" target="_blank"><img src="/img/${item.file.slice(4)}"></a>
 <form method="post" action="/save/${item.id}">
-<div><b>${item.kind === 'back' ? 'Back' : 'Front'} cover</b> · ${esc(item.title ?? '?')} · ${left} left</div>
+<div><b>${item.kind === 'back' ? 'Back' : 'Front'} cover</b> · <bdi>${esc(item.title ?? "?")}</bdi> · ${left} left</div>
 <div>Type every word printed, as printed (skip the barcode). Order does not matter much.</div>
 <textarea name="truth" dir="auto">${esc(item.truth ?? item.draft)}</textarea>
 <div class="row"><button name="do" value="save">✓ Save</button><button name="do" value="skip">Skip (unreadable / not a cover)</button></div>
