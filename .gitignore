@@ -7,3 +7,4 @@ uploads/
 .env.*.local
 server/scan-keep/
 __pycache__/
+server/scan-trace/

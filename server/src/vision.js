@@ -3,6 +3,7 @@ import { fixHebrew } from './hebfix.js';
 import { readBarcodes } from 'zxing-wasm/reader';
 import { config } from './config.js';
 import { normalizeIsbn, normalizeDanacode } from './util.js';
+import { scope, step } from './trace.js';
 
 // One line per book is far more reliable with small local models than JSON.
 const PROMPT = `Read the book spines and covers in this photo. Write one line per distinct book, in the format:
@@ -37,18 +38,22 @@ export async function readBooks(buffer, { spines = true } = {}) {
   try { all.push(...await readSpines(buffer)); } catch { /* keep the whole-image read */ }
   all.push(...await readOnce(await prepare(buffer, 0)));
   const books = mergeBooks(all);
+  await step('merged-reads', { note: 'cut-out reads first, then the whole-image read; repeats merged', books: books.map(brief) });
   // Books only the whole-image read found: find their spine too, so the reader
   // approving them sees the straightened cut-out, not the whole shelf.
   const missing = books.filter((b) => !b.crop).slice(0, MAX_SPINES);
   if (missing.length) {
     const { data: upright, info } = await sharp(buffer).rotate().toBuffer({ resolveWithObject: true });
     for (const b of missing) {
-      try { b.crop = await findSpine(upright, info.width, info.height, b.title); } catch { /* no cut-out */ }
+      try { b.crop = await scope(`find: ${b.title}`, () => findSpine(upright, info.width, info.height, b.title)); } catch { /* no cut-out */ }
       if (b.crop) b.verified = true;
     }
   }
+  await step('frame-result', { books: books.map(brief) });
   return books;
 }
+
+const brief = (b) => ({ title: b.title, author: b.author ?? null, isbn: b.isbn ?? null, quality: b.quality, verified: b.verified, crop: !!b.crop });
 
 // The front and back covers of one book, photographed one after the other: the title and
 // author from the front, the ISBN or Danacode from a barcode (either side) or from the
@@ -76,6 +81,7 @@ export async function readCover(front, back = null) {
   const unique = [...new Set(codes)];
   // Barcodes and ISBNs carry a check digit; a Danacode read from print does not.
   const unchecked = fromBarcodes ? [] : unique.filter((c) => !normalizeIsbn(c));
+  await step('cover-read', { title: book?.title ?? null, author: book?.author ?? null, quality: book?.quality ?? 'low', barcodes: codes.slice(0, fromBarcodes), codes: unique, unchecked });
   return { title: book?.title ?? null, author: book?.author ?? null, quality: book?.quality ?? 'low', isbn: unique[0] ?? null, codes: unique, unchecked };
 }
 
@@ -111,9 +117,14 @@ export function parsePrintedCode(answer) {
 export const TEXT_PROMPT = 'Transcribe all the text printed on this book cover, exactly as printed, in its original language and script (do not translate). Keep paragraphs. Skip barcodes. Output only the text.';
 export async function readCoverText(buffer) {
   const text = (await generate(await prepare(buffer, 0, 1600), TEXT_PROMPT, 1200)).trim();
-  if (!/[\u0590-\u05FF]/.test(text)) return { text, hebrew: false };
+  if (!/[\u0590-\u05FF]/.test(text)) {
+    await step('cover-text', { note: 'no Hebrew in the vision model\'s reading: it is used as it is', text });
+    return { text, hebrew: false };
+  }
   const better = await surya(buffer).catch(() => '') || await tesseract(buffer).catch(() => '');
-  return { text: better ? await fixHebrew(better) : text, hebrew: true };
+  const out = better ? await fixHebrew(better) : text;
+  await step('cover-text', { note: better ? 'Hebrew: OCR reading, then the spell check' : 'Hebrew, but OCR read nothing: the vision model\'s reading', text: out });
+  return { text: out, hebrew: true };
 }
 
 async function surya(buffer) {
@@ -123,9 +134,12 @@ async function surya(buffer) {
 // of the picture as sent (upright, at most 2400 px).
 export async function suryaRead(buffer) {
   const jpeg = await sharp(buffer).rotate().resize(2400, 2400, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 92 }).toBuffer();
+  const t0 = Date.now();
   const res = await fetch(`${config.ocrUrl}/ocr`, { method: 'POST', body: jpeg, signal: AbortSignal.timeout(300_000) });
   if (!res.ok) throw new Error(`ocr ${res.status}`);
-  return res.json();
+  const out = await res.json();
+  await step('ocr', { engine: 'surya', text: out.text ?? '', lines: out.boxes?.map((b) => ({ text: b.text, confidence: b.confidence, bbox: b.bbox })) ?? [], ms: Date.now() - t0 }, { image: jpeg }, { side: 1000 });
+  return out;
 }
 
 export async function tesseract(buffer) {
@@ -133,7 +147,7 @@ export async function tesseract(buffer) {
   const png = await sharp(buffer).rotate().resize(2400, 2400, { fit: 'inside' }).grayscale().png().toBuffer();
   return new Promise((resolve, reject) => {
     const p = execFile('tesseract', ['-', '-', '-l', 'heb+eng', '--psm', '3'], { timeout: 120_000, maxBuffer: 4 << 20 },
-      (err, out) => (err ? reject(err) : resolve(out.trim())));
+      (err, out) => (err ? reject(err) : step('ocr', { engine: 'tesseract', text: out.trim() }).then(() => resolve(out.trim()))));
     p.stdin.end(png);
   });
 }
@@ -150,6 +164,7 @@ export async function coverCorners(buffer) {
 }
 
 export async function generate(jpeg, prompt, numPredict) {
+  const t0 = Date.now();
   const res = await fetch(`${config.vision.url}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -160,7 +175,9 @@ export async function generate(jpeg, prompt, numPredict) {
     signal: AbortSignal.timeout(120_000),
   });
   if (!res.ok) throw new Error(`vision ${res.status}`);
-  return (await res.json()).response ?? '';
+  const answer = (await res.json()).response ?? '';
+  await step('model', { model: config.vision.model, prompt, answer, ms: Date.now() - t0 }, { image: jpeg }, { side: 1000 });
+  return answer;
 }
 
 const MAX_SPINES = 30;
@@ -239,9 +256,10 @@ async function findSpine(upright, W, H, title) {
   }
   const piece = await cut(img, w, h, box, Math.min(box[2] - box[0], box[3] - box[1]) * 0.06 + 6);
   const read = await readCrop(piece, box[2] - box[0], box[3] - box[1], title);
-  if (!read) return null;
   // Surya agreed with the title (verified), or, without Surya, the vision model reads it back.
-  return read.verified || (read.verified === null && sameTitle(read.title, title)) ? read.crop : null;
+  const ok = !!read && (read.verified || (read.verified === null && sameTitle(read.title, title)));
+  await step('find-spine', { note: 'a book only the whole-image read found: located by title, cut out, read back', title, tilt: Math.round(tilt * 10) / 10, verdict: ok ? 'cut-out kept' : 'no cut-out' }, { image: piece });
+  return ok ? read.crop : null;
 }
 
 // One cut-out from a shelf photo: which way up it is, what it says, and a tight
@@ -269,6 +287,7 @@ export async function readCrop(img, w, h, title = null) {
   if (tries.some((x) => !x.ocr?.boxes)) {
     // Surya is down: the vision model's reading alone, the clearer one.
     const ok = tries.filter((x) => x.read).sort((a, b) => (a.read.quality === 'low') - (b.read.quality === 'low'))[0];
+    await step('crop-read', { note: 'Surya is down: the vision model alone', verdict: ok ? 'kept (unverified)' : 'nothing read', angle: ok?.angle ?? null, title: ok?.read?.title ?? null });
     return ok ? { ...ok.read, crop: ok.jpeg, verified: null } : null;
   }
   for (const x of tries) {
@@ -276,9 +295,21 @@ export async function readCrop(img, w, h, title = null) {
     x.lines = want ? x.ocr.boxes.filter((b) => b.confidence >= 0.5).map((b) => ({ ...b, score: Math.max(overlap(want.title, b.text), 0.8 * overlap(want.author, b.text)) })) : [];
     x.score = Math.max(0, ...x.lines.map((b) => b.score));
   }
+  const order = [...tries];
   const best = tries.sort((a, b) => b.score - a.score)[0];
-  if (best.score < ORIENT_OK) return best.read ? { ...best.read, crop: null, verified: false } : null;
-  return { ...(best.read ?? { title, author: null, isbn: null, quality: 'medium' }), crop: spine ? await band(best.jpeg, best.lines) : best.jpeg, verified: true };
+  const report = (verdict, images = {}) => step('crop-read', {
+    note: `vision model and Surya read it ${spine ? 'turned both ways (270° and 90°)' : 'upright and upside down'}; kept the way where Surya's lines match the model's title (score ≥ ${ORIENT_OK})`,
+    looking_for: title, verdict, angle: best.angle, score: Math.round(best.score * 100) / 100,
+    tries: order.map((x) => ({ angle: x.angle, read: x.read ? { title: x.read.title, author: x.read.author, quality: x.read.quality } : null, score: Math.round(x.score * 100) / 100,
+      lines: x.lines.map((b) => ({ text: b.text, confidence: Math.round(b.confidence * 100) / 100, score: Math.round(b.score * 100) / 100 })) })),
+  }, images);
+  if (best.score < ORIENT_OK) {
+    await report(best.read ? 'dropped: Surya did not confirm the reading either way up' : 'nothing read');
+    return best.read ? { ...best.read, crop: null, verified: false } : null;
+  }
+  const crop = spine ? await band(best.jpeg, best.lines) : best.jpeg;
+  await report('kept', { crop });
+  return { ...(best.read ?? { title, author: null, isbn: null, quality: 'medium' }), crop, verified: true };
 }
 
 // How much of `want` shows up in `text`: the share of want's letter pairs found in it.
@@ -345,10 +376,14 @@ async function readSpines(buffer) {
   const { width: W, height: H } = info;
   const boxes = (await detect(upright, W, H)).slice(0, MAX_SPINES);
   for (const b of boxes) b.tilt = await dominantTilt(await cut(upright, W, H, b, 4));
+  await step('detect', {
+    note: `the vision model's boxes; lean measured inside each (under 5° = straight)`,
+    W, H, boxes: boxes.map((b) => ({ box: b.slice(0, 4).map(Math.round), tilt: Math.round(b.tilt * 10) / 10 })),
+  }, { image: upright });
 
   const crops = [];
   const straight = boxes.filter((b) => Math.abs(b.tilt) < 5);
-  for (const b of straight) crops.push({ img: await cut(upright, W, H, b, Math.min(b[2] - b[0], b[3] - b[1]) * 0.06 + 6), w: b[2] - b[0], h: b[3] - b[1] });
+  for (const b of straight) crops.push({ img: await cut(upright, W, H, b, Math.min(b[2] - b[0], b[3] - b[1]) * 0.06 + 6), w: b[2] - b[0], h: b[3] - b[1], from: 'straight' });
 
   // Lean groups: tilts within 6° of each other, the biggest groups first.
   const groups = [];
@@ -357,7 +392,7 @@ async function readSpines(buffer) {
     if (g && b.tilt - g[0].tilt < 6) g.push(b); else groups.push([b]);
   }
   groups.sort((a, z) => z.length - a.length);
-  for (const g of groups.slice(0, MAX_TILT_GROUPS)) {
+  for (const [gi, g] of groups.slice(0, MAX_TILT_GROUPS).entries()) {
     const tilt = g.reduce((acc, b) => acc + b.tilt, 0) / g.length;
     const turned = await sharp(upright).rotate(-tilt, { background: '#ffffff' }).toBuffer({ resolveWithObject: true });
     const { width: W2, height: H2 } = turned.info;
@@ -372,15 +407,23 @@ async function readSpines(buffer) {
     };
     let found = [];
     try { found = (await detect(turned.data, W2, H2)).filter(inArea); } catch { /* fall back to the leaning boxes */ }
-    if (!found.length) found = area;
+    const fallback = !found.length;
+    if (fallback) found = area;
+    await step('lean-group', {
+      note: fallback ? 'no boxes found in the turned photo: the leaning boxes are used' : 'photo turned upright for this lean, boxes found again',
+      tilt: Math.round(tilt * 10) / 10, boxes_in_group: g.length, W: W2, H: H2, area: area.map((a) => a.map(Math.round)), boxes: found.map((b) => ({ box: b.slice(0, 4).map(Math.round) })),
+    }, { image: turned.data });
     for (const b of found.slice(0, MAX_SPINES)) {
-      crops.push({ img: await cut(turned.data, W2, H2, b, Math.min(b[2] - b[0], b[3] - b[1]) * 0.06 + 6), w: b[2] - b[0], h: b[3] - b[1] });
+      crops.push({ img: await cut(turned.data, W2, H2, b, Math.min(b[2] - b[0], b[3] - b[1]) * 0.06 + 6), w: b[2] - b[0], h: b[3] - b[1], from: `lean group ${gi + 1}` });
     }
   }
 
   const books = [];
-  for (const { img, w, h } of crops.slice(0, MAX_SPINES * 2)) {
-    const b = await readCrop(img, w, h);
+  for (const [k, { img, w, h, from }] of crops.slice(0, MAX_SPINES * 2).entries()) {
+    const b = await scope(`cut-out ${k + 1}`, async () => {
+      await step('cut-out', { from, w: Math.round(w), h: Math.round(h) }, { image: img });
+      return readCrop(img, w, h);
+    });
     // A reading neither way up confirmed by OCR came from a jumble or upside-down print.
     if (b && b.verified !== false) books.push(b);
   }
@@ -469,7 +512,9 @@ async function readOnce(jpeg) {
     clearTimeout(timer);
     ctrl.abort(); // closes the stream; Ollama stops generating
   }
-  return parseBooks(text);
+  const books = parseBooks(text);
+  await step('whole-read', { note: 'the whole picture read at once (stops early if the model repeats a line)', prompt: PROMPT, answer: text, books: books.map(brief) }, { image: jpeg }, { side: 1000 });
+  return books;
 }
 
 // "TITLE | AUTHOR | ISBN" lines; tolerates bullets, numbering and code fences.

@@ -30,6 +30,7 @@ import adminView from './views/admin.js';
 import duplicatesView from './views/duplicates.js';
 import duplicateLibrariesView from './views/duplicate-libraries.js';
 import fixesView from './views/fixes.js';
+import traceView from './views/trace.js';
 
 const routes = [
   [/^\/$/, mapView],
@@ -54,6 +55,7 @@ const routes = [
   [/^\/top$/, topView],
   [/^\/review$/, reviewView],
   [/^\/admin$/, adminView],
+  [/^\/admin\/trace(?:\/([\w-]+))?$/, traceView],
   [/^\/about$/, aboutView],
   [/^\/(places|c\/[a-z]{2}|p\/\d+(-[a-z0-9-]*)?|[br]\/\d+(-[^/]*)?)$/i, pageView],
 ];

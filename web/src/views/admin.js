@@ -20,6 +20,7 @@ export default async function adminView(root) {
   root.innerHTML = `<section class="page admin" dir="ltr" lang="en">
     <div dir="auto" lang="${lang()}">${todoTabs('texts')}</div>
     <h1>Admin</h1>
+    <p><a class="btn small" href="/admin/trace">🔬 Traces: every AI stage of each scan</a></p>
     <div class="seg" id="tabs">${TABS.map(([k, label]) => `<button data-k="${k}">${label}</button>`).join('')}</div>
     <div id="body"><p class="muted">Loading…</p></div></section>`;
   const body = root.querySelector('#body');

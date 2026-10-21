@@ -6,6 +6,10 @@ import { config } from './config.js';
 import { one, many, q } from './db.js';
 import { requireUser } from './auth.js';
 import { bookPath, SITEMAP_BOOKS_SQL } from './seo.js';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { listTraces, readTrace, traceFilePath } from './trace.js';
+import { traceUpload } from './scans.js';
 
 const ADMIN = 3;
 const DAYS = 30;
@@ -203,5 +207,45 @@ export default async function adminRoutes(app) {
       [req.params.id, status, typeof text === 'string' ? text.trim().slice(0, 8000) : null]);
     if (!r.rowCount) return reply.code(404).send({ error: 'not_found' });
     return { ok: true };
+  });
+
+  // Traces (/admin/trace): what every stage of reading a scan or a cover did.
+  app.get('/api/admin/traces', { preHandler: requireUser(ADMIN) }, async () => ({ traces: await listTraces() }));
+  app.get('/api/admin/traces/:id', { preHandler: requireUser(ADMIN) }, async (req, reply) => {
+    const trace = await readTrace(req.params.id);
+    if (!trace) return reply.code(404).send({ error: 'not_found' });
+    // A real scan: what went to the queue, and what the reader decided.
+    const items = /^[0-9a-f-]{36}$/.test(req.params.id) ? await many(
+      `SELECT i.id, i.title, i.author, i.quality, i.decision, i.outcome, i.matched, i.crop_path, b.title AS book_title
+         FROM scan_items i LEFT JOIN books b ON b.id = i.book_id WHERE i.scan_id = $1 ORDER BY i.id`, [req.params.id]) : [];
+    return { trace, items };
+  });
+  // Pictures and the video; the video answers Range requests so it can be scrubbed.
+  app.get('/api/admin/traces/:id/:file', { preHandler: requireUser(ADMIN) }, async (req, reply) => {
+    const path = traceFilePath(req.params.id, req.params.file);
+    const size = path && await stat(path).then((x) => x.size, () => null);
+    if (!size) return reply.code(404).send({ error: 'not_found' });
+    reply.header('content-type', path.endsWith('.mp4') ? 'video/mp4' : 'image/jpeg').header('accept-ranges', 'bytes').header('cache-control', 'private, max-age=86400');
+    const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? '');
+    if (!m) return reply.header('content-length', size).send(createReadStream(path));
+    const start = m[1] ? Number(m[1]) : size - Number(m[2]);
+    const end = m[1] && m[2] ? Math.min(Number(m[2]), size - 1) : size - 1;
+    return reply.code(206).header('content-range', `bytes ${start}-${end}/${size}`).header('content-length', end - start + 1)
+      .send(createReadStream(path, { start, end }));
+  });
+  // A test upload: read the same way as a reader's, with nothing saved but the trace.
+  app.post('/api/admin/traces', { preHandler: requireUser(ADMIN), bodyLimit: 101 * 1024 * 1024 }, async (req, reply) => {
+    if (!req.isMultipart()) return reply.code(400).send({ error: 'multipart_required' });
+    const files = [];
+    let source = 'photo';
+    for await (const part of req.parts({ limits: { files: 8, fileSize: 100 * 1024 * 1024 } })) {
+      if (part.type !== 'file') { if (part.fieldname === 'source') source = part.value; continue; }
+      const video = part.mimetype?.startsWith('video/') || /\.(mp4|mov|webm|m4v|3gp)$/i.test(part.filename ?? '');
+      files.push({ name: part.filename, video, buffer: await part.toBuffer() });
+    }
+    if (!files.length) return reply.code(400).send({ error: 'no_media' });
+    if (source === 'cover') files.splice(2);
+    else source = files.some((f) => f.video) ? 'video' : 'photo';
+    return { id: traceUpload(files, source) };
   });
 }

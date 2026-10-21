@@ -5,6 +5,7 @@
 // Measured on a back cover: 92% of words right before, 95% after. Without hspell
 // installed (apt install hspell) the text is returned as it is.
 import { spawn } from 'node:child_process';
+import { step } from './trace.js';
 
 // Most common confusions first: the rank breaks ties between candidates.
 const LOOKALIKE = [['ד', 'ר'], ['ב', 'כ'], ['ק', 'פ'], ['ה', 'ח'], ['ו', 'ז'], ['ו', 'י'], ['ק', 'מ'], ['ח', 'ת'],
@@ -53,6 +54,7 @@ export async function fixHebrew(text) {
       const ok = [...c].filter(([s]) => !bad.has(s)).sort((a, b) => a[1] - b[1]);
       if (ok.length && (ok.length === 1 || ok[0][1] < ok[1][1])) fix.set(w, ok[0][0]);
     }
+    await step('spell-check', { note: 'hspell: unknown words swapped for the one known word a look-alike letter away', unknown: wrong.map(([w]) => w), changes: [...fix] });
     return text.replace(WORD, (m) => fix.get(plain(m)) ?? m);
   } catch {
     return text;

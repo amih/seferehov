@@ -10,6 +10,7 @@ import { config } from './config.js';
 import { one, q } from './db.js';
 import { readCoverText } from './vision.js';
 import { enhanceNext } from './enhance.js';
+import { step, withTrace } from './trace.js';
 
 let log = console;
 let busy = false;
@@ -29,7 +30,7 @@ async function next() {
       const waiting = await one(`SELECT 1 FROM scans WHERE status IN ('queued', 'processing') LIMIT 1`);
       if (waiting) return;
       const p = await one(
-        `SELECT id, COALESCE(orig_path, path) AS path FROM photos
+        `SELECT id, kind, COALESCE(orig_path, path) AS path FROM photos
           WHERE ocr_at IS NULL AND kind IN ('cover', 'back')
             AND (cropped_at IS NOT NULL OR created_at < now() - interval '1 hour')
           ORDER BY created_at DESC LIMIT 1`);
@@ -39,7 +40,11 @@ async function next() {
       }
       let r;
       try {
-        r = await readCoverText(await readFile(join(config.uploadDir, p.path)));
+        const buf = await readFile(join(config.uploadDir, p.path));
+        r = await withTrace(`photo-${p.id}`, { photo: p.id, flow: 'cover text' }, async () => {
+          await step('input', { note: 'cover photo, for the text on the book page' }, { image: buf });
+          return readCoverText(buf);
+        });
       } catch (err) {
         // The model may be down or busy: this photo is tried again next round.
         if (err.code !== 'ENOENT') { log.warn({ err, photo: p.id }, 'cover text failed'); return; }

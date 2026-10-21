@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import sharp from 'sharp';
+import { step, tracing } from './trace.js';
 
 const run = promisify(execFile);
 
@@ -45,18 +46,31 @@ export async function pickFrames(videoPath) {
     }
     if (!frames.length) return [];
 
+    // why: what became of each sampled frame (for the trace).
+    for (const fr of frames) fr.why = 'not the sharpest in its window';
     const best = new Map();
     for (const fr of frames) {
       const w = Math.floor(fr.t / WINDOW_S);
       if (!best.has(w) || fr.score > best.get(w).score) best.set(w, fr);
     }
     let picks = [...best.values()].sort((a, b) => a.t - b.t);
-    picks = picks.filter((fr, i) => i === 0 || hamming(fr.hash, picks[i - 1].hash) > 5);
+    picks = picks.filter((fr, i) => i === 0 || hamming(fr.hash, picks[i - 1].hash) > 5 || !(fr.why = 'same view as the frame before'));
     const median = [...picks].sort((a, b) => a.score - b.score)[Math.floor(picks.length / 2)].score;
-    picks = picks.filter((fr) => fr.score >= median * 0.35);
+    picks = picks.filter((fr) => fr.score >= median * 0.35 || !(fr.why = 'blurry'));
     if (picks.length > MAX_FRAMES) {
-      const step = picks.length / MAX_FRAMES;
-      picks = Array.from({ length: MAX_FRAMES }, (_, i) => picks[Math.floor(i * step)]);
+      const every = picks.length / MAX_FRAMES;
+      const kept = new Set(Array.from({ length: MAX_FRAMES }, (_, i) => picks[Math.floor(i * every)]));
+      for (const fr of picks) if (!kept.has(fr)) fr.why = `over the limit of ${MAX_FRAMES}`;
+      picks = [...kept];
+    }
+    for (const fr of picks) fr.why = 'picked';
+    if (tracing()) {
+      const thumbs = {};
+      for (const [i, fr] of frames.entries()) thumbs[`f${i}`] = await sharp(fr.buffer).resize(320).jpeg({ quality: 70 }).toBuffer();
+      await step('frames', {
+        fps: FPS, window_s: WINDOW_S, median_sharpness: median,
+        frames: frames.map((fr, i) => ({ t: fr.t, sharpness: Math.round(fr.score), why: fr.why, thumb: `f${i}` })),
+      }, thumbs);
     }
     return picks.map(({ buffer, t }) => ({ buffer, t }));
   } finally {

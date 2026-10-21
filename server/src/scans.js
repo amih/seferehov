@@ -1,5 +1,5 @@
 import { createWriteStream } from 'node:fs';
-import { mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import sharp from 'sharp';
@@ -16,6 +16,9 @@ import { parseLatLon, normalizeIsbn, normalizeDanacode } from './util.js';
 import { mergeDuplicates, autoConfirmKnown, closeIfDone } from './approvals.js';
 import { ownerOf } from './mybooks.js';
 import { sendMail } from './mail.js';
+import { purgeTraces, scope, step, traceFile, withTrace } from './trace.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 // Raw uploads (may carry GPS in EXIF) live outside the public uploads folder and
 // are deleted once read. Only re-encoded thumbnails go to uploads/.
@@ -251,7 +254,10 @@ export function startScanWorker(logger) {
   log = logger;
   q(`UPDATE scans SET status = 'queued' WHERE status = 'processing'`).then(wake).catch((err) => log.error({ err }, 'scan reset'));
   setInterval(() => { wake(); emailFinished().catch((err) => log.error({ err }, 'scan email')); }, 60_000).unref();
-  setInterval(() => purgeKept().catch((err) => log.error({ err }, 'scan keep purge')), 6 * 3600_000).unref();
+  setInterval(() => {
+    purgeKept().catch((err) => log.error({ err }, 'scan keep purge'));
+    purgeTraces().catch((err) => log.error({ err }, 'trace purge'));
+  }, 6 * 3600_000).unref();
 }
 
 const READY_TEXT = {
@@ -299,7 +305,8 @@ async function drain() {
     );
     if (!scan) return;
     try {
-      await processScan(scan);
+      await withTrace(scan.id, { scan: scan.id, source: scan.source, kind: scan.kind, user_id: scan.user_id, location_id: scan.location_id, created_at: scan.created_at },
+        () => processScan(scan));
       await q(`UPDATE scans SET status = 'done', finished_at = now() WHERE id = $1`, [scan.id]);
       await autoConfirmKnown(scan).catch((err) => log.warn({ err, scan: scan.id }, 'auto confirm'));
       await mergeDuplicates(scan.user_id).catch((err) => log.warn({ err, scan: scan.id }, 'merge duplicates'));
@@ -322,7 +329,8 @@ async function purgeKept() {
   for (const { id } of old) await rm(join(KEEP_DIR, id), { recursive: true, force: true });
 }
 
-const setProgress = (id, progress) => q('UPDATE scans SET progress = $2 WHERE id = $1', [id, progress]);
+// Test uploads (traceUpload) have no scans row.
+const setProgress = (id, progress) => (id.startsWith('test-') ? null : q('UPDATE scans SET progress = $2 WHERE id = $1', [id, progress]));
 
 async function saveFrameThumb(buffer, scanId, i) {
   const month = new Date().toISOString().slice(0, 7);
@@ -344,23 +352,24 @@ async function saveCropThumb(jpeg, scanId, n) {
 
 // One book's covers: read, looked up (the scanned code first, then the barcode or ISBN
 // read from the covers, then the title), and one queue item with both pictures.
-async function processCover(scan) {
+async function processCover(scan, { dry = false } = {}) {
   const dir = join(MEDIA_DIR, scan.id);
   await setProgress(scan.id, { step: 'reading', done: 0, total: 1 });
   let [front, back = null] = await Promise.all(scan.media.map((m) => readFile(join(dir, m.path))));
+  await step('input', { note: 'front and back cover photos as sent', code_scanned: scan.book_code ?? null }, { front, back });
   // Cut out and straightened first: tidier pictures, and a clearer read.
-  front = await cropCover(front).catch(() => null) ?? front;
-  if (back) back = await cropCover(back).catch(() => null) ?? back;
-  const frame = await saveFrameThumb(front, scan.id, 0);
-  const backPath = back && await saveFrameThumb(back, scan.id, 1);
-  for (const [i, b] of [front, back].entries()) if (b) await keepCopy(b, scan.id, i).catch((err) => log.warn({ err, scan: scan.id }, 'keep copy failed'));
+  front = await scope('front', () => cropCover(front)).catch(() => null) ?? front;
+  if (back) back = await scope('back', () => cropCover(back)).catch(() => null) ?? back;
+  const frame = dry ? null : await saveFrameThumb(front, scan.id, 0);
+  const backPath = back && !dry ? await saveFrameThumb(back, scan.id, 1) : null;
+  if (!dry) for (const [i, b] of [front, back].entries()) if (b) await keepCopy(b, scan.id, i).catch((err) => log.warn({ err, scan: scan.id }, 'keep copy failed'));
   const read = await readCover(front, back);
   let book = null, lookupId = null, isbn = null, danacode = null;
   // A Danacode read from print may be misread: its book counts only if its title matches
   // the front cover. Barcodes and ISBNs have check digits and are trusted.
   let doubtful = null;
   for (const code of [scan.book_code, ...(read.codes ?? [])].filter(Boolean)) {
-    const r = await lookupIsbn(code, 'scan').catch(() => ({}));
+    const r = await lookupIsbn(code, dry ? 'trace' : 'scan').catch(() => ({}));
     const trusted = !read.unchecked?.includes(code) || code === scan.book_code || !read.title || !r.book || sameTitle(r.book.title, read.title);
     if (!trusted) { doubtful ??= r; continue; }
     isbn ??= r.isbn ?? null;
@@ -370,12 +379,15 @@ async function processCover(scan) {
   }
   if (!book && !isbn && !danacode && doubtful) ({ isbn = null, danacode = null } = doubtful);
   if (!book && read.title) {
-    const r = await lookupTitle(read.title, read.author, 'scan').catch(() => ({}));
+    const r = await lookupTitle(read.title, read.author, dry ? 'trace' : 'scan').catch(() => ({}));
     book = r.book ?? null;
     lookupId = r.lookupId ?? lookupId;
   }
   // Nothing readable: the item still waits, with its pictures, for the reader to type the title.
   const title = read.title || book?.title || (isbn ? `ISBN ${isbn}` : danacode ? `דאנאקוד ${danacode}` : '');
+  await step('match', { note: 'catalogue lookup: the scanned code, then codes read from the covers (a printed Danacode only if its title matches), then the title',
+    codes_tried: [scan.book_code, ...(read.codes ?? [])].filter(Boolean), doubtful: doubtful?.book?.title ?? null, book: book && { id: book.id, title: book.title, authors: book.authors, isbn13: book.isbn13 }, queue_title: title });
+  if (dry) return;
   await q(
     `INSERT INTO scan_items(scan_id, title, author, isbn13, danacode, book_id, via, matched, frame_path, back_path, quality, lookup_id, sources)
      VALUES ($1, $2, $3, $4, $5, $6, 'vision', $7, $8, $9, $10, $11, '{cover}')`,
@@ -384,15 +396,29 @@ async function processCover(scan) {
   );
 }
 
-async function processScan(scan) {
-  if (scan.source === 'cover') return processCover(scan);
+// The video as sent, for the trace view: re-encoded small, without its metadata (GPS).
+async function keepVideo(file) {
+  const out = traceFile('video.mp4');
+  if (!out) return;
+  await promisify(execFile)('ffmpeg', ['-v', 'error', '-y', '-i', file, '-map_metadata', '-1', '-an', '-vf', "scale=-2:'min(720,ih)'",
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28', '-threads', '4', '-movflags', '+faststart', out], { timeout: 300_000 })
+    .then(() => step('input', { video: 'video.mp4' }))
+    .catch((err) => step('error', { error: `video copy: ${err.message}` }));
+}
+
+// dry: an admin's test upload (/admin/trace): read and looked up the same way, with
+// nothing saved but the trace.
+async function processScan(scan, { dry = false } = {}) {
+  if (scan.source === 'cover') return processCover(scan, { dry });
+  const ctx = dry ? 'trace' : 'scan';
   const dir = join(MEDIA_DIR, scan.id);
   await setProgress(scan.id, { step: 'frames' });
   const images = [];
   for (const m of scan.media) {
     const file = join(dir, m.path);
     if (m.type === 'video') {
-      for (const f of await pickFrames(file)) images.push({ buffer: f.buffer, fromVideo: true });
+      await keepVideo(file);
+      for (const f of await pickFrames(file)) images.push({ buffer: f.buffer, fromVideo: true, t: f.t });
     } else {
       images.push({ buffer: await readFile(file), fromVideo: false });
     }
@@ -416,15 +442,21 @@ async function processScan(scan) {
     }
     found.push({ ...item, key, frames: new Set([i]) });
   };
-  for (const [i, { buffer: buf, fromVideo }] of images.entries()) {
+  for (const [i, { buffer: buf, fromVideo, t }] of images.entries()) {
     await setProgress(scan.id, { step: 'reading', done: i, total: images.length });
-    const frame = await saveFrameThumb(buf, scan.id, i);
-    await keepCopy(buf, scan.id, i).catch((err) => log.warn({ err, scan: scan.id }, 'keep copy failed'));
-    for (const isbn of await readIsbnBarcodes(buf)) add(`isbn:${isbn}`, { isbn, via: 'barcode', frame, fromVideo }, i);
-    let books = [];
-    try { books = await readBooks(buf); } catch (err) { log.warn({ err, scan: scan.id }, 'vision failed on frame'); }
-    for (const b of books) add(normTitle(b.title), { ...b, via: 'vision', frame, fromVideo }, i);
+    const frame = dry ? null : await saveFrameThumb(buf, scan.id, i);
+    if (!dry) await keepCopy(buf, scan.id, i).catch((err) => log.warn({ err, scan: scan.id }, 'keep copy failed'));
+    await scope(fromVideo ? `frame ${i + 1}` : `photo ${i + 1}`, async () => {
+      await step('image', { from_video: fromVideo, t: t ?? null }, { image: buf });
+      const codes = await readIsbnBarcodes(buf);
+      await step('barcodes', { codes });
+      for (const isbn of codes) add(`isbn:${isbn}`, { isbn, via: 'barcode', frame, fromVideo }, i);
+      let books = [];
+      try { books = await readBooks(buf); } catch (err) { log.warn({ err, scan: scan.id }, 'vision failed on frame'); await step('error', { error: String(err.message) }); }
+      for (const b of books) add(normTitle(b.title), { ...b, via: 'vision', frame, fromVideo }, i);
+    });
   }
+  await step('merge', { note: 'the same title from several frames/photos counts once', found: found.map((f) => ({ title: f.title ?? null, author: f.author ?? null, isbn: f.isbn ?? null, via: f.via, frames: [...f.frames].map((x) => x + 1), verified: f.verified, crop: !!f.crop })) });
 
   await setProgress(scan.id, { step: 'matching', done: 0, total: found.length });
   let done = 0;
@@ -433,26 +465,31 @@ async function processScan(scan) {
   for (const item of found) {
     let book = null, lookupId = null;
     const isbn = item.isbn;
-    if (isbn) ({ book = null, lookupId = null } = await lookupIsbn(isbn, 'scan').catch(() => ({})));
+    if (isbn) ({ book = null, lookupId = null } = await lookupIsbn(isbn, ctx).catch(() => ({})));
     if (!book && item.title) {
-      const r = await lookupTitle(item.title, item.author, 'scan').catch(() => ({}));
+      const r = await lookupTitle(item.title, item.author, ctx).catch(() => ({}));
       book = r.book ?? null;
       lookupId = r.lookupId ?? lookupId;
     }
     await setProgress(scan.id, { step: 'matching', done: ++done, total: found.length });
-    if (book && seenBooks.has(book.id)) continue; // the barcode and the spine of the same book
+    const drop = (reason) => step('match', { read: item.title ?? null, author: item.author ?? null, isbn: isbn ?? null, book: book && { id: book.id, title: book.title, authors: book.authors, isbn13: book.isbn13 }, verdict: reason });
+    if (book && seenBooks.has(book.id)) { await drop('dropped: same book as another item (barcode + spine)'); continue; } // the barcode and the spine of the same book
     if (book) seenBooks.add(book.id);
     // In a video every spine shows up in several frames; a title read only once
     // and found in no catalogue is most likely a misreading.
-    if (!book && item.via === 'vision' && item.fromVideo && item.frames.size < 2) continue;
+    if (!book && item.via === 'vision' && item.fromVideo && item.frames.size < 2) { await drop('dropped: read in only one video frame and no catalogue knows it'); continue; }
     // A reading that OCR did not confirm on a cut-out of its own spine (only the whole
     // shelf was read) is often invented: kept only when a catalogue knows the book and
     // the title is long enough not to match some other book by chance.
-    if (item.via === 'vision' && item.verified === undefined && (!book || normTitle(item.title).replace(/ /g, '').length < 8)) continue;
+    if (item.via === 'vision' && item.verified === undefined && (!book || normTitle(item.title).replace(/ /g, '').length < 8)) {
+      await drop('dropped: whole-image read not confirmed on a cut-out, and no catalogue match with a title of 8+ letters'); continue;
+    }
     const title = item.title || book?.title || (isbn && `ISBN ${isbn}`);
     const quality = book ? 'high' : item.quality === 'low' ? 'low' : 'medium';
+    await drop(title ? `to the queue (${quality})` : 'dropped: no title');
     if (title) rows.push({ item, book, title, isbn, quality, lookupId });
   }
+  if (dry) return;
   const rank = { high: 0, medium: 1, low: 2 };
   rows.sort((a, b) => rank[a.quality] - rank[b.quality]); // surest first
   for (const [n, { item, book, title, isbn, quality, lookupId }] of rows.entries()) {
@@ -464,4 +501,23 @@ async function processScan(scan) {
         [item.via === 'barcode' ? 'barcode' : scan.source]],
     );
   }
+}
+
+// An admin's test upload: shelf photos or a video (source 'photo'/'video'), or a book's
+// front and back (source 'cover'). Read now, beside the worker, with a trace and nothing
+// else saved. files: [{ name, buffer, video }]. Returns the trace id at once.
+export function traceUpload(files, source) {
+  const id = `test-${crypto.randomUUID()}`;
+  (async () => {
+    const dir = join(MEDIA_DIR, id);
+    await mkdir(dir, { recursive: true });
+    const media = files.map((f, i) => ({ path: `${i}.${f.video ? 'video' : 'img'}`, type: f.video ? 'video' : 'image' }));
+    for (const [i, f] of files.entries()) await writeFile(join(dir, media[i].path), f.buffer);
+    try {
+      await withTrace(id, { flow: 'admin test', source, files: files.map((f) => f.name) }, () => processScan({ id, source, media, book_code: null }, { dry: true }));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  })().catch((err) => log.warn({ err, trace: id }, 'test trace failed'));
+  return id;
 }

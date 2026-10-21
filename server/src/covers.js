@@ -5,6 +5,7 @@
 // Returns the new JPEG, or null when no cover shape was found with confidence.
 import sharp from 'sharp';
 import { coverCorners } from './vision.js';
+import { step } from './trace.js';
 import { join } from 'node:path';
 import { unlink } from 'node:fs/promises';
 import { config } from './config.js';
@@ -67,9 +68,10 @@ export async function cropCover(buffer) {
   const { data, info } = await sharp(upright).resize(WORK, WORK, { fit: 'inside' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const w = info.width, h = info.height;
   const rough = await coverCorners(upright).catch(() => null);
-  if (!rough) return null;
+  const report = (verdict, extra = {}, images = {}) => step('cover-crop', { note: 'the vision model points at the corners; an OpenCV outline close to them is more exact', verdict, W: w, H: h, ...extra }, { before: upright, ...images });
+  if (!rough) { await report('no corners: photo used as it is'); return null; }
   const model = order(rough.map(([x, y]) => [x * w, y * h]));
-  if (!quadScore(model, polyArea(model), w, h)) return null;
+  if (!quadScore(model, polyArea(model), w, h)) { await report('corners do not look like a book cover: photo used as it is', { model }); return null; }
   // An outline OpenCV found that agrees with the model's corners is more exact.
   const tol = 0.05 * Math.hypot(w, h);
   const near = findQuads(cv, data, w, h)
@@ -77,11 +79,13 @@ export async function cropCover(buffer) {
     .filter(({ q }) => q.every((p, i) => dist(p, model[i]) < tol))
     .sort((a, b) => a.d - b.d);
   const quad = near[0]?.q ?? model;
-  if (polyArea(quad) > 0.93 * w * h) return null; // already fills the picture
+  if (polyArea(quad) > 0.93 * w * h) { await report('cover already fills the photo', { model, quad }); return null; } // already fills the picture
   // Back to full size.
   const W = meta.orientation >= 5 ? meta.height : meta.width;
   const s = W / info.width;
-  return warp(cv, upright, quad.map(([x, y]) => [x * s, y * s]));
+  const out = await warp(cv, upright, quad.map(([x, y]) => [x * s, y * s]));
+  await report(`cut out and straightened (${near[0] ? 'OpenCV outline' : "model's corners"})`, { model, quad }, { after: out });
+  return out;
 }
 
 // Every four-cornered, book-like outline OpenCV sees.
