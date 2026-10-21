@@ -176,7 +176,7 @@ async function run() {
       if (engines && !engines.includes(engine)) continue;
       const truth = item.status === 'done' && item.set === 'cover' ? item.truth : null;
       rows.push({
-        id: item.id, set: item.set, kind: item.kind ?? 'spine', hebrew: hebrew(item.truth ?? item.title), engine, ms: r.ms,
+        id: item.id, set: item.set, kind: item.kind ?? 'spine', hebrew: hebrew(item.truth ?? item.title ?? item.draft), engine, ms: r.ms,
         found: truth ? wordsFound(truth, r.text) : null, real: truth ? wordsReal(truth, r.text) : null,
         wacc: truth ? wordAccuracy(truth, r.text) : null, cacc: truth ? charAccuracy(truth, r.text) : null,
         // The title is printed on the front and on spines, not on most back covers.
@@ -184,9 +184,9 @@ async function run() {
         text: r.text, error: r.error,
       });
     }
-    process.stderr.write(`\r${n + 1}/${items.length}`);
+    if (process.stderr.isTTY) process.stderr.write(`\r${n + 1}/${items.length}`);
   }
-  process.stderr.write('\n');
+  if (process.stderr.isTTY) process.stderr.write('\n');
   await mkdir(join(dir, 'results'), { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   await writeFile(join(dir, 'results', `${stamp}.json`), `${JSON.stringify({ at: new Date().toISOString(), model: config.vision.model, rows }, null, 1)}\n`);
