@@ -1,6 +1,6 @@
 # ספרחוב · Seferehov
 
-Runs at **https://seferehov.com**.
+Runs at **https://seferehov.com**. Full feature list, hardware, capacity and plans: [docs/FEATURES.md](docs/FEATURES.md) ([PDF](docs/FEATURES.pdf)).
 
 A shared map of free street libraries (book boxes, little free libraries, shelves in lobbies and parks) and the books on their shelves right now. Installable as an app on any phone (PWA).
 
