@@ -101,9 +101,9 @@ function render(id, { trace, items }, open) {
       case 'frames': {
         const picked = s.frames.filter((f) => f.why === 'picked').length;
         return `<h3>Frames: ${picked} picked of ${s.frames.length} sampled</h3>
-          <p class="muted small">${s.fps} frames a second; the sharpest in each ${s.window_s} s window, minus near-duplicates and blurry ones (sharpness under 35% of the median ${Math.round(s.median_sharpness)}). Click a frame to see it in the video.</p>
+          <p class="muted small">${s.fps} frames a second; in each ${s.window_s} s window the steadiest of the sharper frames, minus near-duplicates and blurry ones (sharpness under 35% of the median ${Math.round(s.median_sharpness)}). Under each: time · sharpness${s.frames[0]?.motion != null ? ' · motion' : ''}. Click a frame to see it in the video.</p>
           <div class="strip">${s.frames.map((f) => `<figure class="${f.why === 'picked' ? 'picked' : ''}" data-t="${f.t}" title="${esc(f.why)}">
-            <img src="${src(id, s[f.thumb])}" loading="lazy" alt=""><figcaption>${f.t.toFixed(1)} s · ${f.sharpness}<br>${esc(f.why === 'picked' ? '✓ picked' : f.why)}</figcaption></figure>`).join('')}</div>`;
+            <img src="${src(id, s[f.thumb])}" loading="lazy" alt=""><figcaption>${f.t.toFixed(1)} s · ${f.sharpness}${f.motion != null ? ` · ${f.motion}` : ''}<br>${esc(f.why === 'picked' ? '✓ picked' : f.why)}</figcaption></figure>`).join('')}</div>`;
       }
       case 'image': return `<div class="pics">${img(s.image, 'big')}</div>${s.t != null ? `<p class="muted small">at ${s.t.toFixed(1)} s <button class="link" data-seek="${s.t}">▶ show in video</button></p>` : ''}`;
       case 'barcodes': return `<p>Barcodes: ${s.codes.length ? s.codes.map(esc).join(', ') : '<span class="muted">none</span>'}</p>`;

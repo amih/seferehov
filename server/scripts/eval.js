@@ -9,13 +9,19 @@
 //   node --env-file=../.env scripts/eval.js label <dir> [port]
 //     a page on 127.0.0.1:<port> (default 3879) to type the true text of each cover,
 //     starting from the best reading so far; reach it with ssh -L 3879:127.0.0.1:3879
-//   node --env-file=../.env scripts/eval.js run <dir> [--set cover|spine] [--engines a,b] [--limit n]
+//   node --env-file=../.env scripts/eval.js synth <dir> [n] [seed]
+//     n back covers with known text (Hebrew Wikipedia prose, Culmus fonts) at three levels
+//     — clean, phone, hard — so word accuracy needs no typing (scripts/eval-synth.js)
+//   node --env-file=../.env scripts/eval.js run <dir> [--set cover|spine|synth] [--engines a,b] [--limit n]
 //     reads every item with each engine, prints the scores, keeps the details in
 //     <dir>/results/<time>.json
 //
 // Cover engines: vlm (the vision model transcribing), tesseract, surya, surya+hspell
 // (what the app uses for Hebrew). Scores: words found (any order), words real (not
-// invented), word and character accuracy (in order), title found. Spine engines: vlm
+// invented), word and character accuracy (in order), title found, and "dict": the share
+// of Hebrew words the spell checker knows, which needs no true text. On the synthetic
+// covers dict is fitted against word accuracy (per engine), and the fit estimates the
+// word accuracy of the real covers nobody typed. Spine engines: vlm
 // (one read of the cut-out), pipeline (readCrop: vision model and Surya agreeing).
 // Spine cut-outs were made by the pipeline itself, so that set measures reading, not
 // finding the books on the shelf.
@@ -26,7 +32,8 @@ import { extname, join, resolve } from 'node:path';
 import sharp from 'sharp';
 import { config } from '../src/config.js';
 import { many, pool } from '../src/db.js';
-import { fixHebrew } from '../src/hebfix.js';
+import { fixHebrew, knownShare } from '../src/hebfix.js';
+import { makeSynth } from './eval-synth.js';
 import { generate, parseBooks, prepare, readCrop, suryaRead, tesseract, SPINE_PROMPT, TEXT_PROMPT } from '../src/vision.js';
 import { charAccuracy, mean, median, titleFound, TITLE_HIT, wordAccuracy, wordsFound, wordsReal } from './eval-score.js';
 
@@ -159,7 +166,7 @@ async function run() {
   const rows = [];
   for (const [n, item] of items.entries()) {
     const buf = await readFile(join(dir, item.file));
-    const list = item.set === 'cover' ? COVER_ENGINES : SPINE_ENGINES;
+    const list = item.set === 'spine' ? SPINE_ENGINES : COVER_ENGINES;
     const reads = {};
     for (const name of Object.keys(list).filter((e) => !engines || engines.includes(e) || (e === 'surya' && engines.includes('surya+hspell')))) {
       const t0 = Date.now();
@@ -174,9 +181,10 @@ async function run() {
     }
     for (const [engine, r] of Object.entries(reads)) {
       if (engines && !engines.includes(engine)) continue;
-      const truth = item.status === 'done' && item.set === 'cover' ? item.truth : null;
+      const truth = item.status === 'done' && item.set !== 'spine' ? item.truth : null;
       rows.push({
-        id: item.id, set: item.set, kind: item.kind ?? 'spine', hebrew: hebrew(item.truth ?? item.title ?? item.draft), engine, ms: r.ms,
+        id: item.id, set: item.set, level: item.level, kind: item.kind ?? 'spine', hebrew: hebrew(item.truth ?? item.title ?? item.draft), engine, ms: r.ms,
+        dict: item.set === 'spine' ? null : await knownShare(r.text),
         found: truth ? wordsFound(truth, r.text) : null, real: truth ? wordsReal(truth, r.text) : null,
         wacc: truth ? wordAccuracy(truth, r.text) : null, cacc: truth ? charAccuracy(truth, r.text) : null,
         // The title is printed on the front and on spines, not on most back covers.
@@ -194,21 +202,47 @@ async function run() {
   // One line per set × language × engine.
   const groups = new Map();
   for (const r of rows) {
-    const key = `${r.set.padEnd(5)} ${(r.hebrew ? 'he' : 'other').padEnd(5)} ${r.engine}`;
+    const key = `${(r.level ? `${r.set}:${r.level}` : r.set).padEnd(11)} ${(r.hebrew ? 'he' : 'other').padEnd(5)} ${r.engine}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(r);
   }
-  console.log('set   lang  engine         items labeled  found   real  w-acc  c-acc  title  title≥80%  median s');
+  console.log('set         lang  engine         items labeled  found   real  w-acc  c-acc  title  title≥80%   dict  median s');
   for (const [key, g] of [...groups].sort()) {
     const labeled = g.filter((r) => r.found != null);
     const titled = g.filter((r) => r.title != null);
-    console.log(`${key.padEnd(27)} ${String(g.length).padStart(5)} ${String(labeled.length).padStart(7)}  ${pct(mean(labeled.map((r) => r.found)))}  ${pct(mean(labeled.map((r) => r.real)))}  ${pct(mean(labeled.map((r) => r.wacc)))}  ${pct(mean(labeled.map((r) => r.cacc)))}  ${pct(mean(titled.map((r) => r.title)))}  ${pct(titled.length ? titled.filter((r) => r.title >= TITLE_HIT).length / titled.length : null)}      ${(median(g.map((r) => r.ms)) / 1000).toFixed(1).padStart(5)}`);
+    console.log(`${key.padEnd(27)} ${String(g.length).padStart(5)} ${String(labeled.length).padStart(7)}  ${pct(mean(labeled.map((r) => r.found)))}  ${pct(mean(labeled.map((r) => r.real)))}  ${pct(mean(labeled.map((r) => r.wacc)))}  ${pct(mean(labeled.map((r) => r.cacc)))}  ${pct(mean(titled.map((r) => r.title)))}  ${pct(titled.length ? titled.filter((r) => r.title >= TITLE_HIT).length / titled.length : null)}      ${pct(mean(g.map((r) => r.dict)))}  ${(median(g.map((r) => r.ms)) / 1000).toFixed(1).padStart(5)}`);
+  }
+  // Word accuracy from the spell-check rate: a straight line fitted on the covers whose
+  // text is known (synthetic and typed), per engine, applied to the real covers.
+  const fits = [];
+  for (const engine of [...new Set(rows.map((r) => r.engine))]) {
+    const known = rows.filter((r) => r.engine === engine && r.dict != null && r.wacc != null && r.hebrew);
+    if (known.length < 8) continue;
+    const mx = mean(known.map((r) => r.dict)), my = mean(known.map((r) => r.wacc));
+    const sxy = known.reduce((a, r) => a + (r.dict - mx) * (r.wacc - my), 0);
+    const sxx = known.reduce((a, r) => a + (r.dict - mx) ** 2, 0);
+    const syy = known.reduce((a, r) => a + (r.wacc - my) ** 2, 0);
+    if (!sxx || !syy) continue;
+    const b = sxy / sxx, a = my - b * mx, corr = sxy / Math.sqrt(sxx * syy);
+    const real = rows.filter((r) => r.engine === engine && r.set === 'cover' && r.hebrew && r.dict != null && r.wacc == null);
+    const est = mean(real.map((r) => Math.max(0, Math.min(1, a + b * r.dict))));
+    fits.push({ engine, n: known.length, corr, a, b, real: real.length, estimate: est });
+  }
+  if (fits.length) {
+    console.log('\nestimated word accuracy of unlabeled Hebrew covers, from the spell-check rate (fit on covers with known text):');
+    for (const f of fits) console.log(`  ${f.engine.padEnd(14)} fit on ${f.n} · r = ${f.corr.toFixed(2)} · ${f.real} real covers → ~${pct(f.estimate)}`);
   }
   console.log(`details: ${join(dir, 'results', `${stamp}.json`)} · model ${config.vision.model} · API cost $0 (all local)`);
 }
 
 try {
   if (cmd === 'export') await exportSet();
+  else if (cmd === 'synth') {
+    const items = (await load()).filter((x) => x.set !== 'synth');
+    const made = await makeSynth(dir, Number(rest[0] || 20), Number(rest[1] || 1));
+    await save([...items, ...made]);
+    console.log(`${made.length} synthetic covers (${made.length / 3} texts × clean/phone/hard)`);
+  }
   else if (cmd === 'label') { await label(); } else if (cmd === 'run') await run();
   else throw new Error(`unknown command ${cmd}`);
 } finally {

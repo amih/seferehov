@@ -60,3 +60,17 @@ export async function fixHebrew(text) {
     return text;
   }
 }
+
+// Share of the Hebrew words (4+ letters) hspell knows: a rough reading score that needs
+// no true text (scripts/eval.js calibrates it against covers whose text is known).
+// null when there are too few words to say, or hspell is missing.
+export async function knownShare(text) {
+  const words = (text.match(WORD) ?? []).map(plain).filter((w) => w.length >= 4);
+  if (words.length < 5) return null;
+  try {
+    const bad = await unknown([...new Set(words)]);
+    return words.filter((w) => !bad.has(w)).length / words.length;
+  } catch {
+    return null;
+  }
+}
