@@ -1,5 +1,5 @@
 import sharp from 'sharp';
-import { fixHebrew } from './hebfix.js';
+import { fixHebrew, LOOKALIKE } from './hebfix.js';
 import { readBarcodes } from 'zxing-wasm/reader';
 import { config } from './config.js';
 import { normalizeIsbn, normalizeDanacode } from './util.js';
@@ -569,6 +569,33 @@ export function readQuality(raw) {
 export const normTitle = (s) => String(s ?? '').toLowerCase()
   .normalize('NFKD').replace(/[֑-ׇ̀-ͯ]/g, '')
   .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+// How alike two readings of one title are, 0–1, for the same spine read in different
+// video frames ("הולדת ונוס" / "הולדת ונום", "יום שני כחול" / "ים שני כחל"): edit
+// distance where a look-alike Hebrew letter, a ו/י written or left out, or two letters
+// swapped cost less; the same words in another order count as alike. Readings with
+// different numbers in them (volume 1 and volume 2) are not alike.
+const CHEAP = new Set(LOOKALIKE.map(([a, b]) => a + b).concat(LOOKALIKE.map(([a, b]) => b + a)));
+const cost = (a, b) => (a === b ? 0 : CHEAP.has(a + b) ? 0.4 : 1);
+const gapCost = (c) => ('וי'.includes(c) ? 0.4 : 1);
+export function titleSimilarity(a, b) {
+  const [x, y] = [normTitle(a), normTitle(b)];
+  if (!x || !y) return 0;
+  if (x === y) return 1;
+  if ((x.match(/\d+/g) ?? []).join() !== (y.match(/\d+/g) ?? []).join()) return 0;
+  if (x.split(' ').sort().join(' ') === y.split(' ').sort().join(' ')) return 0.95;
+  const [p, q] = [[...x.replace(/ /g, '')], [...y.replace(/ /g, '')]];
+  const d = [Array(q.length + 1).fill(0)];
+  for (let j = 1; j <= q.length; j++) d[0][j] = d[0][j - 1] + gapCost(q[j - 1]);
+  for (let i = 1; i <= p.length; i++) {
+    d[i] = [d[i - 1][0] + gapCost(p[i - 1])];
+    for (let j = 1; j <= q.length; j++) {
+      d[i][j] = Math.min(d[i - 1][j] + gapCost(p[i - 1]), d[i][j - 1] + gapCost(q[j - 1]), d[i - 1][j - 1] + cost(p[i - 1], q[j - 1]));
+      if (i > 1 && j > 1 && p[i - 1] === q[j - 2] && p[i - 2] === q[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 0.6);
+    }
+  }
+  return Math.max(0, 1 - d[p.length][q.length] / Math.max(p.length, q.length));
+}
 
 // ISBN barcodes (EAN-13 starting 978/979) anywhere in the photo.
 export async function readIsbnBarcodes(buffer) {

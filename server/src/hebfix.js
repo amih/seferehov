@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import { step } from './trace.js';
 
 // Most common confusions first: the rank breaks ties between candidates.
-const LOOKALIKE = [['ד', 'ר'], ['ב', 'כ'], ['ק', 'פ'], ['ה', 'ח'], ['ו', 'ז'], ['ו', 'י'], ['ק', 'מ'], ['ח', 'ת'],
+export const LOOKALIKE = [['ד', 'ר'], ['ב', 'כ'], ['ק', 'פ'], ['ה', 'ח'], ['ו', 'ז'], ['ו', 'י'], ['ק', 'מ'], ['ח', 'ת'],
   ['ה', 'ת'], ['ן', 'ו'], ['ם', 'ס'], ['ט', 'מ'], ['נ', 'ג'], ['ע', 'צ']];
 const WORD = /[א-ת֑-ׇ]+/g;
 const plain = (w) => w.replace(/[֑-ׇ]/g, '');

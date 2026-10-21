@@ -7,7 +7,7 @@ import { config } from './config.js';
 import { one, many, q, tx } from './db.js';
 import { requireUser } from './auth.js';
 import { lookupIsbn, lookupTitle, findOrCreateBook } from './books.js';
-import { readBooks, readCover, readIsbnBarcodes, normTitle, sameTitle } from './vision.js';
+import { readBooks, readCover, readIsbnBarcodes, normTitle, sameTitle, titleSimilarity } from './vision.js';
 import { pickFrames } from './frames.js';
 import { cropCover } from './covers.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
@@ -425,22 +425,32 @@ async function processScan(scan, { dry = false } = {}) {
   }
   if (!images.length) throw new Error('no usable frames');
 
-  // Dedupe across photos/frames. Titles are fuzzy-merged ("SELF AND IDENTITY" ≈
-  // "Handbook of Self and Identity"); `frames` counts how many frames showed it.
+  // Dedupe across photos/frames. The same spine is read a little differently in each
+  // frame, so readings merge when one holds the other ("SELF AND IDENTITY" ≈ "Handbook
+  // of Self and Identity") or they are alike (titleSimilarity ≥ SAME_SPINE), but never
+  // two readings from one frame: those are two spines. `frames` counts how many frames
+  // showed it; `reads` keeps every reading, the most frequent becomes the title.
+  const SAME_SPINE = 0.8;
   const found = [];
   const add = (key, item, i) => {
-    const near = (a, b) => a === b || (Math.min(a.length, b.length) >= 6 && (a.includes(b) || b.includes(a)));
-    const hit = found.find((f) => near(f.key, key));
-    if (hit) {
+    const contains = (a, b) => a === b || (Math.min(a.length, b.length) >= 6 && (a.includes(b) || b.includes(a)));
+    const score = (f) => {
+      if (f.keys.has(key)) return 2;
+      if (key.startsWith('isbn:') || f.key.startsWith('isbn:') || f.frames.has(i)) return 0;
+      return Math.max(...[...f.keys].map((k) => (contains(k, key) ? 1.5 : titleSimilarity(k, key))));
+    };
+    const [hit, best] = found.map((f) => [f, score(f)]).sort((a, b) => b[1] - a[1])[0] ?? [];
+    if (hit && best >= SAME_SPINE) {
       hit.frames.add(i);
-      if ((item.title?.length ?? 0) > (hit.title?.length ?? 0)) hit.title = item.title;
+      hit.keys.add(key);
+      if (item.title) hit.reads.set(item.title, (hit.reads.get(item.title) ?? 0) + 1 + (item.verified ? 0.5 : 0));
       hit.author ||= item.author;
       hit.isbn ||= item.isbn;
       if (hit.quality === 'low' && item.quality && item.quality !== 'low') hit.quality = item.quality;
       if (!hit.crop && item.crop) Object.assign(hit, { crop: item.crop, verified: item.verified });
       return;
     }
-    found.push({ ...item, key, frames: new Set([i]) });
+    found.push({ ...item, key, keys: new Set([key]), frames: new Set([i]), reads: new Map(item.title ? [[item.title, 1 + (item.verified ? 0.5 : 0)]] : []) });
   };
   for (const [i, { buffer: buf, fromVideo, t }] of images.entries()) {
     await setProgress(scan.id, { step: 'reading', done: i, total: images.length });
@@ -456,7 +466,14 @@ async function processScan(scan, { dry = false } = {}) {
       for (const b of books) add(normTitle(b.title), { ...b, via: 'vision', frame, fromVideo }, i);
     });
   }
-  await step('merge', { note: 'the same title from several frames/photos counts once', found: found.map((f) => ({ title: f.title ?? null, author: f.author ?? null, isbn: f.isbn ?? null, via: f.via, frames: [...f.frames].map((x) => x + 1), verified: f.verified, crop: !!f.crop })) });
+  // The reading seen most often (OCR-confirmed ones count a little more), then the longer.
+  for (const f of found) {
+    const ranked = [...f.reads].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length).map(([title]) => title);
+    if (ranked.length) f.title = ranked[0];
+    f.variants = ranked;
+  }
+  await step('merge', { note: `the same spine in several frames counts once: readings merge when one contains the other or they are ${SAME_SPINE * 100}% alike (look-alike letters count less), never two from one frame`,
+    found: found.map((f) => ({ title: f.title ?? null, variants: f.variants?.length > 1 ? f.variants : undefined, author: f.author ?? null, isbn: f.isbn ?? null, via: f.via, frames: [...f.frames].map((x) => x + 1), verified: f.verified, crop: !!f.crop })) });
 
   await setProgress(scan.id, { step: 'matching', done: 0, total: found.length });
   let done = 0;
@@ -466,10 +483,13 @@ async function processScan(scan, { dry = false } = {}) {
     let book = null, lookupId = null;
     const isbn = item.isbn;
     if (isbn) ({ book = null, lookupId = null } = await lookupIsbn(isbn, ctx).catch(() => ({})));
-    if (!book && item.title) {
-      const r = await lookupTitle(item.title, item.author, ctx).catch(() => ({}));
+    // Each spelling the frames gave, most frequent first, until a catalogue knows one.
+    for (const title of (item.variants ?? []).slice(0, 3)) {
+      if (book) break;
+      const r = await lookupTitle(title, item.author, ctx).catch(() => ({}));
       book = r.book ?? null;
       lookupId = r.lookupId ?? lookupId;
+      if (book && title !== item.title) item.title = title;
     }
     await setProgress(scan.id, { step: 'matching', done: ++done, total: found.length });
     const drop = (reason) => step('match', { read: item.title ?? null, author: item.author ?? null, isbn: isbn ?? null, book: book && { id: book.id, title: book.title, authors: book.authors, isbn13: book.isbn13 }, verdict: reason });
