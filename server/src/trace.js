@@ -5,7 +5,7 @@
 // (only admins see them) and are deleted after KEEP_DAYS. TRACE=0 turns them off.
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import sharp from 'sharp';
 import { config } from './config.js';
@@ -35,11 +35,14 @@ export async function withTrace(id, meta, fn) {
   }
 }
 
-const save = async ({ dir, n, files, ...t }) => {
-  await writeFile(join(dir, 'trace.json'), JSON.stringify(t));
+// One save at a time per trace (the last one wins), each file swapped in whole.
+const save = (trace) => (trace.saving = (trace.saving ?? Promise.resolve()).catch(() => {}).then(() => write(trace)));
+const put = async (file, text) => { await writeFile(`${file}.tmp`, text); await rename(`${file}.tmp`, file); };
+async function write({ dir, n, files, saving, ...t }) {
+  await put(join(dir, 'trace.json'), JSON.stringify(t));
   // The list on /admin/trace reads only this.
-  await writeFile(join(dir, 'meta.json'), JSON.stringify({ id: t.id, meta: t.meta, started: t.started, ms: t.ms ?? null, error: t.error ?? null, steps: n }));
-};
+  await put(join(dir, 'meta.json'), JSON.stringify({ id: t.id, meta: t.meta, started: t.started, ms: t.ms ?? null, error: t.error ?? null, steps: n }));
+}
 
 // Steps inside fn are filed under `label` (a frame, a cut-out, a way up…).
 export function scope(label, fn) {
