@@ -47,6 +47,13 @@ Photos and scans taken without signal are saved on the phone and sent later.
 - Every book found, from any photo or barcode, waits in one queue per reader (`/queue`), one book at a time with a big picture: approve, later, or wrong. The title and author can be fixed before approving.
 - Duplicates from several photos are merged. Decisions can be undone for 14 days.
 - A reader who closed the app gets an e-mail when the results are ready.
+- While photos are still being read, the queue page says how many and about how long until they are done.
+
+## Reading order (when many readers scan at once)
+
+- Book covers go first: a cover sent while a long shelf batch is being read is read between two of its photos, within a few minutes.
+- Readers take turns: everyone's first shelf scan before anyone's second, so one big home library does not hold up everyone else.
+- The expected wait comes from the last 30 days of measured reading times.
 
 ## My books (home library)
 
@@ -121,7 +128,7 @@ The same server also runs other services. The GPU is shared with other occasiona
 
 # Capacity: how many scans the GPU can handle
 
-The GPU reads one scan at a time; others wait in a queue (first come, first served). Measured times:
+The GPU reads one scan at a time; others wait in a queue (covers first, then readers in turn; see *Reading order*). Measured times:
 
 | Scan | Time on the GPU |
 |---|---|
@@ -136,13 +143,13 @@ A home library of 300 books, photographed shelf by shelf, is about 25 photos, wh
 
 - one or two readers scanning at the same time: results within minutes to an hour;
 - five readers each scanning a home library at the same time: the last one waits 10 hours or more;
-- a reader with one book's covers behind a shelf batch waits up to an hour for a 1-minute job.
+- a reader with one book's covers waits only for the shelf photo being read now (a few minutes), not the whole batch.
 
 The bottleneck is the GPU, not the CPU, memory or disk.
 
 ## Ways to grow, in order
 
-1. **Smarter queue (code only, free).** Covers before shelf batches, one job per reader in turn, and an estimated wait shown in the app. This removes the worst waits without new hardware.
+1. **Smarter queue (code only, free). Done.** Covers before shelf batches, readers in turn, and an estimated wait shown in the app. This removes the worst waits but not the total: five home libraries at once still take 10+ hours in all.
 2. **Faster pipeline (code only).** Each spine is read four times now (two orientations, two readers); reading the likely orientation first and skipping the second read when both agree would cut the time considerably.
 3. **A better GPU at home.** A used RTX 3090 (24 GB) costs about $700–900 and is roughly 3 times faster for this kind of model (its memory is about 3 times faster). The power supply has to be checked (the card draws up to 350 W). This keeps the "no per-use cost" property.
 4. **A rented GPU for overflow.** The worker takes jobs from the database, and the model address is a setting, so a second worker on a rented GPU server can take jobs only when the queue is long. Approximate on-demand prices (October 2026, check before buying):
@@ -190,7 +197,6 @@ This protects against a failed disk, but not against anything that hits the whol
 
 **Waiting and speed**
 
-- Priority queue: covers before shelf batches, readers in turn, estimated wait in the app.
 - Faster shelf reading (read the likely orientation first; skip the second reader when the first is sure).
 - Overflow worker on a rented GPU when the queue is long; or a faster GPU at home.
 

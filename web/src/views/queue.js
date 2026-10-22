@@ -45,7 +45,7 @@ export default async function queueView(root) {
   function header() {
     const left = items.filter((i) => !skipped.has(i.id)).length;
     const busy = processing.length
-      ? `<p class="progress-line small"><span class="spinner"></span> ${t('queue.processing', { n: processing.length })}</p>` : '';
+      ? `<p class="progress-line small"><span class="spinner"></span> ${t('queue.processing', { n: processing.length })}${counts.wait ? ` ${t('queue.wait', { mins: counts.wait })}` : ''}</p>` : '';
     const done = lastDone
       ? `<p class="undo-line">${esc(t(`queue.just_${lastDone.decision}`, { title: lastDone.title }))} <button class="btn small" data-undo="${lastDone.id}">${t('queue.undo')}</button></p>` : '';
     return `${done}${left ? `<p class="queue-count">${t('queue.left', { n: left })}</p>` : ''}${busy}`;

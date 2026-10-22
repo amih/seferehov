@@ -13,6 +13,7 @@ import { parseLatLon } from './util.js';
 import { readForm } from './multipart.js';
 import { normTitle } from './vision.js';
 import { fixesToVote } from './fixes.js';
+import { queueWaits } from './scans.js';
 
 const UNDO_DAYS = 14;
 
@@ -270,7 +271,9 @@ export default async function approvalRoutes(app) {
         WHERE s.user_id = $1 AND s.status IN ('queued', 'processing') ORDER BY s.created_at`,
       [req.user.id],
     );
-    return { items: items.map(publicItem), processing, ...(await counts(req.user.id)) };
+    const waits = processing.length ? await queueWaits() : new Map();
+    const wait = Math.max(0, ...processing.map((x) => waits.get(x.id)?.mins ?? 0)) || null;
+    return { items: items.map(publicItem), processing, wait, ...(await counts(req.user.id)) };
   });
 
   app.post('/api/queue/:id', {

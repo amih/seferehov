@@ -131,11 +131,9 @@ export default async function scanRoutes(app) {
     if (['done', 'failed'].includes(scan.status) && !scan.notified_at && scan.user_id === req.user.id) {
       await q('UPDATE scans SET notified_at = now() WHERE id = $1', [scan.id]);
     }
-    const ahead = scan.status === 'queued'
-      ? (await one(`SELECT count(*)::int AS n FROM scans WHERE status IN ('queued','processing') AND created_at < $1`, [scan.created_at])).n
-      : 0;
+    const { ahead = 0, mins = null } = scan.status === 'queued' ? (await queueWaits()).get(scan.id) ?? {} : {};
     return {
-      scan: { id: scan.id, code: scan.code, kind: scan.kind, status: scan.status, progress: scan.progress, error: scan.error, ahead, created_at: scan.created_at },
+      scan: { id: scan.id, code: scan.code, kind: scan.kind, status: scan.status, progress: scan.progress, error: scan.error, ahead, mins, created_at: scan.created_at },
       items,
     };
   });
@@ -233,8 +231,8 @@ async function receiveShelf(req, reply, loc) {
       ...(loc ? [null, null] : Object.values(ownerOf(fields)))],
   );
   wake();
-  const ahead = (await one(`SELECT count(*)::int AS n FROM scans WHERE status IN ('queued','processing') AND id <> $1`, [id])).n;
-  return { scan: { id, status: 'queued', images: media.filter((m) => m.type === 'image').length, video: media.some((m) => m.type === 'video'), ahead } };
+  const { ahead = 0, mins = null } = (await queueWaits()).get(id) ?? {};
+  return { scan: { id, status: 'queued', images: media.filter((m) => m.type === 'image').length, video: media.some((m) => m.type === 'video'), ahead, mins } };
 }
 
 async function ownScan(req) {
@@ -301,27 +299,95 @@ function wake() {
   drain().catch((err) => log.error({ err }, 'scan worker')).finally(() => { busy = false; });
 }
 
+// The order scans are read in: book covers first (a minute each, and the reader is often
+// still holding the book), then shelf photos and videos. Within each, readers take turns:
+// everyone's first scan before anyone's second, so one big home library does not hold
+// everyone else up for hours. The scan being read now counts as its reader's turn.
+const QUEUE_SQL = `
+  SELECT id, user_id, source, media, created_at FROM (
+    SELECT id, user_id, source, media, created_at, status,
+           row_number() OVER (PARTITION BY user_id, source = 'cover' ORDER BY status <> 'processing', created_at) AS turn
+      FROM scans WHERE status IN ('queued', 'processing')) q
+   WHERE status = 'queued'
+   ORDER BY source <> 'cover', turn, created_at`;
+
+const claim = (coversOnly) => one(
+  `UPDATE scans SET status = 'processing', started_at = now()
+    WHERE id = (SELECT id FROM (${QUEUE_SQL}) q WHERE NOT $1 OR source = 'cover' LIMIT 1) AND status = 'queued'
+    RETURNING *`, [coversOnly]);
+
 async function drain() {
-  for (;;) {
-    const scan = await one(
-      `UPDATE scans SET status = 'processing', started_at = now()
-        WHERE id = (SELECT id FROM scans WHERE status = 'queued' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1)
-        RETURNING *`,
-    );
-    if (!scan) return;
-    try {
-      await withTrace(scan.id, { scan: scan.id, source: scan.source, kind: scan.kind, user_id: scan.user_id, location_id: scan.location_id, created_at: scan.created_at },
-        () => processScan(scan));
-      await q(`UPDATE scans SET status = 'done', finished_at = now() WHERE id = $1`, [scan.id]);
-      await autoConfirmKnown(scan).catch((err) => log.warn({ err, scan: scan.id }, 'auto confirm'));
-      await mergeDuplicates(scan.user_id).catch((err) => log.warn({ err, scan: scan.id }, 'merge duplicates'));
-    } catch (err) {
-      log.error({ err, scan: scan.id }, 'scan failed');
-      await q(`UPDATE scans SET status = 'failed', error = $2, finished_at = now() WHERE id = $1`, [scan.id, String(err.message).slice(0, 300)]);
-    } finally {
-      await rm(join(MEDIA_DIR, scan.id), { recursive: true, force: true });
-    }
+  for (let scan; (scan = await claim(false));) await runScan(scan);
+}
+
+// Between the photos of a long shelf scan: covers sent meanwhile are read right away.
+async function letCoversIn() {
+  for (let scan; (scan = await claim(true));) await runScan(scan);
+}
+
+async function runScan(scan) {
+  try {
+    await withTrace(scan.id, { scan: scan.id, source: scan.source, kind: scan.kind, user_id: scan.user_id, location_id: scan.location_id, created_at: scan.created_at },
+      () => processScan(scan));
+    await q(`UPDATE scans SET status = 'done', finished_at = now() WHERE id = $1`, [scan.id]);
+    await autoConfirmKnown(scan).catch((err) => log.warn({ err, scan: scan.id }, 'auto confirm'));
+    await mergeDuplicates(scan.user_id).catch((err) => log.warn({ err, scan: scan.id }, 'merge duplicates'));
+  } catch (err) {
+    log.error({ err, scan: scan.id }, 'scan failed');
+    await q(`UPDATE scans SET status = 'failed', error = $2, finished_at = now() WHERE id = $1`, [scan.id, String(err.message).slice(0, 300)]);
+  } finally {
+    await rm(join(MEDIA_DIR, scan.id), { recursive: true, force: true });
   }
+}
+
+// How long reading takes, from the last 30 days (minutes per cover, per shelf photo, per
+// video), with measured defaults until there is enough history.
+const DEFAULT_MINUTES = { cover: 1, photo: 5, video: 45 };
+let minutes = { at: 0, per: DEFAULT_MINUTES };
+async function minutesPer() {
+  if (Date.now() - minutes.at < 600_000) return minutes.per;
+  const rows = await many(
+    `SELECT source, count(*)::int AS n,
+            avg(extract(epoch FROM finished_at - started_at) / 60 / CASE WHEN source = 'photo' THEN greatest(1, jsonb_array_length(media)) ELSE 1 END) AS m
+       FROM scans WHERE source IN ('cover', 'photo', 'video') AND status <> 'failed'
+        AND started_at IS NOT NULL AND finished_at > now() - interval '30 days' GROUP BY source`);
+  const per = { ...DEFAULT_MINUTES };
+  for (const r of rows) if (r.n >= 5) per[r.source] = Math.max(0.5, Number(r.m));
+  minutes = { at: Date.now(), per };
+  return per;
+}
+
+// For every scan waiting or being read: how many are read before it, and about how many
+// minutes until it is done.
+export async function queueWaits() {
+  const per = await minutesPer();
+  const cost = (s) => (s.source === 'photo' ? per.photo * Math.max(1, s.media?.length ?? 1) : per[s.source] ?? per.photo);
+  const running = await many(`SELECT id, source, media, started_at FROM scans WHERE status = 'processing'`);
+  const left = (s) => Math.max(1, cost(s) - (Date.now() - new Date(s.started_at)) / 60_000);
+  const waits = new Map();
+  let covers = 0; // a cover waits for the photo being read now, then the covers before it
+  let all = 0;
+  for (const s of running) {
+    const m = left(s);
+    waits.set(s.id, { ahead: 0, mins: Math.ceil(m) });
+    all += m;
+    covers += s.source === 'cover' ? m : Math.min(m, per.photo);
+  }
+  let n = running.length;
+  const queued = await many(QUEUE_SQL);
+  let coversAhead = 0;
+  for (const s of queued) {
+    if (s.source === 'cover') {
+      covers += cost(s);
+      waits.set(s.id, { ahead: running.length + coversAhead++, mins: Math.ceil(covers) });
+      all += cost(s);
+    } else {
+      all += cost(s);
+      waits.set(s.id, { ahead: n, mins: Math.ceil(all) });
+    }
+    n++;
+  }
+  return waits;
 }
 
 async function keepCopy(buffer, scanId, i) {
@@ -458,6 +524,7 @@ async function processScan(scan, { dry = false } = {}) {
     found.push({ ...item, key, keys: new Set([key]), frames: new Set([i]), reads: new Map(item.title ? [[item.title, 1 + (item.verified ? 0.5 : 0)]] : []) });
   };
   for (const [i, { buffer: buf, fromVideo, t }] of images.entries()) {
+    if (!dry && i) await letCoversIn();
     await setProgress(scan.id, { step: 'reading', done: i, total: images.length });
     const frame = dry ? null : await saveFrameThumb(buf, scan.id, i);
     if (!dry) await keepCopy(buf, scan.id, i).catch((err) => log.warn({ err, scan: scan.id }, 'keep copy failed'));
