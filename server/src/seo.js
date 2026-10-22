@@ -24,6 +24,16 @@ import { translate } from '../../web/src/i18n.js';
 import { levelOf } from '../../web/src/levels.js';
 
 const LANGS = ['he', 'en'];
+
+// A library page is worth a search engine's time only once there is something of its own on
+// it: readers added, checked, edited or reported books there, or it is in Israel. The ~48k
+// untouched OpenStreetMap shelves abroad all read the same, so they get noindex and stay out
+// of the sitemap (Google folded them together as duplicates).
+const LIB_INDEXED = `(l.source = 'user' OR l.last_checked_at IS NOT NULL
+  OR EXISTS (SELECT 1 FROM sightings s WHERE s.location_id = l.id AND s.status = 'approved')
+  OR EXISTS (SELECT 1 FROM location_checks c WHERE c.location_id = l.id)
+  OR EXISTS (SELECT 1 FROM location_edits e WHERE e.location_id = l.id AND e.status = 'approved')
+  OR l.place_id IN (SELECT id FROM places WHERE country = 'IL'))`;
 const SITEMAP_CHUNK = 40000;
 const CACHE_MS = 60_000;
 
@@ -161,7 +171,7 @@ async function countryPage(lng, T, cc) {
   cc = cc.toUpperCase();
   if (!/^[A-Z]{2}$/.test(cc)) return null;
   const rows = await many(
-    `SELECT p.id, p.slug, p.name, p.name_he, count(*)::int AS n
+    `SELECT p.id, p.slug, p.name, p.name_he, count(*)::int AS n, bool_or(${LIB_INDEXED}) AS indexed
        FROM locations l JOIN places p ON p.id = l.place_id
       WHERE l.status = 'approved' AND p.country = $1
       GROUP BY p.id ORDER BY n DESC, p.population DESC LIMIT 2000`, [cc]);
@@ -172,6 +182,7 @@ async function countryPage(lng, T, cc) {
   return {
     title: T('seo.country_title', { inCountry }),
     description: T('seo.country_lead', { n, places: rows.length, inCountry }),
+    noindex: !rows.some((p) => p.indexed),
     html: `<h1>${T('seo.country_h1', { inCountry })}</h1><p>${T('seo.country_lead', { n, places: rows.length, inCountry })}</p>${placeLinks(rows, T, lng)}`,
     jsonld: [breadcrumbs([[T('app.name'), '/'], [T('seo.places_h1'), '/places'], [country, `/c/${cc.toLowerCase()}`]])],
   };
@@ -181,7 +192,7 @@ async function placePage(lng, T, id) {
   const p = await one('SELECT *, ST_Y(geom::geometry) AS lat, ST_X(geom::geometry) AS lon FROM places WHERE id = $1', [id]);
   if (!p) return null;
   const libs = await many(
-    `SELECT l.id, l.code, l.name, l.created_at,
+    `SELECT l.id, l.code, l.name, l.created_at, ${LIB_INDEXED} AS indexed,
             (SELECT max(s.created_at) FROM sightings s WHERE s.location_id = l.id AND s.status = 'approved') AS last_report
        FROM locations l WHERE l.place_id = $1 AND l.status = 'approved'
       ORDER BY l.name NULLS LAST, l.id LIMIT 500`, [id]);
@@ -209,6 +220,7 @@ async function placePage(lng, T, id) {
     title: T('seo.place_title', { inPlace }),
     description: T('seo.place_desc', { n: libs.length, inPlace }),
     lastmod: updated,
+    noindex: !libs.some((l) => l.indexed),
     html: `<h1>${T('seo.place_h1', { inPlace })}</h1>
       <p>${T('seo.place_lead', { n: libs.length, books: books.length, inPlace })}</p>
       <p class="muted small">${T('seo.updated', { date: fmtDate(updated, lng) })} · <a href="${withLang(`/c/${p.country.toLowerCase()}`, lng)}">${esc(country)}</a> ·
@@ -232,7 +244,8 @@ async function placePage(lng, T, id) {
 async function libraryPage(lng, T, code) {
   const l = await one(
     `SELECT l.*, ST_Y(l.geom::geometry) AS lat, ST_X(l.geom::geometry) AS lon,
-            p.id AS pid, p.slug AS pslug, p.name AS pname, p.name_he AS pname_he, p.country
+            p.id AS pid, p.slug AS pslug, p.name AS pname, p.name_he AS pname_he, p.country,
+            ${LIB_INDEXED} AS indexed
        FROM locations l LEFT JOIN places p ON p.id = l.place_id
       WHERE l.code = $1 AND l.status = 'approved'`, [code.toUpperCase()]);
   if (!l) return null;
@@ -241,7 +254,8 @@ async function libraryPage(lng, T, code) {
   const nearby = await many(
     `SELECT l2.code, l2.name, 0 AS books FROM locations l2
       WHERE l2.status = 'approved' AND l2.id <> $1 AND ST_DWithin(l2.geom, $2::geography, 5000)
-      ORDER BY l2.geom::geometry <-> $2::geometry LIMIT 8`, [l.id, l.geom]);
+      ORDER BY EXISTS (SELECT 1 FROM sightings s WHERE s.location_id = l2.id AND s.status = 'approved') DESC,
+               l2.geom::geometry <-> $2::geometry LIMIT 8`, [l.id, l.geom]);
   const place = l.pid ? { id: l.pid, slug: l.pslug, name: l.pname, name_he: l.pname_he } : null;
   const pName = place ? placeName(place, lng) : null;
   const inPlace = pName ? T('seo.in', pName) : '';
@@ -253,6 +267,7 @@ async function libraryPage(lng, T, code) {
     title: l.name ? T('seo.lib_title', { name, inPlace }) : `${name} · ${l.code} | ${T('app.name')}`,
     description: T('seo.lib_desc', { inPlace, books: books.length }),
     lastmod: updated,
+    noindex: !l.indexed,
     html: `<h1>${esc(name)}</h1>
       <p>${T('seo.lib_lead', { inPlace, country: esc(country) })}</p>
       ${l.description ? `<p>${esc(l.description)}</p>` : ''}
@@ -509,7 +524,7 @@ function inject(html, path, lng, page) {
 
 // ---- sitemaps
 async function sitemapIndex() {
-  const { n } = await one(`SELECT count(*)::int AS n FROM locations WHERE status = 'approved'`);
+  const { n } = await one(`SELECT count(*)::int AS n FROM locations l WHERE l.status = 'approved' AND ${LIB_INDEXED}`);
   const { n: nb } = await one(`SELECT count(*)::int AS n FROM (${SITEMAP_BOOKS_SQL}) x`);
   const parts = ['pages', ...Array.from({ length: Math.ceil(n / SITEMAP_CHUNK) }, (_, i) => `libraries-${i + 1}`),
     ...Array.from({ length: Math.ceil(nb / SITEMAP_CHUNK) }, (_, i) => `books-${i + 1}`)];
@@ -535,8 +550,10 @@ async function sitemapPages() {
   const places = await many(
     `SELECT p.id, p.slug, max(${LIB_LASTMOD}) AS lastmod
        FROM locations l JOIN places p ON p.id = l.place_id
-      WHERE l.status = 'approved' GROUP BY p.id ORDER BY p.id`);
-  const countries = await countryCounts();
+      WHERE l.status = 'approved' AND ${LIB_INDEXED} GROUP BY p.id ORDER BY p.id`);
+  const countries = await many(
+    `SELECT DISTINCT p.country AS cc FROM locations l JOIN places p ON p.id = l.place_id
+      WHERE l.status = 'approved' AND ${LIB_INDEXED} ORDER BY 1`);
   const readers = await many(
     `SELECT u.id, u.screen_name, max(r.updated_at) AS lastmod FROM users u JOIN book_reviews r ON r.user_id = u.id AND NOT r.hidden
       WHERE u.screen_name IS NOT NULL GROUP BY u.id ORDER BY u.id`);
@@ -567,7 +584,7 @@ async function sitemapBooks(part) {
 async function sitemapLibraries(part) {
   const rows = await many(
     `SELECT l.code, ${LIB_LASTMOD} AS lastmod FROM locations l
-      WHERE l.status = 'approved' ORDER BY l.id LIMIT $1 OFFSET $2`, [SITEMAP_CHUNK, (part - 1) * SITEMAP_CHUNK]);
+      WHERE l.status = 'approved' AND ${LIB_INDEXED} ORDER BY l.id LIMIT $1 OFFSET $2`, [SITEMAP_CHUNK, (part - 1) * SITEMAP_CHUNK]);
   return rows.length ? urlset(rows.map((r) => urlEntry(`/l/${r.code}`, r.lastmod))) : null;
 }
 

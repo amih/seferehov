@@ -25,6 +25,7 @@ It runs at https://seferehov.com. Hebrew is the default (right to left); English
 - **Printable sign** (A5 with a QR code) for each library.
 - **Private-info check**: names, hints and notes are checked for door codes, phone numbers and e-mails (patterns plus the local AI model) before they are published.
 - **Town pages and country pages** for search engines, with the libraries and books in each town (towns come from GeoNames and OpenStreetMap boundaries).
+- Only libraries with something of their own (added, checked, edited or reported by readers, or in Israel) are in the sitemap and open to search engines; the untouched OpenStreetMap shelves abroad, and towns and countries made only of them, get `noindex` so Google doesn't treat them as duplicates.
 
 ## Adding books — four ways
 
@@ -226,7 +227,6 @@ This protects against a failed disk, but not against anything that hits the whol
 **Operations**
 
 - Off-machine and off-site backups (above).
-- Search Console verification and sitemap submission.
 
 # Keeping this document current
 
