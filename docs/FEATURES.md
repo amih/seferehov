@@ -62,6 +62,7 @@ Photos and scans taken without signal are saved on the phone and sent later.
 - Books scanned at home stay private. Shelf photos or covers taken from My books become the reader's own books.
 - **"I left it in a library"**: one tap reports the book as added to that library.
 - Books of friends, or borrowed from friends, can be kept apart from the reader's own.
+- With more than 5 books, the list can be filtered by words, genre and language, and sorted by when added, title, author or year.
 
 ## Books for sale or to give away
 
@@ -72,7 +73,9 @@ Photos and scans taken without signal are saved on the phone and sent later.
 
 ## Finding books
 
-- **Search** by title or author: within 1, 5, 20 or 50 km of the reader or of a town, or anywhere. With no words it lists all books in the area.
+- **Search** by title or author: within 1, 5, 20 or 50 km of the reader or of a town, or anywhere. With no words it lists all books in the area ("Browse all books" lists every book on a shelf).
+- **Filters and sorting** on the results: genre, language, period published (before 1950, 1950–79, 1980–99, 2000s, 2010s, 2020 on) and when last scanned (week, month, year). Each choice shows how many of the books found it would leave. Sort by best match, scanned lately, nearest, most copies, newest or oldest, or title. Each book shows its genre, language and year, on how many shelves it is now, how many times readers scanned it, and when it was last seen.
+- **Genres** (23, from novel and poetry to Judaism, cooking and reference) are seldom given by catalogues, and never for most Hebrew books, so the local model picks one from the title, authors, publisher and description, in the background when the GPU is idle (about a second a book). A missing language is taken from the script of the title, or from common English words, else guessed by the model. Readers can correct both in "Fix a mistake", and the book page links them to the matching search.
 - **Alerts** (watches) for a book, an author or words, near a place or anywhere, by e-mail or push notification.
 - **Public book pages** (`/b/<id>`): covers, cover text, ISBN and Danacode, where the book is now, offers, reviews, and links to Open Library, Google Books, WorldCat and Simania.
 - **Reader pages** (`/r/<id>`): what a reader read and recommends. Home libraries are not shown.

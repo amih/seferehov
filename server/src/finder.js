@@ -6,10 +6,11 @@ import { requireUser } from './auth.js';
 import { sendMail } from './mail.js';
 import { sendPush } from './push.js';
 import { parseLatLon } from './util.js';
+import { GENRES, LANGUAGES } from './genres.js';
 
 const KM_CHOICES = [1, 5, 20, 50];
 const TAKEN_DAYS = 180;        // a taken book is still shown ("was here") this long
-const RESULTS = 30;
+const RESULTS = 60;
 const NOTIFY_EVERY_MIN = Number(process.env.WATCH_NOTIFY_MINUTES || 30);
 const WATCH_QUIET_H = 20;      // at most one email per watch per this many hours
 
@@ -24,7 +25,13 @@ export async function waitingFor(bookIds, userId) {
   return new Map(rows.map((r) => [r.book_id, { others: r.others, mine: !!r.mine }]));
 }
 
-export async function searchBooks({ text, pos, km, lang, userId }) {
+// Filters and orders for the results; facets count each genre, language and period among
+// the books found before those filters, so the reader sees what there is to narrow to.
+export const SORTS = ['match', 'recent', 'near', 'copies', 'year_new', 'year_old', 'title'];
+export const PERIODS = { old: [0, 1949], '1950': [1950, 1979], '1980': [1980, 1999], '2000': [2000, 2009], '2010': [2010, 2019], '2020': [2020, 9999] };
+const periodOf = (y) => (y ? Object.entries(PERIODS).find(([, [a, b]]) => y >= a && y <= b)?.[0] : null);
+
+export async function searchBooks({ text, pos, km, lang, userId, genre = null, language = null, period = null, days = null, sort = null }) {
   // Every parameter is referenced in every variant (Postgres must know their types).
   const where = 'AND ($4::int IS NULL OR ST_DWithin(l.geom, ST_MakePoint($3::float8, $2::float8)::geography, $4 * 1000))';
   const params = [text || null, pos?.lat ?? null, pos?.lon ?? null, km ?? null, TAKEN_DAYS];
@@ -65,13 +72,38 @@ export async function searchBooks({ text, pos, km, lang, userId }) {
     b.nearest = Math.min(...b.places.map((p) => p.distance_m ?? Infinity));
     b.latest = Math.max(...b.places.map((p) => new Date(p.at)));
   }
-  list.sort((x, y) => (y.present - x.present) || (y.score - x.score) || (x.nearest - y.nearest) || (y.latest - x.latest));
-  const top = list.slice(0, RESULTS);
-  const details = top.length ? await many(
-    'SELECT id, title, authors, year, cover_url FROM books WHERE id = ANY($1)', [top.map((b) => b.id)]) : [];
+  // Copies: on how many shelves the book is now; scans: how many times readers reported
+  // it on a shelf or added it to their own books (counted, never shown who).
+  const details = list.length ? await many(
+    `SELECT b.id, b.title, b.authors, b.year, b.cover_url, b.genre, b.language,
+            (SELECT count(*) FROM sightings s WHERE s.book_id = b.id AND s.status = 'approved')::int
+          + (SELECT count(*) FROM my_books m WHERE m.book_id = b.id)::int AS scans
+       FROM books b WHERE b.id = ANY($1)`, [list.map((b) => b.id)]) : [];
   const byId = new Map(details.map((d) => [d.id, d]));
+  for (const b of list) Object.assign(b, byId.get(b.id), { copies: b.places.filter((p) => p.present).length });
+  const facets = { genre: {}, language: {}, period: {} };
+  for (const b of list) {
+    for (const [k, v] of [['genre', b.genre], ['language', b.language], ['period', periodOf(b.year)]]) if (v) facets[k][v] = (facets[k][v] ?? 0) + 1;
+  }
+  const shown = list.filter((b) => (!genre || b.genre === genre) && (!language || b.language === language)
+    && (!period || periodOf(b.year) === period) && (!days || b.latest > Date.now() - days * 86400_000));
+  const by = {
+    match: (x, y) => (y.present - x.present) || (y.score - x.score) || (x.nearest - y.nearest) || (y.latest - x.latest),
+    recent: (x, y) => (y.latest - x.latest),
+    near: (x, y) => (y.present - x.present) || (x.nearest - y.nearest),
+    copies: (x, y) => (y.copies - x.copies) || (y.scans - x.scans),
+    year_new: (x, y) => ((y.year ?? 0) - (x.year ?? 0)),
+    year_old: (x, y) => ((x.year ?? 9999) - (y.year ?? 9999)),
+    title: (x, y) => x.title.localeCompare(y.title, lang),
+  };
+  shown.sort(by[sort] ?? by.match);
+  const top = shown.slice(0, RESULTS);
   const waiting = await waitingFor(top.map((b) => b.id), userId);
-  return top.map(({ score, nearest, latest, ...b }) => ({ ...byId.get(b.id), ...b, places: b.places.slice(0, 8), waiting: waiting.get(b.id) ?? null }));
+  return {
+    total: shown.length,
+    facets,
+    books: top.map(({ score, nearest, latest, ...b }) => ({ ...b, last_seen: new Date(latest), places: b.places.slice(0, 8), waiting: waiting.get(b.id) ?? null })),
+  };
 }
 
 export default async function finderRoutes(app) {
@@ -81,8 +113,12 @@ export default async function finderRoutes(app) {
     const text = String(req.query.q ?? '').trim().slice(0, 100);
     const pos = parseLatLon(req.query.lat, req.query.lon);
     const km = KM_CHOICES.includes(Number(req.query.km)) ? Number(req.query.km) : null;
-    if (text && text.length < 2) return { books: [] };
-    return { books: await searchBooks({ text, pos, km, lang: req.query.lang === 'en' ? 'en' : 'he', userId: req.user?.id }) };
+    if (text && text.length < 2) return { books: [], facets: {}, total: 0 };
+    const { genre, language, period, days, sort } = req.query;
+    return searchBooks({ text, pos, km, lang: req.query.lang === 'en' ? 'en' : 'he', userId: req.user?.id,
+      genre: GENRES.includes(genre) ? genre : null, language: LANGUAGES.includes(language) ? language : null,
+      period: period in PERIODS ? period : null, days: [7, 30, 365].includes(Number(days)) ? Number(days) : null,
+      sort: SORTS.includes(sort) ? sort : null });
   });
 
   // Towns with libraries, for "search around a town" when the reader does not share a

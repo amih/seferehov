@@ -8,6 +8,7 @@ import { bookShots, sendCovers } from '../shots.js';
 import { burstShots } from '../burst.js';
 import { offerDialog, offerLine } from '../offers.js';
 import { rememberList } from '../pager.js';
+import { bookFacts, GENRES, LANGUAGES } from '../genres.js';
 
 // The reader's own books, scanned at home. Later, "I left it in a library" reports it there.
 // Adding is on its own screen (/books/add), so this one is just the list.
@@ -30,15 +31,42 @@ export default async function myBooksView(root) {
 
   const cover = (r) => (r.photo?.thumb || r.cover_url
     ? `<img src="${esc(r.photo?.thumb || r.cover_url)}" alt="" loading="lazy">` : '<div class="nocover">📖</div>');
+  // Narrowing and ordering the home list, on the phone (the whole list is loaded).
+  const view = { text: '', genre: '', language: '', sort: 'added' };
+  const norm = (x) => String(x ?? '').toLowerCase();
+  const order = {
+    added: (a, b) => new Date(b.created_at) - new Date(a.created_at),
+    title: (a, b) => a.title.localeCompare(b.title, lang()),
+    author: (a, b) => norm(a.authors?.[0]).localeCompare(norm(b.authors?.[0]), lang()),
+    year_new: (a, b) => (b.year ?? 0) - (a.year ?? 0),
+    year_old: (a, b) => (a.year ?? 9999) - (b.year ?? 9999),
+  };
+  const narrow = (rows) => rows.filter((r) => (!view.genre || r.genre === view.genre) && (!view.language || r.language === view.language)
+    && (!view.text || norm(`${r.title} ${(r.authors ?? []).join(' ')}`).includes(norm(view.text)))).sort(order[view.sort]);
+  const toolbar = (rows) => {
+    const has = (k) => new Set(rows.map((r) => r[k]).filter(Boolean));
+    const sel = (k, values, prefix) => `<select data-view="${k}"><option value="">${t(`browse.${k}`)}: ${t('browse.any')}</option>${values.filter((v) => has(k).has(v)).map((v) =>
+      `<option value="${v}"${view[k] === v ? ' selected' : ''}>${esc(t(`${prefix}.${v}`))} (${rows.filter((r) => r[k] === v).length})</option>`).join('')}</select>`;
+    return `<div class="filters"><input type="search" data-view="text" value="${esc(view.text)}" placeholder="${esc(t('browse.filter_ph'))}">
+      ${sel('genre', GENRES, 'genre')}${sel('language', LANGUAGES, 'language')}
+      <select data-view="sort">${Object.keys(order).map((k) => `<option value="${k}"${view.sort === k ? ' selected' : ''}>${t(`sort.${k}`)}</option>`).join('')}</select></div>`;
+  };
+  let d;
   async function showLists() {
-    let d;
     try { d = await api('/api/my-books'); } catch { $('#lists').innerHTML = `<p class="note">${t('offline')}</p>`; return; }
+    draw();
+  }
+  function draw() {
+    const all = d.home;
+    d = { ...d, home: narrow(all) };
     $('#lists').innerHTML = `
-      <h2>${t('mybooks.home')} <span class="count">${d.home.length}</span></h2>
+      <h2>${t('mybooks.home')} <span class="count">${all.length}</span></h2>
+      ${all.length > 5 ? toolbar(all) : ''}
       ${d.home.length ? `<p class="muted small">${t('offer.lead')} <a href="/offers">${t('offer.all_link')}</a></p>` : ''}
       ${d.home.length ? `<ul class="books">${d.home.map((r) => `
         <li data-id="${r.id}"><a href="/books/${r.id}" data-book>${cover(r)}</a><div class="meta">
           <a class="title-link" href="/books/${r.id}" data-book><strong>${esc(r.title)}</strong></a><span class="muted">${esc((r.authors ?? []).join(', '))}</span>
+          ${bookFacts(r) ? `<span class="small muted">${esc(bookFacts(r))}</span>` : ''}
           ${offerLine(r)}
           <span class="row"><button class="btn small primary" data-place="${r.id}">📍 ${t('mybooks.left_it')}</button>
           <button class="btn small" data-offer="${r.id}">${r.offer ? `✎ ${t('offer.edit')}` : `🏷️ ${t('offer.btn')}`}</button>
@@ -57,8 +85,17 @@ export default async function myBooksView(root) {
           <span class="muted">${esc((r.authors ?? []).join(', '))}</span>
           <span class="small">📍 <a href="/l/${r.code}">${esc(r.location_name || t('free_library'))}</a> · ${timeAgo(r.placed_at)}${r.sighting_status === 'pending' ? ` · ${t('mybooks.pending')}` : ''}</span></div></li>`).join('')}</ul>` : ''}`;
     homeRows = [...d.home, ...d.friends];
+    d = { ...d, home: all };
   }
   let homeRows = [];
+  $('#lists').addEventListener('input', (e) => {
+    const k = e.target.dataset?.view;
+    if (!k) return;
+    view[k] = e.target.value;
+    const focus = k === 'text' ? e.target.selectionStart : null;
+    draw();
+    if (focus != null) { const i = $('[data-view="text"]'); i.focus(); i.setSelectionRange(focus, focus); }
+  });
   $('#lists').addEventListener('click', async (e) => {
     const p = e.target.closest('[data-place]'), del = e.target.closest('[data-del]'), off = e.target.closest('[data-offer]');
     if (off) {

@@ -3,13 +3,15 @@
 // while any scan is queued or being read, and lets a fresh photo be cropped first.
 // Clean Latin-script reads are shown at once; Hebrew reads (rough) and anything that
 // looks like a model loop wait for an admin on /admin. With nothing left to read, the
-// read covers are sharpened for showing (enhance.js), one at a time.
+// read covers are sharpened for showing (enhance.js), one at a time. Before that, books
+// get a genre (genres.js).
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { config } from './config.js';
 import { one, q } from './db.js';
 import { readCoverText } from './vision.js';
 import { enhanceNext } from './enhance.js';
+import { classifyNext } from './genres.js';
 import { step, withTrace } from './trace.js';
 
 let log = console;
@@ -35,6 +37,7 @@ async function next() {
             AND (cropped_at IS NOT NULL OR created_at < now() - interval '1 hour')
           ORDER BY created_at DESC LIMIT 1`);
       if (!p) {
+        try { if (await classifyNext()) continue; } catch (err) { log.warn({ err }, 'genre failed'); return; }
         try { if (await enhanceNext()) continue; } catch (err) { log.warn({ err }, 'cover enhance failed'); continue; }
         return;
       }

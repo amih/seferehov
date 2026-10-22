@@ -12,7 +12,7 @@ import { bookDetails, missingParts } from './details.js';
 
 const LIST_SQL = `
   SELECT m.id, m.created_at, m.placed_at, m.owner, m.friend_name, m.offer, m.price, m.condition, m.offer_note,
-         m.offer_place_id, op.name AS offer_place, op.name_he AS offer_place_he, b.id AS book_id, b.isbn13, b.title, b.authors, b.year,
+         m.offer_place_id, op.name AS offer_place, op.name_he AS offer_place_he, b.id AS book_id, b.isbn13, b.title, b.authors, b.year, b.genre, b.language,
          COALESCE(b.front_url, b.cover_url) AS cover_url, p.path, p.thumb_path,
          l.code, l.name AS location_name, s.status AS sighting_status
     FROM my_books m JOIN books b ON b.id = m.book_id

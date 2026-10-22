@@ -366,6 +366,8 @@ async function bookPage(lng, T, id) {
         ${b.danacode ? `<dt>${T('seo.danacode')}</dt><dd dir="ltr">${danacodeShown(b.danacode)}</dd>` : ''}
         ${b.publisher ? `<dt>${T('seo.publisher')}</dt><dd dir="auto">${esc(b.publisher)}</dd>` : ''}
         ${b.year ? `<dt>${T('seo.year')}</dt><dd>${b.year}</dd>` : ''}
+        ${b.language ? `<dt>${T('fix.f.language')}</dt><dd><a href="${`/search?all=1&language=${b.language}${lng === 'he' ? '' : '&lang=en'}`}">${T(`language.${b.language}`)}</a></dd>` : ''}
+        ${b.genre ? `<dt>${T('fix.f.genre')}</dt><dd><a href="${`/search?all=1&genre=${b.genre}${lng === 'he' ? '' : '&lang=en'}`}">${T(`genre.${b.genre}`)}</a></dd>` : ''}
       </dl>
       <h2>${T('review.title')}</h2>
       ${reviews.length ? `<p class="review-sum">${T('review.n_read', { n: reviews.length })}${avg ? ` · ${stars(Math.round(avg))} ${avg.toFixed(1)} (${T('review.n_rated', { n: rated.length })})` : ''}</p>

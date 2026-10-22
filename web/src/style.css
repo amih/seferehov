@@ -564,3 +564,9 @@ ul.offers li { margin-bottom: 10px; }
 @keyframes cb-pan { 0% { transform: translateX(-140%); } 33% { transform: none; } 66% { transform: translateX(140%); } }
 @keyframes cb-snap { 0%, 60% { opacity: 0; } 70% { opacity: .9; } 100% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .cb-book.flip, .cb-phone, .cb-phone::after { animation: none; } .comic .cb-book.flip { transform: rotateY(180deg); } }
+
+/* Narrowing and ordering a list of books */
+.filters { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin: 8px 0; }
+.filters label { display: inline-flex; gap: 4px; align-items: center; }
+.filters select, .filters input { max-width: 100%; padding: 6px 8px; font: inherit; font-size: .9rem; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); }
+.filters input[type=search] { flex: 1 1 100%; }

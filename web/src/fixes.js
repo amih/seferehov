@@ -2,13 +2,14 @@ import { api, getMe } from './api.js';
 import { navigate } from './nav.js';
 import { esc, timeAgo, toast } from './ui.js';
 import { t } from './i18n.js';
+import { GENRES, LANGUAGES } from './genres.js';
 
 // "Fix a mistake" on a book page: anyone signed in can correct the title, author,
 // publisher, year, blurb or the text read from a cover photo — even what another reader
 // approved. Trusted readers' fixes show at once; others wait for two votes (/fixes).
 // Every change is kept: "History" lists them, with votes on waiting ones and an undo
 // on the one showing now.
-const FIELDS = ['title', 'authors', 'publisher', 'year', 'description'];
+const FIELDS = ['title', 'authors', 'publisher', 'year', 'genre', 'language', 'description'];
 
 export function fixBox(el, bookId, { onSaved } = {}) {
   if (!el) return;
@@ -48,7 +49,10 @@ const fieldLabel = (f) => (f.field === 'cover_text' ? t(f.photo_kind === 'back' 
 
 function fixForm(bookId, { book, texts, me }) {
   return new Promise((resolve) => {
-    const box = (field, value, long) => long
+    const box = (field, value, long) => (field === 'genre' || field === 'language')
+      ? `<select name="${field}"><option value="">—</option>${(field === 'genre' ? GENRES : LANGUAGES).map((k) =>
+        `<option value="${k}"${value === k ? ' selected' : ''}>${esc(t(`${field}.${k}`))}</option>`).join('')}</select>`
+      : long
       ? `<textarea name="${field}" dir="auto" rows="${field === 'description' ? 5 : 6}">${esc(value ?? '')}</textarea>`
       : `<input name="${field}" dir="auto" value="${esc(value ?? '')}"${field === 'year' ? ' inputmode="numeric" maxlength="4"' : ''}>`;
     const { el, close } = sheet(`

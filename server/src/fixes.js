@@ -22,6 +22,7 @@ import { requireUser } from './auth.js';
 import { award, maybePromote, audit } from './moderation.js';
 import { splitAuthors } from './locations.js';
 import { BOOK_PHOTOS_SQL } from './seo.js';
+import { GENRES, LANGUAGES } from './genres.js';
 
 const FIX_LIVE_AFTER = 3;
 const FIX_LIVE_SCORE = 0.8;
@@ -40,7 +41,7 @@ const FIX_DAY_STEPS = [
 const FIX_DAY_LOW = 3;
 const dayLimit = (user, accepted, score, low) => (low ? FIX_DAY_LOW
   : FIX_DAY_STEPS.find((s) => user.trust_level >= (s.trust ?? 0) && accepted >= (s.accepted ?? 0) && score >= (s.score ?? 0)).limit);
-const FIELDS = { title: 300, authors: 300, publisher: 200, year: 4, description: 4000, cover_text: 8000 };
+const FIELDS = { title: 300, authors: 300, publisher: 200, year: 4, genre: 20, language: 10, description: 4000, cover_text: 8000 };
 
 // The reader's fix record and what it allows.
 export async function fixStanding(user) {
@@ -129,6 +130,8 @@ function clean(field, v) {
   s = field === 'description' || field === 'cover_text' ? s.replace(/\n{3,}/g, '\n\n') : s.replace(/\s+/g, ' ');
   if (field === 'year' && s && !(/^\d{4}$/.test(s) && Number(s) >= 1400 && Number(s) <= new Date().getFullYear() + 1)) return undefined;
   if (field === 'title' && !s) return undefined;
+  if (field === 'genre' && s && !GENRES.includes(s)) return undefined;
+  if (field === 'language' && s && !LANGUAGES.includes(s)) return undefined;
   return s.slice(0, FIELDS[field]);
 }
 
@@ -177,7 +180,7 @@ export default async function fixRoutes(app) {
   // The book's fixable details, its cover texts, and the history of fixes.
   app.get('/api/books/:id/fixes', async (req, reply) => {
     const id = Number(req.params.id);
-    const b = await one('SELECT id, title, authors, publisher, year, description FROM books WHERE id = $1', [id]);
+    const b = await one('SELECT id, title, authors, publisher, year, genre, language, description FROM books WHERE id = $1', [id]);
     if (!b) return reply.code(404).send({ error: 'not_found' });
     const history = await many(`${FIX_ROW_SQL} WHERE f.book_id = $1 ORDER BY f.created_at DESC LIMIT 60`, [id, req.user?.id ?? null]);
     return {
@@ -198,7 +201,7 @@ export default async function fixRoutes(app) {
     const standing = await fixStanding(req.user);
     const { changes = {}, texts = {}, note = null } = req.body ?? {};
     const wanted = [];
-    for (const field of ['title', 'authors', 'publisher', 'year', 'description']) {
+    for (const field of ['title', 'authors', 'publisher', 'year', 'genre', 'language', 'description']) {
       if (!(field in changes)) continue;
       const value = clean(field, changes[field]);
       if (value === undefined) return reply.code(400).send({ error: `bad_${field}` });
