@@ -31,8 +31,17 @@ const C = {
   halo: '#ffffff',
 };
 
+// Checked once, and the test context is released at once: phones allow only a few live
+// WebGL contexts, and the oldest (the map's) is lost beyond that.
+let webgl;
 const hasWebGL = () => {
-  try { const c = document.createElement('canvas'); return !!(c.getContext('webgl2') || c.getContext('webgl')); } catch { return false; }
+  if (webgl !== undefined) return webgl;
+  try {
+    const gl = document.createElement('canvas').getContext('webgl2') || document.createElement('canvas').getContext('webgl');
+    webgl = !!gl;
+    gl?.getExtension('WEBGL_lose_context')?.loseContext();
+  } catch { webgl = false; }
+  return webgl;
 };
 
 let baseStyle;

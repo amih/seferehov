@@ -15,7 +15,11 @@ export async function api(path, { method = 'GET', json, form } = {}) {
   if (json !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(json); }
   else if (form) body = form;
 
-  const res = await fetch(path, { method, headers, body, credentials: 'same-origin' });
+  // A request that hangs (a weak phone signal) must not hold up the screen or the menu
+  // forever; uploads get longer.
+  // A timeout counts as offline (a TypeError, like a failed fetch): uploads are then saved for later.
+  const res = await fetch(path, { method, headers, body, credentials: 'same-origin', signal: AbortSignal.timeout(form ? 300_000 : 20_000) })
+    .catch((err) => { throw err.name === 'TimeoutError' ? new TypeError('timeout') : err; });
 
   const serverVersion = res.headers.get('X-App-Version');
   if (serverVersion && serverVersion !== __APP_VERSION__) checkForUpdate();

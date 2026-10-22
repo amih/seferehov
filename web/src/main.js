@@ -64,8 +64,15 @@ const routes = [
 
 let main = document.getElementById('view');
 let cleanup = null;
+let renders = 0;
 
+// Screens can take a moment to open (the reader, a screen's own data). A tap on the next
+// menu item meanwhile starts another render: the older one then stops, and a screen it
+// had already opened is closed at once, so nothing (a map, a camera, timers) is left
+// running unseen.
 async function render() {
+  const n = ++renders;
+  const stale = () => n !== renders;
   maybeApply(); // a waiting update is applied between screens
   cleanup?.();
   cleanup = null;
@@ -73,6 +80,7 @@ async function render() {
   const [, view, params] = routes.map(([re, v]) => [re, v, path.match(re)]).find(([, , m]) => m) ?? [];
   document.body.classList.toggle('full', path === '/');
   const me = await getMe();
+  if (stale()) return;
   if (me && !me.screen_name && !['/me', '/about'].includes(path)) {
     sessionStorage.setItem('seferehov:next', location.pathname + location.search);
     history.replaceState(history.state, '', '/me?welcome=1');
@@ -88,7 +96,9 @@ async function render() {
     return;
   }
   trackPageView();
-  cleanup = (await view(main, params.slice(1), new URLSearchParams(location.search))) || null;
+  const done = (await view(main, params.slice(1), new URLSearchParams(location.search))) || null;
+  if (stale()) { done?.(); return; }
+  cleanup = done;
   showReadyBanner(me, path);
 }
 
@@ -134,6 +144,15 @@ applyLang();
 translateShell();
 
 initMenu();
+
+// Errors on the phone go to the server log (a few per page load at most).
+let reported = 0;
+const report = (message, where, stack) => {
+  if (reported++ >= 5) return;
+  navigator.sendBeacon?.('/api/client-error', new Blob([JSON.stringify({ message, where, stack, path: location.pathname, version: __APP_VERSION__ })], { type: 'application/json' }));
+};
+addEventListener('error', (e) => report(e.message, `${e.filename}:${e.lineno}:${e.colno}`, e.error?.stack));
+addEventListener('unhandledrejection', (e) => report(String(e.reason?.message ?? e.reason), 'promise', e.reason?.stack));
 initUpdates();
 startQueue();
 window.addEventListener('online', async () => {

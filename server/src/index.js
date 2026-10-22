@@ -24,6 +24,7 @@ import bookReviewRoutes from './reviews.js';
 import pushRoutes from './push.js';
 import fixRoutes, { startFixWorker } from './fixes.js';
 import { startOcrWorker } from './ocr.js';
+import clientErrorRoutes from './clienterrors.js';
 
 const app = Fastify({ logger: true, trustProxy: '127.0.0.1', bodyLimit: 1024 * 1024 });
 
@@ -64,6 +65,7 @@ await app.register(adminRoutes);
 await app.register(bookReviewRoutes);
 await app.register(pushRoutes);
 await app.register(fixRoutes);
+await app.register(clientErrorRoutes);
 
 app.get('/api/health', async () => ({ ok: true, web: deployed?.version ?? null }));
 
