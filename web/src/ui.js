@@ -33,6 +33,26 @@ export function dialog({ title, html, ok, cancel, read }) {
   });
 }
 
+// A question with a few answers, each a button: [key, label, class]. Resolves the key of
+// the button, or null when closed by a tap outside.
+export function choose({ title, html, choices }) {
+  return new Promise((resolve) => {
+    const el = document.createElement('div');
+    el.className = 'dialog-back';
+    el.innerHTML = `<div class="dialog" role="dialog" aria-modal="true">
+      ${title ? `<h2>${esc(title)}</h2>` : ''}<div class="dialog-body">${html ?? ''}</div>
+      <div class="dialog-actions choices">${choices.map(([key, label, cls]) => `<button class="btn ${cls ?? ''}" data-k="${esc(key)}">${esc(label)}</button>`).join('')}</div></div>`;
+    const close = (k) => { el.remove(); resolve(k); };
+    el.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-k]');
+      if (b) close(b.dataset.k);
+      else if (e.target === el) close(null);
+    });
+    document.body.append(el);
+    el.querySelector('[data-k]')?.focus();
+  });
+}
+
 // "Are you sure?" before an update: resolves true on the OK button.
 export function confirmDialog(text, ok) {
   return dialog({ html: `<p>${text}</p>`, ok: ok ?? t('confirm.yes'), cancel: t('cancel') });
