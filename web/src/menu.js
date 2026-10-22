@@ -15,7 +15,8 @@ const waitingIn = (todo) => (todo ? ['mine', 'review', 'fixes', 'duplicates', 'l
 // Opens at once, with the last known counts; the to-do count is brought up to date after.
 async function open() {
   if (document.querySelector('.menu-back')) return;
-  const me = await getMe();
+  // On a bad connection the menu opens anyway, after a moment, as if signed out.
+  const me = await Promise.race([getMe(), new Promise((r) => setTimeout(() => r(null), 1500))]);
   const waiting = waitingIn(me && lastTodoCounts());
   // The list opens with the reader: their own picture and screen name, or "sign in".
   const items = [

@@ -79,7 +79,8 @@ async function render() {
   const path = location.pathname.replace(/\/+$/, '') || '/';
   const [, view, params] = routes.map(([re, v]) => [re, v, path.match(re)]).find(([, , m]) => m) ?? [];
   document.body.classList.toggle('full', path === '/');
-  const me = await getMe();
+  // A screen does not wait long for the reader on a bad connection.
+  const me = await Promise.race([getMe(), new Promise((r) => setTimeout(() => r(null), 5000))]);
   if (stale()) return;
   if (me && !me.screen_name && !['/me', '/about'].includes(path)) {
     sessionStorage.setItem('seferehov:next', location.pathname + location.search);

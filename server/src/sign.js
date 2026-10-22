@@ -6,13 +6,13 @@ import { locationByCode } from './locations.js';
 const TEXT = {
   he: {
     dir: 'rtl', name: 'ספרחוב', tag: 'מפת ספריות הרחוב',
-    lead: '<strong>המדף הזה פתוח לכולם, כמו תמיד.</strong> ספרחוב היא אפליקציה חינמית לאוהבי ספרים: היא מראה איפה יש מדפי ספרים ציבוריים ואילו ספרים נמצאים בהם. אני לא מנהל את המדף הזה ולא מוסיף לו כללים.',
+    lead: '<strong>המדף הזה פתוח לכולם, כמו תמיד.</strong> ספרחוב היא אפליקציה חינמית לאוהבי ספרים: היא מראה איפה יש מדפי ספרים ציבוריים ואילו ספרים נמצאים בהם. האפליקציה לא מנהלת את המדף הזה ולא מוסיפה לו כללים.',
     steps: ['סרקו את הקוד כדי לראות אילו ספרים יש כאן עכשיו.', 'לקחתם ספר או השארתם אחד? אפשר לעדכן באפליקציה — לא חובה.', 'מכירים עוד מדף ספרים ציבורי? הוסיפו אותו למפה.'],
     print: 'הדפסה',
   },
   en: {
     dir: 'ltr', name: 'Seferehov', tag: 'A map of free street libraries',
-    lead: '<strong>This shelf is open to everyone, as always.</strong> Seferehov is a free app for book lovers. It shows where public book shelves are and which books are on them. I do not run this shelf and I add no rules to it.',
+    lead: '<strong>This shelf is open to everyone, as always.</strong> Seferehov is a free app for book lovers. It shows where public book shelves are and which books are on them. This app does not run this shelf and adds no rules to it.',
     steps: ['Scan the code to see which books are here now.', 'Took a book or left one? You can say so in the app — not required.', 'Know another public book shelf? Add it to the map.'],
     print: 'Print',
   },
