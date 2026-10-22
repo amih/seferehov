@@ -4,7 +4,7 @@ import { esc, timeAgo, toast } from '../ui.js';
 import { t } from '../i18n.js';
 import { todoTabs } from '../todo.js';
 
-const flag = (f) => (f ? `<p class="note">⚠️ ${t('review.private')}: ${(f.snippets ?? []).map((x) => `<mark>${esc(x)}</mark>`).join(' ')} <span class="muted small">${esc(f.reason ?? '')}</span></p>` : '');
+const flag = (f) => (f ? `<p class="note">⚠️ ${t('mod.private')}: ${(f.snippets ?? []).map((x) => `<mark>${esc(x)}</mark>`).join(' ')} <span class="muted small">${esc(f.reason ?? '')}</span></p>` : '');
 const yesNo = (v) => t(v ? 'review.yes' : 'review.no');
 
 // Old → new for each changed field.
@@ -29,7 +29,7 @@ export default async function reviewView(root) {
   root.innerHTML = `
   <section class="page">
     ${todoTabs('review')}
-    <h1>${t('review.title')}</h1>
+    <h1>${t('mod.title')}</h1>
     <h2>${t('review.libs')} <span class="count">${locations.length}</span></h2>
     <ul class="review">${locations.map((l) => `
       <li data-type="location" data-id="${l.id}">
