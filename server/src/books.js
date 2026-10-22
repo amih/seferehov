@@ -303,11 +303,13 @@ function similarity(a, b) {
 
 // Finds a catalogue record for a title (and author) read off a spine or cover.
 // Returns { book } on a confident match, otherwise { book: null }.
-export async function lookupTitle(title, author, context = 'scan') {
+// verify(candidate): when given, only a record it accepts can match (e.g. one whose
+// title agrees with all the text read off the covers).
+export async function lookupTitle(title, author, context = 'scan', verify = null) {
   return withLookup({ kind: 'title', query: title, author, hebrew: isHebrew(title), context }, async () => {
-    const r = await searchTitle(title, author);
+    const r = await searchTitle(title, author, verify);
     // A misread author name hides good matches; try the title alone.
-    return r.book || !author ? r : searchTitle(title, null);
+    return r.book || !author ? r : searchTitle(title, null, verify);
   });
 }
 
@@ -318,16 +320,16 @@ async function appTitleCandidates(title) {
   return many(`SELECT * FROM books WHERE $1 <% search ORDER BY word_similarity($1, search) DESC, isbn13 IS NULL LIMIT 10`, [q]).catch(() => []);
 }
 
-async function searchTitle(title, author) {
+async function searchTitle(title, author, verify) {
   const mine = [];
   for (const b of await appTitleCandidates(title)) mine.push({ ...b, bare: b.title, alt: null, via: 'app', book: b });
-  const here = pickBest(mine, title, author);
+  const here = pickBest(mine, title, author, verify);
   if (here) return { book: here.book, source: 'app', score: here.score };
   const candidates = [];
   for (const r of await track('local_ol', () => localTitleCandidates(title)).catch(() => [])) {
     candidates.push({ ...fromLocal(r), bare: r.title, isbn: r.isbn13, alt: r.tnorm, via: 'local_ol' });
   }
-  const local = pickBest(candidates, title, author);
+  const local = pickBest(candidates, title, author, verify);
   if (local) return { book: await saveCandidate(local, title), source: local.via, score: local.score };
   // Hebrew titles: the National Library has nearly every Israeli book.
   if (isHebrew(title)) {
@@ -336,7 +338,7 @@ async function searchTitle(title, author) {
     } catch { /* fall through to Google Books */ }
   }
   const q = [`intitle:${title}`, author && `inauthor:${author}`].filter(Boolean).join(' ');
-  if (!pickBest(candidates, title, author)) try {
+  if (!pickBest(candidates, title, author, verify)) try {
     const gb = await track('googlebooks', () => getJson(gbUrl(`maxResults=5&q=${encodeURIComponent(q)}`)), (r) => r?.items?.length ?? 0);
     for (const item of gb?.items ?? []) {
       const v = item.volumeInfo;
@@ -346,7 +348,7 @@ async function searchTitle(title, author) {
         cover_url: v.imageLinks?.thumbnail?.replace(/^http:/, 'https:') ?? null, source: 'googlebooks', source_ids: { googlebooks: item.id }, via: 'googlebooks' });
     }
   } catch { /* try Open Library */ }
-  if (!pickBest(candidates, title, author)) {
+  if (!pickBest(candidates, title, author, verify)) {
     try {
       const ol = await track('openlibrary', () => getJson(`https://openlibrary.org/search.json?limit=5&fields=key,title,author_name,isbn,first_publish_year,cover_i&title=${encodeURIComponent(title)}${author ? `&author=${encodeURIComponent(author)}` : ''}`), (r) => r?.docs?.length ?? 0);
       for (const d of ol?.docs ?? []) {
@@ -356,10 +358,10 @@ async function searchTitle(title, author) {
       }
     } catch { /* no match */ }
   }
-  const best = pickBest(candidates, title, author);
+  const best = pickBest(candidates, title, author, verify);
   // On a miss, keep the closest score anyway: it helps tune the 0.7 threshold.
   return best ? { book: await saveCandidate(best, title), source: best.via, score: best.score }
-    : { book: null, score: rankBest(candidates, title, author).score || null };
+    : { book: null, score: rankBest(candidates, title, author, verify).score || null };
 }
 
 // Dice on letter pairs: tolerates spelling variants, so only counts when very close.
@@ -372,20 +374,29 @@ function charSimilarity(a, b) {
   return na && nb ? (2 * n) / (na + nb) : 0;
 }
 
-function pickBest(candidates, title, author) {
-  const { best, score } = rankBest(candidates, title, author);
+function pickBest(candidates, title, author, verify) {
+  const { best, score } = rankBest(candidates, title, author, verify);
   return best && score >= 0.7 ? { ...best, score } : null;
 }
 
-function rankBest(candidates, title, author) {
+const mainTitle = (s) => String(s ?? '').split(':')[0];
+
+function rankBest(candidates, title, author, verify) {
   let best = null, bestScore = 0;
   for (const c of candidates) {
+    if (verify && !verify(c)) continue;
     const chars = Math.max(charSimilarity(title, c.title), charSimilarity(title, c.bare));
-    let score = Math.max(similarity(title, c.title), similarity(title, c.bare), c.alt ? containment(title, c.alt) : 0,
+    // Alternative titles hold the Hebrew of romanized records; a read title found inside
+    // them counts only as far as it covers the record's main title (a word or two read
+    // off a spine is inside many long titles).
+    const alt = c.alt && !isHebrew(c.title) ? containment(title, c.alt) * Math.min(1, words(title).size / (words(mainTitle(c.bare)).size || 1)) : 0;
+    let score = Math.max(similarity(title, c.title), similarity(title, c.bare), similarity(title, mainTitle(c.bare)), alt,
       chars >= 0.9 ? chars * 0.8 : 0);
     // Prefer records in the script we read (the Hebrew edition over translations).
     if (isHebrew(title) !== isHebrew(c.title)) score *= 0.9;
     if (author && c.authors.length) score = score * 0.75 + 0.25 * Math.max(...c.authors.map((a) => similarity(author, a)));
+    // A record naming no author loses a tie to one naming the author we read.
+    else if (author) score *= 0.95;
     if (score > bestScore) { best = c; bestScore = score; }
   }
   return { best, score: bestScore };

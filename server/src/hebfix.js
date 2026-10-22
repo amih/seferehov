@@ -75,6 +75,17 @@ export async function knownShare(text) {
   }
 }
 
+// How many of the Hebrew words (minLen+ letters) hspell knows; 0 without hspell.
+export async function knownWords(text, minLen = 3) {
+  const words = (String(text ?? '').match(WORD) ?? []).map(plain).filter((w) => w.length >= minLen);
+  try {
+    const bad = await unknown([...new Set(words)]);
+    return words.filter((w) => !bad.has(w)).length;
+  } catch {
+    return 0;
+  }
+}
+
 // The vision model sometimes writes Hebrew back to front (each line in the order the
 // letters stand on the picture, left to right), mostly on tilted photos. Turned round
 // when that gives clearly more words hspell knows.

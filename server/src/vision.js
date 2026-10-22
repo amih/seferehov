@@ -1,5 +1,5 @@
 import sharp from 'sharp';
-import { fixHebrew, LOOKALIKE, unreverse } from './hebfix.js';
+import { fixHebrew, knownWords, LOOKALIKE, unreverse } from './hebfix.js';
 import { readBarcodes } from 'zxing-wasm/reader';
 import { config } from './config.js';
 import { normalizeIsbn, normalizeDanacode } from './util.js';
@@ -61,28 +61,87 @@ const brief = (b) => ({ title: b.title, author: b.author ?? null, isbn: b.isbn ?
 // to decode; the printed digits are read well, and an ISBN's check digit catches misreads.
 const FRONT_PROMPT = 'This is the front cover of one book. Read its title and author exactly as printed, in the original language and script (do not translate). Answer one line: TITLE | AUTHOR. If unreadable answer NONE.';
 const BACK_PROMPT = 'This is the back cover of a book. Find the ISBN, or the Israeli Danacode (דאנאקוד), printed on it, usually next to the barcode. Answer one line: ISBN <digits> or DANACODE <digits>. If there is neither, answer NONE.';
+const PICK_PROMPT = (lines) => `This is the front cover of one book. OCR read these lines of text on it (text height in pixels in brackets):
+${lines.map((l, i) => `${i + 1}. [${l.h}] ${l.text}`).join('\n')}
+Which lines are the book's title, and which are the author's name? The title is usually the biggest text; the author's name is a person's name. Answer one line: TITLE | AUTHOR, copying the OCR text exactly (join lines of a title that spans several lines with a space). Leave AUTHOR empty if no author is printed.`;
+const isHebrew = (s) => /[\u0590-\u05FF]/.test(s ?? '');
+
 // codes: every ISBN/Danacode found, surest first (barcodes, then printed digits).
 // unchecked: the printed Danacodes among them — no check digit, so the caller trusts
 // one only when the catalogue's title for it matches the front cover.
+// Hebrew covers are also read by OCR (text: front, then back), which checks the model:
+// it reads the layout well but invents Hebrew letters it cannot make out. alternatives:
+// other readings worth a catalogue lookup.
 export async function readCover(front, back = null) {
-  let book = null;
+  const reads = [];
   for (const angle of [0, 90, 270]) {
-    [book] = parseBooks((await generate(await prepare(front, angle), FRONT_PROMPT, 120)).trim().split('\n')[0]);
-    if (book && book.quality !== 'low') break;
+    const [b] = parseBooks((await generate(await prepare(front, angle), FRONT_PROMPT, 120)).trim().split('\n')[0]);
+    if (b) reads.push(b);
+    if (b && b.quality !== 'low') break;
+  }
+  let book = reads.find((b) => b.quality !== 'low') ?? reads[0] ?? null;
+  const model = book;
+  let text = '', pick = null, backText = null;
+  if (!book || reads.some((b) => isHebrew(b.title + b.author))) {
+    const ocr = await suryaRead(front).catch(() => null);
+    const lines = (ocr?.boxes ?? []).filter((b) => b.confidence >= 0.5 && /\p{L}{2}/u.test(b.text))
+      .map((b) => ({ text: b.text.replace(/\s+/g, ' ').trim(), h: Math.round(b.bbox[3] - b.bbox[1]) }));
+    if (lines.length) {
+      text = lines.map((l) => l.text).join('\n');
+      // The model picks the title and author among the OCR lines: OCR spelling, model layout.
+      [pick] = parseBooks((await generate(await prepare(front, 0), PICK_PROMPT(lines.slice(0, 40)), 160)).trim().split('\n')[0]);
+      const known = [...lines.map((l) => l.text), pick?.title, pick?.author].filter(Boolean);
+      // A low-quality read OCR agrees with beats a clean one it does not (a cover read sideways).
+      const agree = (b) => Math.max(0, ...known.map((k) => titleSimilarity(b.title, k)));
+      for (const b of reads) if (agree(b) > agree(book) + 0.1) book = b;
+      book = await reconcile(book ?? pick, known, pick);
+      if (back) backText = await surya(back).catch(() => '');
+    }
   }
   const codes = [...(back ? await readBookCodes(back) : []), ...await readBookCodes(front)];
   const fromBarcodes = codes.length;
   if (!codes.length && back) {
     const printed = parsePrintedCode(await generate(await prepare(back, 0, 1600), BACK_PROMPT, 40));
     // Surya reads Hebrew print (the Danacode line) better than the vision model.
-    const ocr = !printed || !normalizeIsbn(printed) ? codesInText(await surya(back).catch(() => '')) : [];
+    const ocr = !printed || !normalizeIsbn(printed) ? codesInText(backText ?? await surya(back).catch(() => '')) : [];
     codes.push(...ocr, ...(printed ? [printed] : []));
   }
   const unique = [...new Set(codes)];
   // Barcodes and ISBNs carry a check digit; a Danacode read from print does not.
   const unchecked = fromBarcodes ? [] : unique.filter((c) => !normalizeIsbn(c));
-  await step('cover-read', { title: book?.title ?? null, author: book?.author ?? null, quality: book?.quality ?? 'low', barcodes: codes.slice(0, fromBarcodes), codes: unique, unchecked });
-  return { title: book?.title ?? null, author: book?.author ?? null, quality: book?.quality ?? 'low', isbn: unique[0] ?? null, codes: unique, unchecked };
+  const alternatives = [pick, model].filter((b) => b?.title && normTitle(b.title) !== normTitle(book?.title)).map((b) => ({ title: b.title, author: b.author ?? null }));
+  await step('cover-read', { title: book?.title ?? null, author: book?.author ?? null, quality: book?.quality ?? 'low', model: model && { title: model.title, author: model.author }, pick: pick && { title: pick.title, author: pick.author }, alternatives, barcodes: codes.slice(0, fromBarcodes), codes: unique, unchecked });
+  return { title: book?.title ?? null, author: book?.author ?? null, quality: book?.quality ?? 'low', isbn: unique[0] ?? null, codes: unique, unchecked,
+    alternatives, text: [text, backText].filter(Boolean).join('\n') };
+}
+
+// Each field the model read is swapped for the OCR line it resembles (or for single OCR
+// words when no line is close); when the spellings differ, the one with more words
+// hspell knows wins, OCR on a tie. A model that put the author first is turned round.
+export async function reconcile(book, known, pick) {
+  if (!book) return book;
+  const sim = (a, b) => (a && b ? titleSimilarity(a, b) : 0);
+  let { title, author } = book;
+  if (pick?.title && sim(pick.title, author) > Math.max(0.6, sim(pick.title, title))) [title, author] = [author, title];
+  const better = async (ocr, read) => ((await knownWords(read, 4)) > (await knownWords(ocr, 4)) ? read : ocr);
+  const words = [...new Set(known.flatMap((k) => k.split(' ')))].filter((w) => normTitle(w).length >= 4);
+  const fix = async (v) => {
+    if (!v) return v;
+    let best = null, top = 0;
+    for (const k of known) { const x = sim(v, k); if (x > top) [best, top] = [k, x]; }
+    if (top >= 0.6) return better(best, v);
+    let out = v;
+    for (const w of v.split(' ').filter((x) => normTitle(x).length >= 4)) {
+      let bw = null, bs = 0;
+      for (const k of words) { const x = sim(w, k); if (x > bs) [bw, bs] = [k, x]; }
+      if (bs >= 0.75 && bs < 1) out = out.replace(w, await better(bw, w));
+    }
+    return out;
+  };
+  title = (await fix(title)) || pick?.title || null;
+  author = (await fix(author)) ?? null;
+  if (title !== book.title || author !== book.author) await step('cover-reconcile', { note: 'model reading checked against OCR', from: { title: book.title, author: book.author }, to: { title, author } });
+  return { ...book, title, author };
 }
 
 // ISBNs and Danacodes in OCR text: "ISBN 978-…", "דאנאקוד: 239-597", "מסת"ב …".
@@ -227,6 +286,52 @@ export function sameTitle(a, b) {
   const [x, y] = [normTitle(a).split(' '), normTitle(b).split(' ')].map((w) => w.filter(Boolean));
   const [short, long] = x.length <= y.length ? [x, new Set(y)] : [y, new Set(x)];
   return short.length > 0 && short.filter((w) => long.has(w)).length / short.length >= 0.5;
+}
+
+// Does a catalogue title fit the text printed on the covers? Every word of its main
+// title (before ':') must be on one line of it, one miss allowed in a long title; with
+// full: true (the covers read in full by OCR) a subtitle of 3+ words needs one of them
+// too (catalogues add descriptive subtitles no cover prints). readings: titles read off
+// the front; one that goes on past the main title (a printed subtitle) must share a word
+// with the catalogue's subtitle. A word may be misread by a letter or so (look-alike
+// letters, a prefix letter).
+const wordSeen = (w, seen) => seen.has(w) || (w.length >= 4 && [...seen].some((p) => Math.abs(p.length - w.length) <= 1 && titleSimilarity(p, w) >= 0.75));
+export function coverAgrees(catalogueTitle, printed, { full = false, readings = [] } = {}) {
+  const lines = String(printed ?? '').split('\n').map((l) => new Set(normTitle(l).split(' ').filter(Boolean))).filter((l) => l.size);
+  const all = new Set(lines.flatMap((l) => [...l]));
+  const terms = (s) => normTitle(s).split(' ').filter((x) => x.length > 1);
+  const [main, ...rest] = String(catalogueTitle ?? '').split(':');
+  const m = terms(main);
+  if (!m.length || !lines.some((l) => m.filter((w) => wordSeen(w, l)).length >= m.length - (m.length >= 5 ? 1 : 0))) return false;
+  const sub = terms(rest.join(' '));
+  const mainSet = new Set(m), subSet = new Set(sub);
+  for (const r of readings) {
+    const w = terms(r ?? '');
+    const extra = w.filter((x) => !wordSeen(x, mainSet));
+    if (sub.length >= 2 && extra.length >= 2 && w.length - extra.length >= m.length - (m.length >= 5 ? 1 : 0) && !extra.some((x) => wordSeen(x, subSet))) return false;
+  }
+  return !full || sub.length < 3 || sub.some((w) => wordSeen(w, all));
+}
+
+// Consonant outline of a name, the same for Hebrew and its romanization ("Carman" and
+// "קרמן" are both krmn): vowels and the letters that stand for them are dropped.
+const OUTLINE = { ב: 'b', ג: 'g', ד: 'd', ז: 's', ח: 'k', ט: 't', כ: 'k', ך: 'k', ל: 'l', מ: 'm', ם: 'm', נ: 'n', ן: 'n', ס: 's', פ: 'b', ף: 'b', צ: 's', ץ: 's', ק: 'k', ר: 'r', ש: 's', ת: 't' };
+const outline = (w) => (isHebrew(w) ? [...w].map((c) => OUTLINE[c] ?? '').join('')
+  : w.replace(/tz|ts|sh|zh|z|c(?=[eiy])/g, 's').replace(/ch|kh|ck|x|c|q/g, 'k').replace(/ph|p|f|v|w/g, 'b').replace(/j/g, 'g').replace(/th/g, 't').replace(/[^bdgklmnrst]/g, ''));
+function editRatio(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return 1 - d[a.length][b.length] / Math.max(a.length, b.length, 1);
+}
+// Is one of the catalogue's authors among the names read off the cover? Yes when either
+// side has no name: only a clear mismatch says no.
+export function authorsAgree(catalogueAuthors, readNames) {
+  const names = (list) => list.filter(Boolean).flatMap((n) => normTitle(n).split(' ')).filter((w) => w.length >= 3);
+  const [cat, read] = [names(catalogueAuthors ?? []), names(readNames ?? [])];
+  if (!cat.length || !read.length) return true;
+  return cat.some((c) => read.some((r) => (isHebrew(c) === isHebrew(r) ? titleSimilarity(c, r) >= 0.7
+    : Math.min(outline(c).length, outline(r).length) >= 2 && editRatio(outline(c), outline(r)) >= 0.6)));
 }
 
 // The straightened cut-out of one named book, the way readSpines makes it: locate it,

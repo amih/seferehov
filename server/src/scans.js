@@ -7,7 +7,7 @@ import { config } from './config.js';
 import { one, many, q, tx } from './db.js';
 import { requireUser } from './auth.js';
 import { lookupIsbn, lookupTitle, findOrCreateBook } from './books.js';
-import { readBooks, readCover, readIsbnBarcodes, normTitle, sameTitle, titleSimilarity } from './vision.js';
+import { readBooks, readCover, readIsbnBarcodes, normTitle, titleSimilarity, coverAgrees, authorsAgree } from './vision.js';
 import { pickFrames } from './frames.js';
 import { cropCover } from './covers.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
@@ -436,12 +436,20 @@ async function processCover(scan, { dry = false } = {}) {
   if (!dry) for (const [i, b] of [front, back].entries()) if (b) await keepCopy(b, scan.id, i).catch((err) => log.warn({ err, scan: scan.id }, 'keep copy failed'));
   const read = await readCover(front, back);
   let book = null, lookupId = null, isbn = null, danacode = null;
-  // A Danacode read from print may be misread: its book counts only if its title matches
-  // the front cover. Barcodes and ISBNs have check digits and are trusted.
+  // A catalogue record found by title, or by a printed Danacode (which may be misread),
+  // counts only if its title agrees with the text on the covers: all of the main title,
+  // and half a subtitle when OCR read the covers in full. Barcodes and ISBNs have check
+  // digits and are trusted.
+  const printed = [read.title, read.author, ...read.alternatives.flatMap((a) => [a.title, a.author]), read.text].filter(Boolean).join('\n');
+  const hebrewAlt = (alt) => String(alt ?? '').split(' ').filter((w) => /[\u0590-\u05FF]/.test(w)).join(' ');
+  const names = [read.author, ...read.alternatives.map((a) => a.author)];
+  const readings = [read.title, ...read.alternatives.map((a) => a.title)];
+  const verify = (c) => (coverAgrees(c.title, printed, { full: !!read.text, readings }) || (!!c.alt && coverAgrees(hebrewAlt(c.alt), printed)))
+    && authorsAgree(c.authors, names);
   let doubtful = null;
   for (const code of [scan.book_code, ...(read.codes ?? [])].filter(Boolean)) {
     const r = await lookupIsbn(code, dry ? 'trace' : 'scan').catch(() => ({}));
-    const trusted = !read.unchecked?.includes(code) || code === scan.book_code || !read.title || !r.book || sameTitle(r.book.title, read.title);
+    const trusted = !read.unchecked?.includes(code) || code === scan.book_code || !read.title || !r.book || verify(r.book);
     if (!trusted) { doubtful ??= r; continue; }
     isbn ??= r.isbn ?? null;
     danacode ??= r.danacode ?? null;
@@ -449,9 +457,11 @@ async function processCover(scan, { dry = false } = {}) {
     if ((book = r.book ?? null)) break;
   }
   if (!book && !isbn && !danacode && doubtful) ({ isbn = null, danacode = null } = doubtful);
-  if (!book && read.title) {
-    const r = await lookupTitle(read.title, read.author, dry ? 'trace' : 'scan').catch(() => ({}));
-    book = r.book ?? null;
+  for (const q of [read, ...read.alternatives]) {
+    if (book || !q.title) continue;
+    const r = await lookupTitle(q.title, q.author, dry ? 'trace' : 'scan', verify).catch(() => ({}));
+    // Checked again as saved: a record may have been merged into a book already here.
+    book = r.book && verify(r.book) ? r.book : null;
     lookupId = r.lookupId ?? lookupId;
   }
   // Nothing readable: the item still waits, with its pictures, for the reader to type the title.
