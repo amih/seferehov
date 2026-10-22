@@ -1,0 +1,4 @@
+mobilenet_v3_small.tflite: MediaPipe Image Embedder (MobileNet-V3 small, float32),
+from https://storage.googleapis.com/mediapipe-models/image_embedder/mobilenet_v3_small/float32/latest/
+by Google, under the Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
+Used unchanged; web/src/bookhead.json is Seferehov's own book/not-book layer on top of it.

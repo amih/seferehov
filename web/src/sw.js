@@ -27,6 +27,13 @@ registerRoute(
   new CacheFirst({ cacheName: 'photos', plugins: [new ExpirationPlugin({ maxEntries: 300, maxAgeSeconds: 30 * 86400 })] }),
 );
 
+// The book detector's runtime and model (bookai.js): large, fetched on first use, kept.
+// The file names do not change between versions of the model, so a new model gets a new name.
+registerRoute(
+  ({ url }) => url.origin === self.location.origin && /^\/(mediapipe|models)\//.test(url.pathname),
+  new CacheFirst({ cacheName: 'book-model', plugins: [new ExpirationPlugin({ maxEntries: 10 })] }),
+);
+
 // Map tiles and book covers from other sites: show what we have, refresh in the background.
 // Vector map (style, fonts, icons, tiles) — the tile URLs carry a dataset version.
 registerRoute(

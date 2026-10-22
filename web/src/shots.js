@@ -2,7 +2,7 @@ import { api } from './api.js';
 import { enqueue } from './queue.js';
 import { scanImage, detectFrame } from './scanner.js';
 import { esc, shrinkImage, choose } from './ui.js';
-import { bookInFrame } from './bookframe.js';
+import { loadBookModel } from './bookai.js';
 import { t, lang } from './i18n.js';
 
 // Photographing books one after another with the live camera: the front cover, turn the
@@ -20,18 +20,24 @@ import { t, lang } from './i18n.js';
 // Many books at once (stack): the books lie in a row, all the front covers are taken one
 // after another, then every book is turned over in place and the backs are taken in the
 // same order; the pairs are shown together before they are sent. Here a photo is taken
-// only when the camera has paused on a book (bookframe.js) about the size of the ones
-// before, so aiming at the first book, moving between books or pointing away after the
-// last one takes nothing; a wrong photo can still be removed from the strip.
+// only when the camera has paused on a book (bookai.js), so aiming at the first book,
+// moving between books or pointing away after the last one takes nothing; a wrong photo
+// can still be removed from the strip.
 export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   let stream = null, video = null, timer = null, side = 'front', front = null, back = null, preset = null, busy = false;
   let reviewing = false;
   let liveCode = null, lastCode = null, looking = false, ticks = 0;
   let hunting = false, huntUntil = 0; // after the back cover: a few seconds for a close-up of the barcode
   let session = {}; // this time only: { intro, single, onBook, stack }
-  let stack = null; // many books: { phase: fronts|backs|review, fronts, backs, codes, reversed, sizes }
-  let book = null, bookTick = 0, noBookSince = 0; // the last look for a book, while held still
-  const STACK_STILL = 4; // still ticks (about half a second) on a book before its photo
+  let stack = null; // many books: { phase: fronts|backs|review, fronts, backs, codes, reversed }
+  let isBook = null; // the book detector, once loaded (null: loading, or this phone cannot run it)
+  let noBookSince = 0;
+  // A pause over a book, hand-held: from tick to tick the picture changes by less than
+  // PAUSE_DIFF (moving between books it changes by 15–45, a hand pausing by 4–10;
+  // smoothed, so one jolt does not end a pause), for PAUSE_MS; without the detector, for
+  // NO_MODEL_MS. The detector's answer counts while no older than ANSWER_MS.
+  const PAUSE_DIFF = 12, PAUSE_MS = 500, NO_MODEL_MS = 1200, ANSWER_MS = 600;
+  let pausedSince = 0, motion = 99;
   const small = document.createElement('canvas');
   const ctx = small.getContext('2d', { willReadFrequently: true });
   let prev = null, steady = 0, moved = true, since = 0, lastSharp = 0;
@@ -137,8 +143,9 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     if (many && !go) return comic();
     preset = isbn;
     session = { intro, single: single || !!only, only, onBook: own, stack: many };
-    stack = many ? { phase: 'fronts', fronts: [], backs: [], codes: [], reversed: false, sizes: [] } : null;
-    book = null; noBookSince = 0;
+    stack = many ? { phase: 'fronts', fronts: [], backs: [], codes: [], reversed: false } : null;
+    pausedSince = 0; noBookSince = 0; motion = 99;
+    if (many) loadBookModel().then((d) => { isBook = d; });
     refresh = say;
     side = only ?? 'front';
     prev = null; steady = 0; moved = true; dropBest();
@@ -239,7 +246,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     // Plain covers (one colour, little print) and small or square books leave less detail
     // in the frame: sharp enough = near the recent best, above a low floor.
     const sharpEnough = sharp > 5 && sharp >= 0.8 * peak;
-    if (stack) { stackTick(g, w, h, !hint && sharpEnough && focused, hintEl); return; }
+    if (stack) { stackTick(diff, sharp, burnt / g.length, hint, hintEl); return; }
     if (!hint && sharpEnough && focused && steady >= 2) { snap(true); return; }
     // The longer the wait, the more shake a candidate may have (a hand that never quite
     // holds still still gets its photo within a second or two); the stillest win.
@@ -252,22 +259,33 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     if (best && Date.now() - window0 >= BEST_MS) snap(true, best);
   }
 
-  // Many books: no photo while the camera moves; held still, it looks for a book (a few
-  // times a second at most) and takes it after about half a second, if it is about the
-  // size of the books before. Held still on no book for a while: a hint says why.
-  function stackTick(g, w, h, good, hintEl) {
-    if (steady < 2) { book = null; noBookSince = 0; return; }
-    if (!book || ticks - bookTick >= 3) { book = bookInFrame(g, w, h); bookTick = ticks; }
-    const sizes = stack.sizes;
-    const usual = sizes.length ? sizes.reduce((a, b) => a + b, 0) / sizes.length : null;
-    const fits = book.ok && (!usual || (book.area > usual * 0.5 && book.area < usual * 2));
-    if (fits) {
-      noBookSince = 0;
-      if (good && steady >= STACK_STILL) { sizes.push(book.area); book = null; snap(true); }
+  // Many books: no photo while the camera moves. During a pause the detector is asked
+  // about the picture (in the background, as often as it can answer); half a second into
+  // a pause on a book, the sharpest frame of the pause is taken. Paused on no book for a
+  // while: a hint says why. If the detector cannot run on this phone, a longer pause
+  // takes the photo instead.
+  function stackTick(diff, sharp, burnt, hint, hintEl) {
+    const now = Date.now();
+    motion = (motion + diff) / 2;
+    if (motion >= PAUSE_DIFF) { pausedSince = 0; noBookSince = 0; dropBest(); return; }
+    pausedSince ||= now;
+    const score = (sharp / (1 + diff / 4)) * (1 - Math.min(0.5, 5 * burnt));
+    if (sharp > 3 && score > bestScore) keepBest(score);
+    if (!isBook) {
+      if (!hint && now - pausedSince >= NO_MODEL_MS) { pausedSince = 0; snap(true, best); }
       return;
     }
-    noBookSince ||= Date.now();
-    if (Date.now() - noBookSince > 2000 && hintEl.hidden) { hintEl.hidden = false; hintEl.textContent = t(book.ok ? 'stack.other_size' : 'stack.no_book'); }
+    isBook.look(video);
+    const seen = now - (isBook.latest?.at ?? 0) <= ANSWER_MS ? isBook.latest.p : null;
+    if (window.shotDebug) console.log(`stack diff=${diff.toFixed(1)} paused=${now - pausedSince} book=${seen?.toFixed(2) ?? '-'} ms=${isBook.ms}`);
+    if (seen === null) return;
+    if (seen >= 0.5) {
+      noBookSince = 0;
+      if (!hint && now - pausedSince >= PAUSE_MS) { pausedSince = 0; snap(true, best); }
+      return;
+    }
+    noBookSince ||= now;
+    if (now - noBookSince > 2000 && hintEl.hidden) { hintEl.hidden = false; hintEl.textContent = t('stack.no_book'); }
   }
 
   // The frame now, full size, as the best candidate (two canvases, swapped, no copying).
@@ -380,7 +398,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   let sending = Promise.resolve();
   function saveStack() {
     for (const { f, b, code } of stackPairs()) sending = sending.then(() => save(f, b, code)).catch(() => {});
-    stack = { phase: 'fronts', fronts: [], backs: [], codes: [], reversed: false, sizes: [] };
+    stack = { phase: 'fronts', fronts: [], backs: [], codes: [], reversed: false };
     moved = false; since = Date.now();
     refresh();
     center(panel.querySelector('.shot-live'));
@@ -389,6 +407,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   // How the many-books mode works, as a small comic, before the camera opens.
   function comic() {
     panel.hidden = false;
+    loadBookModel(); // while the comic is read
     const books = (cls = '') => `<span class="cb-row">${[1, 2, 3].map((i) => `<span class="cb-book ${cls}" style="--i:${i}"><i class="face front"></i><i class="face back"><b></b></i></span>`).join('')}</span>`;
     panel.innerHTML = `<h2 class="shot-title">${t('stack.title')}</h2>
       <ol class="comic">
@@ -510,14 +529,13 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     else if (act.startsWith('drop-')) {
       // A wrong photo in the strip of fronts.
       stack.fronts.splice(Number(act.slice(5)), 1);
-      stack.sizes.splice(Number(act.slice(5)), 1);
       refresh();
     }
     else if (act.startsWith('rm-')) {
       // A book taken out at the review (both its covers, as shown).
       const i = Number(act.slice(3)), n = stack.fronts.length;
       const j = stack.reversed ? n - 1 - i : i;
-      stack.fronts.splice(i, 1); stack.sizes.splice(i, 1);
+      stack.fronts.splice(i, 1);
       if (j < stack.backs.length) { stack.backs.splice(j, 1); stack.codes.splice(j, 1); }
       if (!stack.fronts.length) Object.assign(stack, { phase: 'fronts', backs: [], codes: [] });
       refresh();

@@ -1,4 +1,6 @@
 import { execSync } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
@@ -11,6 +13,15 @@ let sha = 'dev';
 try { sha = execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch {}
 const iso = new Date(build * 1000).toISOString();
 const version = `${iso.slice(0, 10).replaceAll('-', '.')}.${iso.slice(11, 19).replaceAll(':', '')}-${sha}`;
+
+// MediaPipe's runtime for the book detector (bookai.js), served from this site.
+const mediapipeWasm = {
+  name: 'seferehov-mediapipe-wasm',
+  generateBundle() {
+    const dir = fileURLToPath(new URL('../node_modules/@mediapipe/tasks-vision/wasm/', import.meta.url));
+    for (const f of readdirSync(dir)) this.emitFile({ type: 'asset', fileName: `mediapipe/${f}`, source: readFileSync(dir + f) });
+  },
+};
 
 const versionFile = {
   name: 'seferehov-version',
@@ -34,6 +45,7 @@ export default defineConfig({
   build: { target: 'es2022' },
   plugins: [
     versionFile,
+    mediapipeWasm,
     VitePWA({
       strategies: 'injectManifest',
       srcDir: 'src',
@@ -42,7 +54,8 @@ export default defineConfig({
       manifestFilename: 'manifest.webmanifest',
       injectManifest: {
         globPatterns: ['**/*.{js,css,html,wasm,png,webp,svg,ico}'],
-        globIgnores: ['icons/og-*', 'icons/icon-v2-512.png', 'icons/maskable-v2-512.png'],
+        // The book detector's runtime and model are cached when first used, not installed with the app.
+        globIgnores: ['icons/og-*', 'icons/icon-v2-512.png', 'icons/maskable-v2-512.png', 'mediapipe/**', 'models/**'],
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
       },
       manifest: {
