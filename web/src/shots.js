@@ -22,21 +22,23 @@ import { t, lang } from './i18n.js';
 // same order; the pairs are shown together before they are sent. Here a photo is taken
 // only when the camera has paused on a book (bookai.js), so aiming at the first book,
 // moving between books or pointing away after the last one takes nothing; a wrong photo
-// can still be removed from the strip.
+// can still be removed from the strip. The switch to the backs is noticed by itself: after
+// the fronts, a long while with no book in view (the books being turned over), then books
+// again — these are taken as the backs, with a banner saying so and a button to undo.
 export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   let stream = null, video = null, timer = null, side = 'front', front = null, back = null, preset = null, busy = false;
   let reviewing = false;
   let liveCode = null, lastCode = null, looking = false, ticks = 0;
   let hunting = false, huntUntil = 0; // after the back cover: a few seconds for a close-up of the barcode
   let session = {}; // this time only: { intro, single, onBook, stack }
-  let stack = null; // many books: { phase: fronts|backs|review, fronts, backs, codes, reversed }
+  let stack = null; // many books: { phase: fronts|backs|review, fronts, backs, codes, reversed, frontAt, bookAt, away, auto }
   let isBook = null; // the book detector, once loaded (null: loading, or this phone cannot run it)
   let noBookSince = 0;
   // A pause over a book, hand-held: from tick to tick the picture changes by less than
   // PAUSE_DIFF (moving between books it changes by 15–45, a hand pausing by 4–10;
   // smoothed, so one jolt does not end a pause), for PAUSE_MS; without the detector, for
   // NO_MODEL_MS. The detector's answer counts while no older than ANSWER_MS.
-  const PAUSE_DIFF = 12, PAUSE_MS = 500, NO_MODEL_MS = 1200, ANSWER_MS = 600;
+  const PAUSE_DIFF = 12, PAUSE_MS = 500, NO_MODEL_MS = 1200, ANSWER_MS = 600, AWAY_MIN_MS = 5000;
   let pausedSince = 0, motion = 99;
   const small = document.createElement('canvas');
   const ctx = small.getContext('2d', { willReadFrequently: true });
@@ -88,7 +90,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     const reviewingAll = phase === 'review';
     const el = panel.querySelector('.shot-title');
     if (el) el.textContent = reviewingAll ? t('stack.title_review', { n: fronts.length })
-      : phase === 'fronts' ? t('stack.title_front', { n: fronts.length + 1 }) : t('stack.title_back', { n: backs.length + 1, total: fronts.length });
+      : phase === 'fronts' ? t(stack.away ? 'stack.title_away' : 'stack.title_front', { n: fronts.length + 1 }) : t('stack.title_back', { n: backs.length + 1, total: fronts.length });
     panel.querySelector('.shot-live').hidden = reviewingAll;
     panel.querySelector('[data-shots="snap"]').hidden = reviewingAll;
     panel.querySelector('[data-shots="skip"]').hidden = phase !== 'backs';
@@ -101,7 +103,11 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     if (!reviewingAll) {
       panel.querySelector('.shot-say').innerHTML = phase === 'fronts'
         ? `<b>${t('stack.fronts_now')}</b><br><span class="muted small">${t('stack.fronts_how')}</span>${fronts.length ? `<span class="stack-strip">${fronts.map((f, i) => `<span class="strip-item">${thumb(f)}<button class="strip-x" data-shots="drop-${i}" aria-label="${esc(t('stack.drop'))}">✕</button></span>`).join('')}</span>` : ''}`
-        : `<b>${t('stack.backs_now')}</b><br><span class="muted small">${t('stack.backs_how')}</span>`;
+        : `${stack.auto ? `<span class="auto-backs">🔄 <b>${t('stack.auto_backs')}</b> <button class="btn small" data-shots="still-fronts">${t('stack.still_fronts')}</button></span><br>` : ''}<b>${t('stack.backs_now')}</b><br><span class="muted small">${t('stack.backs_how')}</span>`;
+      if (phase === 'fronts' && stack.away) panel.querySelector('.shot-say').insertAdjacentHTML('afterbegin', `<span class="auto-backs">🔄 ${t('stack.away')}</span><br>`);
+      const banner = panel.querySelector('.stack-banner');
+      banner.hidden = !(phase === 'backs' && stack.auto) && !(phase === 'fronts' && stack.away);
+      banner.textContent = phase === 'backs' ? `🔄 ${t('stack.banner_backs')}` : `🔄 ${t('stack.banner_away')}`;
       if (phase === 'backs') showCode();
       return;
     }
@@ -143,7 +149,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     if (many && !go) return comic();
     preset = isbn;
     session = { intro, single: single || !!only, only, onBook: own, stack: many };
-    stack = many ? { phase: 'fronts', fronts: [], backs: [], codes: [], reversed: false } : null;
+    stack = many ? newStack() : null;
     pausedSince = 0; noBookSince = 0; motion = 99;
     if (many) loadBookModel().then((d) => { isBook = d; });
     refresh = say;
@@ -154,7 +160,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     panel.innerHTML = `${intro ? `<p class="shot-intro">${intro}</p>` : ''}
       <h2 class="shot-title"></h2>
       <div class="shot-live"><video muted playsinline></video><div class="shot-guide"></div><div class="shot-flash"></div>
-        <img class="shot-match" alt="" hidden>
+        <img class="shot-match" alt="" hidden><p class="stack-banner" hidden></p>
         <div class="shot-anim" hidden></div><p class="shot-hint" hidden></p>
         <button class="shot-x" data-shots="end" aria-label="${t('shots.stop')}">✕</button>
         <button class="shot-torch" data-shots="torch" hidden aria-label="${t('shots.torch')}">🔦</button></div>
@@ -266,6 +272,9 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   // takes the photo instead.
   function stackTick(diff, sharp, burnt, hint, hintEl) {
     const now = Date.now();
+    // After the fronts: no book in view for much longer than the pace of the photos so
+    // far — probably turning the books over.
+    if (stack.phase === 'fronts' && stack.fronts.length >= 2 && !stack.away && now - stack.bookAt > awayMs()) { stack.away = true; refresh(); }
     motion = (motion + diff) / 2;
     if (motion >= PAUSE_DIFF) { pausedSince = 0; noBookSince = 0; dropBest(); return; }
     pausedSince ||= now;
@@ -281,6 +290,8 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     if (seen === null) return;
     if (seen >= 0.5) {
       noBookSince = 0;
+      if (stack.phase === 'fronts' && stack.away) autoBacks();
+      stack.bookAt = now;
       if (!hint && now - pausedSince >= PAUSE_MS) { pausedSince = 0; snap(true, best); }
       return;
     }
@@ -375,6 +386,8 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   function tookStack(blob) {
     if (stack.phase === 'fronts') {
       stack.fronts.push(blob);
+      stack.frontAt.push(Date.now());
+      stack.bookAt = Date.now();
       animate('next');
     } else {
       stack.backs.push(blob);
@@ -386,8 +399,28 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     }
     refresh();
   }
+  const newStack = () => ({ phase: 'fronts', fronts: [], backs: [], codes: [], reversed: false, frontAt: [], bookAt: Date.now(), away: false, auto: false });
+  // How long without a book means "turning them over": 2.5 times the usual time between
+  // two fronts, and at least 5 seconds.
+  function awayMs() {
+    const at = stack.frontAt, gaps = at.slice(1).map((x, i) => x - at[i]).sort((a, b) => a - b);
+    return Math.max(AWAY_MIN_MS, 2.5 * (gaps[gaps.length >> 1] ?? 0));
+  }
+  // Books again after the long break: the backs, in the same order.
+  function autoBacks() {
+    Object.assign(stack, { phase: 'backs', backs: [], codes: [], away: false, auto: true });
+    liveCode = null; lastCode = null;
+    navigator.vibrate?.([40, 80, 40]);
+    refresh();
+  }
+  // "No, still fronts": the photos taken as backs join the fronts.
+  function stillFronts() {
+    stack.fronts.push(...stack.backs.filter(Boolean));
+    Object.assign(stack, { phase: 'fronts', backs: [], codes: [], auto: false, away: false, bookAt: Date.now() });
+    refresh();
+  }
   function toBacks() {
-    Object.assign(stack, { phase: 'backs', backs: [], codes: [] });
+    Object.assign(stack, { phase: 'backs', backs: [], codes: [], away: false, auto: false });
     liveCode = null; lastCode = null;
     moved = true; steady = 0; dropBest();
     refresh();
@@ -398,7 +431,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   let sending = Promise.resolve();
   function saveStack() {
     for (const { f, b, code } of stackPairs()) sending = sending.then(() => save(f, b, code)).catch(() => {});
-    stack = { phase: 'fronts', fronts: [], backs: [], codes: [], reversed: false };
+    stack = newStack();
     moved = false; since = Date.now();
     refresh();
     center(panel.querySelector('.shot-live'));
@@ -515,6 +548,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     else if (act === 'stack-go') start({ many: true, go: true });
     else if (act === 'stack-backs') toBacks();
     else if (act === 'stack-again') toBacks();
+    else if (act === 'still-fronts') stillFronts();
     else if (act === 'stack-save') saveStack();
     else if (act === 'reverse') { stack.reversed = b.checked; refresh(); }
     else if (act.startsWith('swap-')) {
@@ -529,6 +563,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     else if (act.startsWith('drop-')) {
       // A wrong photo in the strip of fronts.
       stack.fronts.splice(Number(act.slice(5)), 1);
+      stack.frontAt.splice(Number(act.slice(5)), 1);
       refresh();
     }
     else if (act.startsWith('rm-')) {

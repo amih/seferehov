@@ -577,3 +577,9 @@ ul.offers li { margin-bottom: 10px; }
 .dialog .stack-strip .shot-thumb { width: 36px; height: 48px; }
 .dialog-actions.choices { flex-direction: column; }
 .dialog-actions.choices .btn { width: 100%; }
+
+/* Many books: the switch to the back covers, noticed by itself */
+.stack-banner { position: absolute; left: 8px; right: 30%; bottom: 8px; margin: 0; padding: 8px 10px; border-radius: 8px;
+  background: rgba(154, 91, 46, .92); color: #fff; font-weight: 800; font-size: 1.05rem; z-index: 2; }
+.auto-backs { display: inline-block; margin-bottom: 4px; }
+.auto-backs .btn { margin-inline-start: 6px; }
