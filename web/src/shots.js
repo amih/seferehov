@@ -16,12 +16,16 @@ import { t, lang } from './i18n.js';
 // read many times a second, usually catches it. If it has not by the time the back
 // cover is taken, the reader is asked for a close-up of the barcode for a few seconds.
 // Without a live camera, the phone's camera app is used instead, one photo at a time.
+// Many books at once (stack): the books lie in a row, all the front covers are taken one
+// after another, then every book is turned over in place and the backs are taken in the
+// same order; the pairs are shown together before they are sent.
 export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   let stream = null, video = null, timer = null, side = 'front', front = null, back = null, preset = null, busy = false;
   let reviewing = false;
   let liveCode = null, lastCode = null, looking = false, ticks = 0;
   let hunting = false, huntUntil = 0; // after the back cover: a few seconds for a close-up of the barcode
-  let session = {}; // this time only: { intro, single, onBook }
+  let session = {}; // this time only: { intro, single, onBook, stack }
+  let stack = null; // many books: { phase: fronts|backs|review, fronts, backs, codes, reversed }
   const small = document.createElement('canvas');
   const ctx = small.getContext('2d', { willReadFrequently: true });
   let prev = null, steady = 0, moved = true, since = 0, lastSharp = 0;
@@ -33,6 +37,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
 
   const title = (k) => { const el = panel.querySelector('.shot-title'); if (el) el.textContent = k ? t(k) : ''; };
   const say = () => {
+    if (stack) return sayStack();
     title(reviewing ? null : hunting ? 'shots.title_code' : side === 'front' ? 'shots.title_front' : 'shots.title_back');
     const live = panel.querySelector('.shot-live');
     if (live) live.hidden = reviewing;
@@ -65,6 +70,43 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     panel.querySelector('[data-shots="skip"]').hidden = side !== 'back' || !!session.only || !!back;
     showCode();
   };
+  // Many books: what to photograph now, the book whose back is wanted, and the pairs at the end.
+  const sayStack = () => {
+    const { phase, fronts, backs } = stack;
+    const reviewingAll = phase === 'review';
+    const el = panel.querySelector('.shot-title');
+    if (el) el.textContent = reviewingAll ? t('stack.title_review', { n: fronts.length })
+      : phase === 'fronts' ? t('stack.title_front', { n: fronts.length + 1 }) : t('stack.title_back', { n: backs.length + 1, total: fronts.length });
+    panel.querySelector('.shot-live').hidden = reviewingAll;
+    panel.querySelector('[data-shots="snap"]').hidden = reviewingAll;
+    panel.querySelector('[data-shots="skip"]').hidden = phase !== 'backs';
+    panel.querySelector('[data-shots="stack-backs"]').hidden = phase !== 'fronts' || !fronts.length;
+    const match = panel.querySelector('.shot-match');
+    match.hidden = phase !== 'backs';
+    if (phase === 'backs') match.src = URL.createObjectURL(fronts[backs.length]);
+    const rev = panel.querySelector('.shot-review');
+    rev.hidden = !reviewingAll;
+    if (!reviewingAll) {
+      panel.querySelector('.shot-say').innerHTML = phase === 'fronts'
+        ? `<b>${t('stack.fronts_now')}</b><br><span class="muted small">${t('stack.fronts_how')}</span>${fronts.length ? `<span class="stack-strip">${fronts.map(thumb).join('')}</span>` : ''}`
+        : `<b>${t('stack.backs_now')}</b><br><span class="muted small">${t('stack.backs_how')}</span>`;
+      if (phase === 'backs') showCode();
+      return;
+    }
+    const pairs = stackPairs();
+    panel.querySelector('.shot-say').innerHTML = `<b>${t('stack.review')}</b>`;
+    rev.innerHTML = `<ol class="stack-pairs">${pairs.map(({ f, b }, i) => `<li><span class="n">${i + 1}</span>${thumb(f)}${b ? thumb(b) : `<span class="shot-thumb shot-none">${t('shots.no_back_yet')}</span>`}
+        ${i < pairs.length - 1 ? `<button class="btn small" data-shots="swap-${i}" aria-label="${esc(t('stack.swap'))}" title="${esc(t('stack.swap'))}">⇅</button>` : ''}</li>`).join('')}</ol>
+      <p class="row"><label class="small"><input type="checkbox" data-shots="reverse"${stack.reversed ? ' checked' : ''}> ${t('stack.reversed')}</label></p>
+      <p class="row"><button class="btn primary" data-shots="stack-save">✓ ${t('stack.save', { n: pairs.length })}</button>
+        <button class="btn" data-shots="stack-again">↻ ${t('stack.backs_again')}</button></p>`;
+    center(rev);
+  };
+  // The backs in the order of the fronts (taken from the other end, if so marked).
+  const stackPairs = () => {
+    const order = stack.fronts.map((_, i) => (stack.reversed ? stack.fronts.length - 1 - i : i));
+    return stack.fronts.map((f, i) => ({ f, b: stack.backs[order[i]] ?? null, code: stack.codes[order[i]] ?? null }));
+  };
   const showCode = () => {
     const say = panel.querySelector('.shot-say');
     if (liveCode && say && !reviewing && !say.querySelector('.code-seen')) say.insertAdjacentHTML('beforeend', `<br><span class="ok small code-seen">${t('shots.code_seen')}</span>`);
@@ -83,10 +125,12 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   const thumb = (blob) => `<img class="shot-thumb" src="${esc(URL.createObjectURL(blob))}" alt="">`;
 
   // only: 'front' or 'back' = one picture of that side (a new or missing one).
-  async function start({ isbn = null, intro = null, single = false, only = null, onBook: own = null } = {}) {
+  async function start({ isbn = null, intro = null, single = false, only = null, onBook: own = null, many = false, go = false } = {}) {
     stopCamera();
+    if (many && !go) return comic();
     preset = isbn;
-    session = { intro, single: single || !!only, only, onBook: own };
+    session = { intro, single: single || !!only, only, onBook: own, stack: many };
+    stack = many ? { phase: 'fronts', fronts: [], backs: [], codes: [], reversed: false } : null;
     refresh = say;
     side = only ?? 'front';
     prev = null; steady = 0; moved = true; dropBest();
@@ -95,14 +139,16 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     panel.innerHTML = `${intro ? `<p class="shot-intro">${intro}</p>` : ''}
       <h2 class="shot-title"></h2>
       <div class="shot-live"><video muted playsinline></video><div class="shot-guide"></div><div class="shot-flash"></div>
+        <img class="shot-match" alt="" hidden>
         <div class="shot-anim" hidden></div><p class="shot-hint" hidden></p>
         <button class="shot-x" data-shots="end" aria-label="${t('shots.stop')}">✕</button>
         <button class="shot-torch" data-shots="torch" hidden aria-label="${t('shots.torch')}">🔦</button></div>
       <p class="shot-say"></p>
       <div class="shot-review" hidden></div>
       <p class="row"><button class="btn primary" data-shots="snap">📸 ${t('shots.snap')}</button>
-        <button class="btn" data-shots="skip" hidden>${t('shots.skip')}</button>
-        <button class="btn" data-shots="nocode" hidden>${t('shots.no_code')}</button></p>
+        <button class="btn" data-shots="skip" hidden>${t(many ? 'stack.no_back' : 'shots.skip')}</button>
+        <button class="btn" data-shots="nocode" hidden>${t('shots.no_code')}</button>
+        <button class="btn" data-shots="stack-backs" hidden>${t('stack.to_backs')}</button></p>
       <button class="btn shot-stop" data-shots="end">■ ${t('shots.stop')}</button>
       <ul class="shot-done"></ul>`;
     video = panel.querySelector('video');
@@ -138,8 +184,8 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
       if (liveCode || Date.now() > huntUntil) endHunt();
       return;
     }
-    if (busy || reviewing || !video.videoWidth) return;
-    if (++ticks % 4 === 0) lookForCode();
+    if (busy || reviewing || stack?.phase === 'review' || !video.videoWidth) return;
+    if (++ticks % 4 === 0 && stack?.phase !== 'fronts') lookForCode();
     const w = 160, h = Math.round((w * video.videoHeight) / video.videoWidth);
     small.width = w; small.height = h;
     ctx.drawImage(video, 0, 0, w, h);
@@ -212,7 +258,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   // auto: the frame on screen right now, or the given one (instant). The button asks the
   // camera for a full photo, which can take a moment to focus.
   async function snap(auto = false, from = null) {
-    if (busy || reviewing || !video?.videoWidth) return;
+    if (busy || reviewing || stack?.phase === 'review' || !video?.videoWidth) return;
     busy = true;
     const blob = from ? await toJpeg(from) : auto ? await frame() : await still();
     dropBest();
@@ -259,23 +305,77 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     const el = panel.querySelector('.shot-anim');
     if (!el || !stream) return;
     el.className = `shot-anim ${kind}`;
-    el.innerHTML = kind === 'turn'
+    el.innerHTML = kind === 'flipall'
+      ? `<span class="cb-row">${[1, 2, 3].map((i) => `<span class="cb-book flip" style="--i:${i}"><i class="face front"></i><i class="face back"><b></b></i></span>`).join('')}</span><p>↻ ${t('stack.anim_flip')}</p>`
+      : kind === 'turn'
       ? `<div class="anim-book"><i class="face front"></i><i class="face back"><b></b></i></div><p>↻ ${t('shots.anim_turn')}</p>`
       : `<div class="anim-book out"><i class="face front"></i></div><div class="anim-book in"><i class="face front"></i></div><p>📕 ${t('shots.anim_next')}</p>`;
     el.hidden = false;
-    since = Math.max(since, Date.now() + 1100);
+    const ms = kind === 'flipall' ? 2600 : 1100;
+    since = Math.max(since, Date.now() + ms);
     clearTimeout(animate.timer);
-    animate.timer = setTimeout(() => { el.hidden = true; el.innerHTML = ''; }, 1100);
+    animate.timer = setTimeout(() => { el.hidden = true; el.innerHTML = ''; }, ms);
   }
 
   // Front, then back, then both are shown; a side taken again goes back to the review.
   function took(blob) {
+    if (stack) return tookStack(blob);
     if (side === 'front') front = blob; else back = blob;
     if (side === 'front' && !session.only && !back) { side = 'back'; animate('turn'); }
     else if (side === 'back' && stream && !liveCode && !preset) { hunting = true; huntUntil = Date.now() + 4000; }
     else reviewing = true;
     refresh();
   }
+  // Many books: the next front, or the back of the next book in the row (null = none).
+  function tookStack(blob) {
+    if (stack.phase === 'fronts') {
+      stack.fronts.push(blob);
+      animate('next');
+    } else {
+      stack.backs.push(blob);
+      stack.codes.push(liveCode);
+      lastCode = liveCode ?? lastCode;
+      liveCode = null;
+      if (stack.backs.length >= stack.fronts.length) stack.phase = 'review';
+      else animate('next');
+    }
+    refresh();
+  }
+  function toBacks() {
+    Object.assign(stack, { phase: 'backs', backs: [], codes: [] });
+    liveCode = null; lastCode = null;
+    moved = true; steady = 0; dropBest();
+    refresh();
+    center(panel.querySelector('.shot-live'));
+    animate('flipall');
+  }
+  // Each pair is sent like a single book, one after another (the phone's memory).
+  let sending = Promise.resolve();
+  function saveStack() {
+    for (const { f, b, code } of stackPairs()) sending = sending.then(() => save(f, b, code)).catch(() => {});
+    stack = { phase: 'fronts', fronts: [], backs: [], codes: [], reversed: false };
+    moved = false; since = Date.now();
+    refresh();
+    center(panel.querySelector('.shot-live'));
+  }
+
+  // How the many-books mode works, as a small comic, before the camera opens.
+  function comic() {
+    panel.hidden = false;
+    const books = (cls = '') => `<span class="cb-row">${[1, 2, 3].map((i) => `<span class="cb-book ${cls}" style="--i:${i}"><i class="face front"></i><i class="face back"><b></b></i></span>`).join('')}</span>`;
+    panel.innerHTML = `<h2 class="shot-title">${t('stack.title')}</h2>
+      <ol class="comic">
+        <li><div class="cb-pane">${books()}</div><p>${t('stack.c1')}</p></li>
+        <li><div class="cb-pane">${books()}<span class="cb-phone"></span></div><p>${t('stack.c2')}</p></li>
+        <li><div class="cb-pane flip">${books('flip')}</div><p>${t('stack.c3')}</p></li>
+        <li><div class="cb-pane">${books('down')}<span class="cb-phone"></span></div><p>${t('stack.c4')}</p></li>
+      </ol>
+      <p class="muted small">${t('stack.tip')}</p>
+      <p class="row"><button class="btn primary" data-shots="stack-go">📸 ${t('stack.go')}</button>
+        <button class="btn" data-shots="end">${t('cancel')}</button></p>`;
+    center(panel);
+  }
+
   function endHunt() {
     hunting = false;
     reviewing = true;
@@ -318,6 +418,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
 
   // No live camera: the camera app, one photo at a time.
   function fallback() {
+    stack = null; session.stack = false;
     const cam = (s, label) => `<label class="btn primary">📷 ${label}<input type="file" accept="image/*" capture="environment" hidden data-side="${s}"></label>`;
     panel.innerHTML = `<h2 class="shot-title"></h2><p class="shot-say"></p><div class="shot-review" hidden></div><p class="row"><span class="shot-cam"></span>
       <button class="btn" data-shots="skip" hidden>${t('shots.skip')}</button></p>
@@ -340,6 +441,8 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     stream = null;
   }
   function stop() {
+    if (stack?.fronts.length && !confirm(t('stack.discard', { n: stack.fronts.length }))) return;
+    stack = null;
     stopCamera();
     panel.hidden = true;
     panel.innerHTML = '';
@@ -352,6 +455,21 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     if (!b) return;
     const act = b.dataset.shots;
     if (act === 'start') { onStart?.(); start(); }
+    else if (act === 'stack') { onStart?.(); start({ many: true }); }
+    else if (act === 'stack-go') start({ many: true, go: true });
+    else if (act === 'stack-backs') toBacks();
+    else if (act === 'stack-again') toBacks();
+    else if (act === 'stack-save') saveStack();
+    else if (act === 'reverse') { stack.reversed = b.checked; refresh(); }
+    else if (act.startsWith('swap-')) {
+      // Swap two neighbouring backs (as shown, in the order of the fronts).
+      const i = Number(act.slice(5)), n = stack.fronts.length;
+      const [x, y] = stack.reversed ? [n - 1 - i, n - 2 - i] : [i, i + 1];
+      [stack.backs[x], stack.backs[y]] = [stack.backs[y], stack.backs[x]];
+      [stack.codes[x], stack.codes[y]] = [stack.codes[y], stack.codes[x]];
+      refresh();
+    }
+    else if (act === 'skip' && stack?.phase === 'backs') tookStack(null);
     else if (act === 'snap') snap(false);
     else if (act === 'torch') toggleTorch();
     else if (act === 'end') stop();

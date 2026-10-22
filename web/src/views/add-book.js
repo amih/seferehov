@@ -26,6 +26,7 @@ export default async function addBookView(root, [code], query) {
       <label class="big-btn"><span>📷</span><b>${t('add3.photo')}</b><small>${t('add3.photo_note')}</small>
         <input type="file" accept="image/*" capture="environment" multiple hidden id="shelf"></label>
       <button class="big-btn" data-shots="start"><span>📕</span><b>${t('shots.start')}</b><small>${t('shots.start_note')}</small></button>
+      <button class="big-btn" data-shots="stack"><span>📚</span><b>${t('stack.start')}</b><small>${t('stack.start_note')}</small></button>
     </div>
     <div class="shots" id="burst-panel" hidden></div>
     <div class="shots" id="shots" hidden></div>

@@ -526,3 +526,41 @@ body::after { content: ''; position: fixed; z-index: 3000; left: 0; right: 0; bo
 .offer-tag { color: var(--wood); font-weight: 600; }
 ul.offers { padding-inline-start: 18px; }
 ul.offers li { margin-bottom: 10px; }
+
+/* Many books: fronts first, then backs */
+.shot-match { position: absolute; inset-inline-end: 8px; top: 8px; width: 22%; aspect-ratio: 3 / 4; object-fit: cover; border: 3px solid #fff;
+  border-radius: 6px; box-shadow: 0 2px 10px rgba(0, 0, 0, .6); z-index: 2; }
+.stack-strip { display: flex; gap: 4px; overflow-x: auto; margin-top: 6px; }
+.stack-strip .shot-thumb { width: 36px; height: 48px; }
+.stack-pairs { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 8px; }
+.stack-pairs li { display: flex; align-items: center; gap: 8px; }
+.stack-pairs .n { width: 1.6em; font-weight: 800; text-align: center; }
+.stack-pairs .shot-none { display: grid; place-items: center; text-align: center; font-size: .75rem; background: var(--line); color: var(--muted); }
+.comic { list-style: none; margin: 0 0 10px; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; counter-reset: pane; }
+.comic li { counter-increment: pane; border: 2px solid var(--ink); border-radius: 10px; overflow: hidden; background: var(--card); }
+.comic p { margin: 0; padding: 6px 8px; font-size: .85rem; line-height: 1.3; }
+.comic p::before { content: counter(pane) '. '; font-weight: 800; }
+.cb-pane { position: relative; height: 96px; display: grid; place-items: center; background: #d9c4a3; perspective: 500px; overflow: hidden; }
+.cb-row { display: flex; gap: 8%; width: 80%; justify-content: center; direction: ltr; }
+.shot-anim .cb-row { grid-area: 1 / 1; width: 70%; }
+.cb-book { position: relative; flex: 1; max-width: 46px; aspect-ratio: 2 / 3; transform-style: preserve-3d; }
+.shot-anim .cb-book { max-width: none; }
+.cb-book .face { position: absolute; inset: 0; border-radius: 2px 5px 5px 2px; backface-visibility: hidden; box-shadow: 0 3px 8px rgba(0, 0, 0, .35); }
+.cb-book .face.front { background: linear-gradient(90deg, #1e6b3a 0 9%, #2f9a57 9%); }
+.cb-book:nth-child(2) .face.front { background: linear-gradient(90deg, #7a2d1f 0 9%, #b24a32 9%); }
+.cb-book:nth-child(3) .face.front { background: linear-gradient(90deg, #1f3f7a 0 9%, #3a63b2 9%); }
+.cb-book .face.back { background: #eee8dc; transform: rotateY(180deg); }
+.cb-book .face.back b { position: absolute; right: 12%; bottom: 10%; width: 50%; height: 16%;
+  background: repeating-linear-gradient(90deg, #222 0 2px, transparent 2px 4px, #222 4px 5px, transparent 5px 8px); }
+.cb-book.down { transform: rotateY(180deg); }
+.cb-book.flip { animation: cb-flip 3s calc(var(--i) * .5s - .5s) ease-in-out infinite both; }
+.shot-anim .cb-book.flip { animation: cb-flip-once .6s calc(var(--i) * .5s) ease-in-out both; }
+@keyframes cb-flip { 0%, 10% { transform: rotateY(0); } 30%, 85% { transform: rotateY(180deg); } 100% { transform: rotateY(360deg); } }
+@keyframes cb-flip-once { from { transform: rotateY(0); } to { transform: rotateY(180deg); } }
+/* The phone moving over the row, left to right, with a flash at each book. */
+.cb-phone { position: absolute; top: 10%; left: 50%; width: 30px; height: 52px; margin-left: -15px; border: 3px solid #222; border-radius: 6px;
+  background: rgba(255, 255, 255, .35); animation: cb-pan 3s steps(1) infinite; }
+.cb-phone::after { content: ''; position: absolute; inset: 0; background: #fff; opacity: 0; animation: cb-snap 1s infinite; }
+@keyframes cb-pan { 0% { transform: translateX(-140%); } 33% { transform: none; } 66% { transform: translateX(140%); } }
+@keyframes cb-snap { 0%, 60% { opacity: 0; } 70% { opacity: .9; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .cb-book.flip, .cb-phone, .cb-phone::after { animation: none; } .comic .cb-book.flip { transform: rotateY(180deg); } }

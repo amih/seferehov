@@ -31,6 +31,8 @@ It runs at https://seferehov.com. Hebrew is the default (right to left); English
 1. **Automatic shelf photos** (main way): the reader moves the phone slowly along the shelves and stops for a moment at each group of books. The phone keeps the sharpest, stillest frame of each pause at full camera resolution and skips frames taken while moving or of the same place. It sends 8 photos at a time. Works at a library or at home.
 2. **Photos from the camera app**: up to 8 photos at a time.
 3. **Front and back covers**, book after book. The live camera takes each picture by itself when the book is held steady (it accepts more shake the longer it waits, so a photo comes within 1–2 seconds), shows the book turning over between sides, and looks for the barcode the whole time. If none was seen, it asks for a 4-second close-up of the barcode.
+   - **Many books at once**: the books lie in a row; all the front covers are taken one after another, then every book is turned over in place and the backs are taken in the same order (the matching front is shown in the corner while each back is taken). At the end each book is shown with both covers; neighbouring backs can be swapped, or all reversed, before saving. A short animated comic explains it first.
+   - "Held steady" is judged from the camera picture itself (movement between frames and sharpness), not the phone's motion sensors: the book moves in the hand too, which the sensors cannot see.
 4. **Barcode scanning** (library page): the camera keeps scanning, each ISBN goes to the queue.
 
 Photos and scans taken without signal are saved on the phone and sent later.
