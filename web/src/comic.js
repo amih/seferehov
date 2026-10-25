@@ -5,6 +5,7 @@
 // are percentages of the picture, the same in both languages.
 
 const ART = '/comic-art';
+export const COMIC_CARD = `${ART}/og-comic.v1.jpg`; // 1200×630 share picture (panel 5)
 
 // Per panel: picture, bubbles [kind, css position], sound effect position. Text is in TEXT.
 const PANELS = [
@@ -122,12 +123,15 @@ const TEXT = {
 
 export const comicText = (lng) => TEXT[lng] ?? TEXT.he;
 
+// The panels' pictures with their descriptions in one language (structured data, image sitemap).
+export const comicImages = (lng) => PANELS.map((p, i) => ({ src: `${ART}/${p.img}.webp`, alt: comicText(lng).panels[i].alt }));
+
 // `link(path)` lets the server add ?lang=en to links; the app passes paths through.
 export function comicHtml(lng, link = (p) => p) {
   const c = comicText(lng);
   const panel = (p, i) => {
     const x = c.panels[i];
-    return `<article class="panel${p.wide ? ' wide' : ''}">
+    return `<figure class="panel${p.wide ? ' wide' : ''}">
       <span class="num">${i + 1}</span>
       <div class="art">
         <img src="${ART}/${p.img}.webp" ${i > 1 ? 'loading="lazy" ' : ''}width="960" height="657" alt="${x.alt}">
@@ -135,8 +139,8 @@ export function comicHtml(lng, link = (p) => p) {
         ${p.sfx ? `<div class="sfx" style="${p.sfx}">${x.sfx}</div>` : ''}
       </div>
       ${x.steps ? `<div class="routes">${x.steps.map(([h, li]) => `<div class="route"><h3>${h}</h3><ol>${li.map((s) => `<li>${s}</li>`).join('')}</ol></div>`).join('')}</div>` : ''}
-      <p class="caption">${x.caption}</p>
-    </article>`;
+      <figcaption class="caption">${x.caption}</figcaption>
+    </figure>`;
   };
   return `<div class="comic-page">
     <header class="masthead">

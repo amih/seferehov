@@ -21,7 +21,7 @@ import { normTitle } from './vision.js';
 import { BOOK_REVIEWS_SQL, READER_REVIEWS_SQL, QUESTIONS, hasText } from './reviews.js';
 import { OFFERS_SQL } from './offers.js';
 import { translate } from '../../web/src/i18n.js';
-import { comicHtml, comicText } from '../../web/src/comic.js';
+import { comicHtml, comicText, comicImages, COMIC_CARD } from '../../web/src/comic.js';
 import { levelOf } from '../../web/src/levels.js';
 
 const LANGS = ['he', 'en'];
@@ -484,11 +484,34 @@ function aboutPage(lng, T) {
 
 function comicPage(lng, T) {
   const c = comicText(lng);
+  const images = comicImages(lng);
   return {
     title: `${c.title} | ${T('app.name')}`,
     description: c.desc,
+    image: COMIC_CARD,
+    imageAlt: images[4].alt,
     html: comicHtml(lng, (p) => withLang(p, lng)),
-    jsonld: [breadcrumbs([[T('app.name'), '/'], [c.title, '/comic']])],
+    jsonld: [
+      breadcrumbs([[T('app.name'), '/'], [c.title, '/comic']]),
+      {
+        '@context': 'https://schema.org',
+        '@type': 'ComicStory',
+        name: c.title,
+        description: c.desc,
+        inLanguage: lng,
+        url: config.baseUrl + withLang('/comic', lng),
+        isPartOf: { '@type': 'WebSite', name: T('app.name'), url: config.baseUrl + '/' },
+        author: { '@type': 'Person', name: 'Ami Heines' },
+        image: images.map((im, i) => ({
+          '@type': 'ImageObject',
+          contentUrl: config.baseUrl + im.src,
+          name: `${c.title} — ${i + 1}`,
+          caption: im.alt,
+          width: 960,
+          height: 657,
+        })),
+      },
+    ],
   };
 }
 
@@ -516,6 +539,8 @@ function headTags(path, lng, page) {
     ...LANGS.map((l) => `<link rel="alternate" hreflang="${l}" href="${esc(url(l))}">`),
     `<link rel="alternate" hreflang="x-default" href="${esc(url('he'))}">`,
     `<meta property="og:url" content="${esc(url(lng))}">`,
+    ...(page.imageAlt ? [`<meta property="og:image:alt" content="${esc(page.imageAlt)}">`] : []),
+    ...(page.image ? ['<meta name="twitter:card" content="summary_large_image">'] : []),
     ...(page.noindex ? ['<meta name="robots" content="noindex">'] : []),
     ...(page.jsonld ?? []).map((o) => `<script type="application/ld+json">${json(o)}</script>`),
   ].join('\n  ');
@@ -530,6 +555,11 @@ function inject(html, path, lng, page) {
   out = replaceMeta(out, 'name', 'description', page.description);
   out = replaceMeta(out, 'property', 'og:title', page.title);
   out = replaceMeta(out, 'property', 'og:description', page.description);
+  if (lng === 'en') {
+    out = replaceMeta(out, 'property', 'og:locale', 'en_US');
+    out = replaceMeta(out, 'property', 'og:locale:alternate', 'he_IL');
+  }
+  if (page.image) out = replaceMeta(out, 'property', 'og:image', config.baseUrl + page.image);
   out = out.replace('</head>', `  ${headTags(path, lng, page)}\n</head>`);
   return out.replace('<main id="view"></main>', `<main id="view"><section class="page seo">${page.html}</section></main>`);
 }
@@ -550,7 +580,7 @@ const urlEntry = (path, lastmod) => `  <url><loc>${config.baseUrl}${path}</loc>$
   LANGS.map((l) => `<xhtml:link rel="alternate" hreflang="${l}" href="${esc(config.baseUrl + withLang(path, l))}"/>`).join('')}${
   lastmod ? `<lastmod>${new Date(lastmod).toISOString().slice(0, 10)}</lastmod>` : ''}</url>`;
 const urlset = (entries) => `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
 ${entries.join('\n')}
 </urlset>`;
 
@@ -570,7 +600,7 @@ async function sitemapPages() {
     `SELECT u.id, u.screen_name, max(r.updated_at) AS lastmod FROM users u JOIN book_reviews r ON r.user_id = u.id AND NOT r.hidden
       WHERE u.screen_name IS NOT NULL GROUP BY u.id ORDER BY u.id`);
   return urlset([
-    urlEntry('/'), urlEntry('/about'), urlEntry('/comic'), urlEntry('/places'),
+    urlEntry('/'), urlEntry('/about'), urlEntry('/comic').replace('</url>', `${comicImages('he').map((im) => `<image:image><image:loc>${config.baseUrl}${im.src}</image:loc></image:image>`).join('')}</url>`), urlEntry('/places'),
     ...readers.map((u) => urlEntry(readerPath(u), u.lastmod)),
     ...countries.map((c) => urlEntry(`/c/${c.cc.toLowerCase()}`)),
     ...places.map((p) => urlEntry(placePath(p), p.lastmod)),
