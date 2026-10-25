@@ -136,6 +136,7 @@ export default async function queueView(root) {
         <button class="btn" data-d="later">⏸ ${t('queue.later')}</button>
         <button class="btn danger" data-d="declined">✕ ${t('queue.decline')}</button>
       </div>
+      <p class="muted small">${t('queue.helps')}</p>
       ${recentLink()}
     </section>`;
     readyAt = Date.now() + 700;

@@ -11,7 +11,7 @@ import sharp from 'sharp';
 import { config } from './config.js';
 
 export const TRACE_DIR = resolve(process.env.TRACE_DIR || join(config.uploadDir, '..', 'scan-trace'));
-const KEEP_DAYS = 30;
+const KEEP_DAYS = 365;
 const IMAGE_SIDE = 1600;
 const store = new AsyncLocalStorage();
 
