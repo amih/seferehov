@@ -54,8 +54,9 @@ export default defineConfig({
       manifestFilename: 'manifest.webmanifest',
       injectManifest: {
         globPatterns: ['**/*.{js,css,html,wasm,png,webp,svg,ico}'],
-        // The book detector's runtime and model are cached when first used, not installed with the app.
-        globIgnores: ['icons/og-*', 'icons/icon-v2-512.png', 'icons/maskable-v2-512.png', 'mediapipe/**', 'models/**'],
+        // The book detector's runtime and model are cached when first used, not installed with the app;
+        // the comic's pictures are loaded only by those who open it.
+        globIgnores: ['icons/og-*', 'icons/icon-v2-512.png', 'icons/maskable-v2-512.png', 'mediapipe/**', 'models/**', 'comic-art/**'],
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
       },
       manifest: {

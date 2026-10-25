@@ -93,6 +93,7 @@ Photos and scans taken without signal are saved on the phone and sent later.
 ## App and updates
 
 - Installable from the browser (PWA), works offline, Hebrew and English.
+- **Comic** at `/comic` ("How it works" in the ☰ menu, linked from About): nine drawn panels explaining why Seferehov exists (gems on street shelves are found only by chance) and how it works (photograph a shelf, approve the books, search by title and distance, alerts, take and leave books). Bubbles and captions are page text in both languages, also rendered by the server for search engines and listed in the sitemap. Newcomers see a one-line pointer to it on the map until they open it or close the line. The drawings were made with FLUX schnell on the home server; they load only when the comic is opened.
 - Updates install in the background and switch in between screens, never during an upload or on the camera, queue or review screens. No version numbers to bump.
 
 ## For the admin

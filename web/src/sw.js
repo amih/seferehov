@@ -34,6 +34,12 @@ registerRoute(
   new CacheFirst({ cacheName: 'book-model', plugins: [new ExpirationPlugin({ maxEntries: 10 })] }),
 );
 
+// The comic's pictures and fonts: versioned names, fetched only by those who open it.
+registerRoute(
+  ({ url }) => url.origin === self.location.origin && url.pathname.startsWith('/comic-art/'),
+  new CacheFirst({ cacheName: 'comic', plugins: [new ExpirationPlugin({ maxEntries: 30 })] }),
+);
+
 // Map tiles and book covers from other sites: show what we have, refresh in the background.
 // Vector map (style, fonts, icons, tiles) — the tile URLs carry a dataset version.
 registerRoute(

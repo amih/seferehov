@@ -31,6 +31,7 @@ async function open() {
     ...(me ? [['📥', 'todo.title', '/queue', 'todo', waiting]] : []),
     ...(me ? [['🔔', 'menu.watches', '/me#watches']] : []),
     ...(me?.trust_level >= 3 ? [['📊', 'menu.admin', '/admin']] : []),
+    ['📖', 'menu.comic', '/comic'],
     ['ℹ️', 'menu.about', '/about'],
     ['✉️', 'menu.feedback', `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(t('contact.subject'))}&body=${encodeURIComponent(`${t('contact.greeting')}\n\n`)}`],
     ['⚙️', 'settings.title', '/settings'],

@@ -6,6 +6,7 @@ export default function aboutView(root) {
   <section class="page">
     <h1>${t('about.title')}</h1>
     <p>${t('about.lead_html')}</p>
+    <p><a href="/comic">📖 ${t('about.comic')}</a></p>
     <ul>
       <li>${t('about.li1')}</li>
       <li>${t('about.li2')}</li>

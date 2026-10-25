@@ -583,3 +583,67 @@ ul.offers li { margin-bottom: 10px; }
   background: rgba(154, 91, 46, .92); color: #fff; font-weight: 800; font-size: 1.05rem; z-index: 2; }
 .auto-backs { display: inline-block; margin-bottom: 4px; }
 .auto-backs .btn { margin-inline-start: 6px; }
+
+/* The comic (/comic): a printed comic page — ink-bordered panels on newsprint, two
+   columns on wide screens, one on phones. One deliberate look in both themes, so its
+   colours are set here instead of following the app's dark mode. */
+@font-face { font-family: 'Karantina'; font-weight: 700; font-display: swap; src: url(/comic-art/karantina-hebrew.v1.woff2) format('woff2'); unicode-range: U+0307-0308, U+0590-05FF, U+200C-2010, U+20AA, U+25CC, U+FB1D-FB4F; }
+@font-face { font-family: 'Karantina'; font-weight: 700; font-display: swap; src: url(/comic-art/karantina-latin.v1.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: 'Varela Round'; font-weight: 400; font-display: swap; src: url(/comic-art/varelaround-hebrew.v1.woff2) format('woff2'); unicode-range: U+0307-0308, U+0590-05FF, U+200C-2010, U+20AA, U+25CC, U+FB1D-FB4F; }
+@font-face { font-family: 'Varela Round'; font-weight: 400; font-display: swap; src: url(/comic-art/varelaround-latin.v1.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+.comic-page {
+  --c-paper: #f4efe6; --c-panel: #fffdf8; --c-ink: #1e1914; --c-accent: #b8622c; --c-sfx: #f2b640; --c-note: #fff4d2; --c-teal: #2f8f86;
+  --c-display: "Karantina", Impact, sans-serif; --c-letter: "Varela Round", system-ui, sans-serif;
+  color-scheme: light; background: var(--c-paper); color: var(--c-ink);
+  max-width: 1080px; margin: 0 auto; padding: 22px 16px 40px; display: flex; flex-direction: column; gap: 22px;
+}
+.comic-page a { color: var(--c-accent); }
+.comic-page .masthead { display: grid; grid-template-columns: 1fr auto; gap: 12px 24px; align-items: end; border-bottom: 4px solid var(--c-ink); padding-bottom: 14px; }
+.comic-page .masthead h1 { font-family: var(--c-display); font-weight: 700; margin: 0; font-size: clamp(3rem, 9vw, 6rem); line-height: .85; text-wrap: balance; }
+.comic-page .masthead h1 span { color: var(--c-accent); }
+.comic-page .masthead p { margin: 10px 0 0; font-size: 1.08rem; max-width: 52ch; line-height: 1.5; }
+.comic-page .issue { font-family: var(--c-letter); text-align: center; border: 3px solid var(--c-ink); padding: 8px 14px; transform: rotate(-3deg); background: var(--c-panel); box-shadow: -4px 4px 0 var(--c-ink); line-height: 1.2; }
+.comic-page .issue b { display: block; font-family: var(--c-display); font-size: 2.2rem; color: var(--c-accent); line-height: 1; }
+.comic-page .strip { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.comic-page .panel { position: relative; background: var(--c-panel); border: 4px solid var(--c-ink); box-shadow: -6px 6px 0 var(--c-ink); display: flex; flex-direction: column; min-width: 0; }
+.comic-page .panel.wide { grid-column: 1 / -1; }
+.comic-page .art { position: relative; aspect-ratio: 1216 / 832; overflow: hidden; background: var(--c-ink); }
+.comic-page .panel.wide .art { aspect-ratio: 2 / 1; }
+.comic-page .art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.comic-page .num { position: absolute; top: -4px; inset-inline-start: -4px; z-index: 3; background: var(--c-ink); color: var(--c-panel); font-family: var(--c-letter); font-weight: 700; font-size: 1.15rem; line-height: 1; padding: 6px 10px; }
+.comic-page .caption { border-top: 4px solid var(--c-ink); padding: 10px 14px 12px; margin: 0; line-height: 1.55; background: var(--c-note); flex: 1; }
+.comic-page .caption b { font-weight: 800; }
+.comic-page .bubble { position: absolute; z-index: 2; max-width: 50%; background: #fff; color: var(--c-ink); border: 3px solid var(--c-ink); border-radius: 18px; padding: 7px 12px 8px; font-family: var(--c-letter); font-size: clamp(.86rem, 1.7vw, 1.08rem); line-height: 1.3; box-shadow: -3px 3px 0 rgb(30 25 20 / .25); }
+.comic-page .bubble::after { content: ""; position: absolute; width: 16px; height: 16px; background: inherit; border-left: 3px solid var(--c-ink); border-bottom: 3px solid var(--c-ink); bottom: -10px; transform: rotate(-45deg) skew(10deg, 10deg); }
+.comic-page .bubble.tail-r::after { right: 24px; }
+.comic-page .bubble.tail-l::after { left: 24px; }
+.comic-page .bubble.think { border-radius: 50% / 40%; padding: 12px 18px; text-align: center; }
+.comic-page .bubble.think::after { display: none; }
+.comic-page .sfx { position: absolute; z-index: 2; font-family: var(--c-display); font-weight: 700; color: var(--c-sfx); -webkit-text-stroke: 2px var(--c-ink); paint-order: stroke fill; font-size: clamp(1.9rem, 6vw, 4.4rem); line-height: 1; transform: rotate(-8deg); }
+.comic-page .routes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 4px solid var(--c-ink); }
+.comic-page .route { padding: 12px 14px; min-width: 0; }
+.comic-page .route + .route { border-inline-start: 4px solid var(--c-ink); }
+.comic-page .route h3 { margin: 0 0 6px; font-family: var(--c-display); font-size: 1.7rem; line-height: 1; color: var(--c-teal); }
+.comic-page .route ol, .comic-page .fact ul { margin: 0; padding-inline-start: 1.2rem; display: flex; flex-direction: column; gap: 5px; line-height: 1.45; }
+.comic-page .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin-top: 8px; }
+.comic-page .fact { background: var(--c-panel); border: 3px solid var(--c-ink); padding: 14px 16px 16px; min-width: 0; }
+.comic-page .fact h2 { font-family: var(--c-display); font-size: 2rem; line-height: 1; margin: 0 0 10px; color: var(--c-accent); }
+.comic-page .endcta { text-align: center; padding: 8px 0 4px; }
+.comic-page .endcta p { margin: 0 0 12px; font-size: 1.15rem; }
+.comic-page .cta { display: inline-block; margin: 4px; background: var(--c-accent); color: #fff; border: 2.5px solid var(--c-ink); border-radius: 10px; padding: 9px 20px; font-weight: 800; text-decoration: none; box-shadow: 3px 3px 0 var(--c-ink); }
+.comic-page .cta.alt { background: var(--c-teal); }
+.comic-page .muted { color: #6b5f52; }
+@media (max-width: 720px) {
+  .comic-page .strip, .comic-page .facts, .comic-page .routes { grid-template-columns: minmax(0, 1fr); }
+  .comic-page .route + .route { border-inline-start: 0; border-top: 4px solid var(--c-ink); }
+  .comic-page .panel.wide .art { aspect-ratio: 1216 / 832; }
+  .comic-page .masthead { grid-template-columns: 1fr; }
+  .comic-page .issue { justify-self: start; }
+  .comic-page .bubble { max-width: 64%; }
+}
+/* The map's one-line pointer to the comic for newcomers. */
+.comic-hint { position: absolute; z-index: 500; top: 10px; left: 50%; transform: translateX(-50%); width: min(92%, 460px); display: flex; align-items: center; gap: 6px; background: var(--card); color: var(--ink); border-radius: 99px; box-shadow: 0 3px 12px rgb(0 0 0 / .25); padding: 4px 6px 4px 14px; }
+[dir="rtl"] .comic-hint { padding: 4px 14px 4px 6px; }
+.comic-hint a { flex: 1; color: inherit; text-decoration: none; padding: 6px 0; font-size: .95rem; }
+.comic-hint a b { color: var(--wood-light); white-space: nowrap; }
+.comic-hint button { border: 0; background: none; color: var(--muted); font-size: 1rem; padding: 6px 8px; cursor: pointer; }

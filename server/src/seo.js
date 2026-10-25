@@ -21,6 +21,7 @@ import { normTitle } from './vision.js';
 import { BOOK_REVIEWS_SQL, READER_REVIEWS_SQL, QUESTIONS, hasText } from './reviews.js';
 import { OFFERS_SQL } from './offers.js';
 import { translate } from '../../web/src/i18n.js';
+import { comicHtml, comicText } from '../../web/src/comic.js';
 import { levelOf } from '../../web/src/levels.js';
 
 const LANGS = ['he', 'en'];
@@ -481,11 +482,22 @@ function aboutPage(lng, T) {
   };
 }
 
+function comicPage(lng, T) {
+  const c = comicText(lng);
+  return {
+    title: `${c.title} | ${T('app.name')}`,
+    description: c.desc,
+    html: comicHtml(lng, (p) => withLang(p, lng)),
+    jsonld: [breadcrumbs([[T('app.name'), '/'], [c.title, '/comic']])],
+  };
+}
+
 async function renderPath(path, lng) {
   const T = (key, vars) => translate(lng, key, vars);
   let m;
   if (path === '/') return homePage(lng, T);
   if (path === '/about') return aboutPage(lng, T);
+  if (path === '/comic') return comicPage(lng, T);
   if (path === '/places') return placesPage(lng, T);
   if ((m = path.match(/^\/c\/([a-z]{2})$/i))) return countryPage(lng, T, m[1]);
   if ((m = path.match(/^\/p\/(\d+)(?:-[a-z0-9-]*)?$/))) return placePage(lng, T, Number(m[1]));
@@ -558,7 +570,7 @@ async function sitemapPages() {
     `SELECT u.id, u.screen_name, max(r.updated_at) AS lastmod FROM users u JOIN book_reviews r ON r.user_id = u.id AND NOT r.hidden
       WHERE u.screen_name IS NOT NULL GROUP BY u.id ORDER BY u.id`);
   return urlset([
-    urlEntry('/'), urlEntry('/about'), urlEntry('/places'),
+    urlEntry('/'), urlEntry('/about'), urlEntry('/comic'), urlEntry('/places'),
     ...readers.map((u) => urlEntry(readerPath(u), u.lastmod)),
     ...countries.map((c) => urlEntry(`/c/${c.cc.toLowerCase()}`)),
     ...places.map((p) => urlEntry(placePath(p), p.lastmod)),

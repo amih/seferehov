@@ -8,6 +8,7 @@ import { esc, getPosition, toast } from '../ui.js';
 import { t, isRtl } from '../i18n.js';
 
 const VIEW_KEY = 'seferehov:mapView';
+export const COMIC_KEY = 'seferehov:comicSeen'; // set when the comic was opened or the hint closed
 const ISRAEL = [[29.45, 34.25], [33.34, 35.9]]; // first-visit view
 
 // Green = added in the app or has books reported; pale = imported from OpenStreetMap, nothing known yet.
@@ -38,6 +39,16 @@ export default function mapView(root, _, query) {
     <div id="map"></div>
     <button class="fab-locate" title="${t('map.locate')}" aria-label="${t('map.locate')}">◎</button>
     <div class="fab-row"><a class="fab-add" href="/add">${t('map.add')}</a><a class="fab-search" href="/search">${t('map.search')}</a></div>`;
+  // Newcomers get one line pointing to the comic, until they open it or close the line.
+  let seen = true;
+  try { seen = !!localStorage.getItem(COMIC_KEY); } catch {}
+  if (!seen) {
+    root.insertAdjacentHTML('beforeend', `<div class="comic-hint"><a href="/comic">📖 ${t('comic.hint')} <b>${t('comic.hint_go')}</b></a><button aria-label="${t('menu.close')}">✕</button></div>`);
+    root.querySelector('.comic-hint button').onclick = (e) => {
+      try { localStorage.setItem(COMIC_KEY, '1'); } catch {}
+      e.currentTarget.parentElement.remove();
+    };
+  }
   // /?at=lat,lon,zoom — links from the place pages
   const at = (query?.get('at') ?? '').split(',').map(Number);
   const start = at.length === 3 && at.every(Number.isFinite) ? { lat: at[0], lon: at[1], zoom: at[2] } : savedView();

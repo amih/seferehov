@@ -15,6 +15,7 @@ import meView from './views/me.js';
 import topView from './views/top.js';
 import reviewView from './views/review.js';
 import aboutView from './views/about.js';
+import comicView from './views/comic.js';
 import queueView from './views/queue.js';
 import barcodeView from './views/barcode.js';
 import bookView, { myBookView } from './views/book.js';
@@ -59,6 +60,7 @@ const routes = [
   [/^\/admin$/, adminView],
   [/^\/admin\/trace(?:\/([\w-]+))?$/, traceView],
   [/^\/about$/, aboutView],
+  [/^\/comic$/, comicView],
   [/^\/(places|c\/[a-z]{2}|p\/\d+(-[a-z0-9-]*)?|[br]\/\d+(-[^/]*)?)$/i, pageView],
 ];
 
@@ -82,7 +84,7 @@ async function render() {
   // A screen does not wait long for the reader on a bad connection.
   const me = await Promise.race([getMe(), new Promise((r) => setTimeout(() => r(null), 5000))]);
   if (stale()) return;
-  if (me && !me.screen_name && !['/me', '/about'].includes(path)) {
+  if (me && !me.screen_name && !['/me', '/about', '/comic'].includes(path)) {
     sessionStorage.setItem('seferehov:next', location.pathname + location.search);
     history.replaceState(history.state, '', '/me?welcome=1');
     return render();
