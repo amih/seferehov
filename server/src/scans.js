@@ -1,5 +1,5 @@
 import { createWriteStream } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import sharp from 'sharp';
@@ -16,17 +16,20 @@ import { parseLatLon, normalizeIsbn, normalizeDanacode } from './util.js';
 import { mergeDuplicates, autoConfirmKnown, closeIfDone } from './approvals.js';
 import { ownerOf } from './mybooks.js';
 import { sendMail } from './mail.js';
-import { purgeTraces, scope, step, traceFile, withTrace } from './trace.js';
+import { TRACE_DIR, purgeTraces, scope, step, traceFile, withTrace } from './trace.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 // Raw uploads (may carry GPS in EXIF) live outside the public uploads folder and
 // are deleted once read. Only re-encoded thumbnails go to uploads/.
 const MEDIA_DIR = resolve(process.env.SCAN_DIR || join(config.uploadDir, '..', 'scan-media'));
-// Re-encoded copies (no EXIF/GPS) of what was read, kept a while so a better reader
-// can go over them again (scripts/rescan.js).
+// Re-encoded copies (no EXIF/GPS) of what was read and of the photos and video as sent
+// (orig-N), kept a while so a better reader can go over them again (scripts/rescan.js).
 const KEEP_DIR = join(MEDIA_DIR, '..', 'scan-keep');
-const KEEP_DAYS = 30;
+const KEEP_DAYS = 365;
+// Scans with a declined or corrected reading: their copies and trace, kept for good, to
+// see where reading goes wrong.
+const REVIEW_DIR = join(MEDIA_DIR, '..', 'scan-review');
 const MAX_PHOTOS = 8;
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 const MAX_PHOTO_BYTES = 15 * 1024 * 1024;
@@ -336,6 +339,7 @@ async function runScan(scan) {
     log.error({ err, scan: scan.id }, 'scan failed');
     await q(`UPDATE scans SET status = 'failed', error = $2, finished_at = now() WHERE id = $1`, [scan.id, String(err.message).slice(0, 300)]);
   } finally {
+    await keepOriginals(scan).catch((err) => log.warn({ err, scan: scan.id }, 'keep originals failed'));
     await rm(join(MEDIA_DIR, scan.id), { recursive: true, force: true });
   }
 }
@@ -393,6 +397,37 @@ export async function queueWaits() {
 async function keepCopy(buffer, scanId, i) {
   await mkdir(join(KEEP_DIR, scanId), { recursive: true });
   await sharp(buffer).rotate().jpeg({ quality: 92 }).toFile(join(KEEP_DIR, scanId, `${i}.jpg`));
+}
+
+// As sent, without metadata (GPS) or sound: photos re-encoded at full size, the video copied.
+async function keepOriginals(scan) {
+  const out = join(KEEP_DIR, scan.id);
+  await mkdir(out, { recursive: true });
+  for (const [i, m] of scan.media.entries()) {
+    const file = join(MEDIA_DIR, scan.id, m.path);
+    if (m.type === 'video') {
+      await promisify(execFile)('ffmpeg', ['-v', 'error', '-y', '-i', file, '-map', '0:v:0', '-map_metadata', '-1', '-c', 'copy',
+        '-movflags', '+faststart', join(out, `orig-${i}.mp4`)], { timeout: 120_000 });
+    } else {
+      await sharp(await readFile(file)).rotate().jpeg({ quality: 92 }).toFile(join(out, `orig-${i}.jpg`));
+    }
+  }
+}
+
+// A declined or corrected queue item: the scan's kept copies and trace go to REVIEW_DIR
+// (once per scan), and the item's reading and the reader's decision to its items.jsonl.
+export async function keepForReview(item, decision, fix = {}) {
+  const dir = join(REVIEW_DIR, item.scan_id);
+  await mkdir(dir, { recursive: true });
+  for (const [from, to] of [[join(KEEP_DIR, item.scan_id), 'photos'], [join(TRACE_DIR, item.scan_id), 'trace']]) {
+    await cp(from, join(dir, to), { recursive: true, force: false }).catch(() => {});
+  }
+  const book = item.book_id ? await one('SELECT title, authors, isbn13 FROM books WHERE id = $1', [item.book_id]) : null;
+  await appendFile(join(dir, 'items.jsonl'), `${JSON.stringify({
+    item: item.id, decision, at: new Date().toISOString(), read: { title: item.title, author: item.author, isbn13: item.isbn13, danacode: item.danacode },
+    matched: book, via: item.via, quality: item.quality, fixed: decision === 'edited' ? fix : undefined,
+    pics: { frame: item.frame_path, back: item.back_path, crop: item.crop_path },
+  })}\n`);
 }
 
 async function purgeKept() {

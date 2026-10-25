@@ -13,7 +13,7 @@ import { parseLatLon } from './util.js';
 import { readForm } from './multipart.js';
 import { normTitle } from './vision.js';
 import { fixesToVote } from './fixes.js';
-import { queueWaits } from './scans.js';
+import { queueWaits, keepForReview } from './scans.js';
 
 const UNDO_DAYS = 14;
 
@@ -300,6 +300,9 @@ export default async function approvalRoutes(app) {
       `UPDATE scan_items SET decision = $2, decided_at = now(), outcome = $3, sighting_id = $4, my_book_id = $5 WHERE id = $1`,
       [item.id, decision, outcome, result?.sighting?.id ?? null, result?.myBookId ?? null],
     );
+    if (outcome === 'dropped' || outcome === 'edited') {
+      keepForReview(item, outcome, { title: result?.book?.title, authors: result?.book?.authors }).catch((err) => req.log.warn({ err, item: item.id }, 'keep for review'));
+    }
     await closeIfDone(item.scan_id);
     return { status: result?.sighting?.status ?? null, ...(await counts(req.user.id)) };
   });

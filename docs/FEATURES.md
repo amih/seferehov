@@ -179,12 +179,13 @@ Measured per item:
 |---|---|---|
 | Book cover photos (front + back, re-encoded) | about 0.6 MB per book | permanent |
 | Shelf photo for the queue + spine cut-outs | about 0.3 MB per photo + 40 KB per book | permanent |
-| Full-size copy of each photo, without location data (for reading again with a better model) | about 1.5 MB per photo | 30 days |
+| Full-size copy of each photo as sent and as read, and the video as sent, without location data or sound (for reading again with a better model) | about 3 MB per photo, 20–100 MB per video | 1 year |
+| Scans where a reader declined or corrected a reading: those copies, the trace and what the reader decided (to find where reading goes wrong) | as above | permanent |
 | Trace of each scan (admin view) | 0.3 MB per cover, 1.6 MB per shelf photo, 25 MB per video | 30 days |
 | Database: Open Library catalogue | 14 GB | rebuilt monthly from the public dump |
 | Database: readers' data | a few MB so far | permanent |
 
-The 30-day files are capped by the GPU: at most about 400 photos a day can be read, so they never exceed about 40 GB. Permanent growth is small. For example, 1,000 home libraries of 300 books photographed by shelf come to about 20 GB, and 100,000 books scanned by their covers to about 60 GB. With 1.5 TB free, disk space is not a concern for years.
+The 1-year files are capped by the GPU: at most about 400 photos a day can be read, so they stay under about 450 GB, and far less at real use. Permanent growth is small. For example, 1,000 home libraries of 300 books photographed by shelf come to about 20 GB, and 100,000 books scanned by their covers to about 60 GB. With 1.5 TB free, disk space is not a concern for years.
 
 # Backups
 
