@@ -8,7 +8,7 @@ import { todoTabs } from '../todo.js';
 // For the admin only (English): the public pages search engines see, cover texts that
 // wait for a check, readers' reviews (to hide one), how the app is used (counts) with
 // Matomo's visitor numbers, and the readers one by one.
-const TABS = [['pages', 'Search pages'], ['texts', 'Cover texts'], ['reviews', 'Reviews'], ['stats', 'Activity'], ['readers', 'Readers']];
+const TABS = [['pages', 'Search pages'], ['texts', 'Cover texts'], ['reviews', 'Reviews'], ['stats', 'Activity'], ['readers', 'Readers'], ['camera', 'Camera']];
 
 export default async function adminView(root) {
   const me = await getMe();
@@ -70,6 +70,32 @@ export default async function adminView(root) {
           <textarea dir="auto" rows="10">${esc(i.ocr_text)}</textarea>
           <p class="row"><button class="btn primary" data-s="approved">✓ Approve</button><button class="btn danger" data-s="rejected">✕ Reject</button></p></div></div>`).join('')
         : '<p class="note">Nothing waits for a check.</p>'}`;
+  }
+
+  // Live-camera sessions: where the time went (holding, moving on, too fast, too dark),
+  // the photos and how each was taken, and how fast the phone moved (px of a 160-px-wide
+  // copy per 0.15 s tick; bucket tops 0.5 1 1.5 2 2.5 3 4 6 10, last = faster / lost).
+  async function camera() {
+    const { sessions } = await api('/api/admin/camera-sessions');
+    const sec = (ms) => (ms / 1000).toFixed(ms < 10000 ? 1 : 0);
+    const share = (st, k) => (st.ms ? `${Math.round((100 * (st.states?.[k] ?? 0)) / st.ms)}%` : '—');
+    const tops = [0.5, 1, 1.5, 2, 2.5, 3, 4, 6, 10];
+    const median = (hist) => {
+      const n = hist.reduce((a, b) => a + b, 0);
+      let c = 0;
+      for (let i = 0; i < hist.length; i++) if ((c += hist[i]) >= n / 2) return i < tops.length ? `<${tops[i]}` : '>10';
+      return '—';
+    };
+    return `<p>Each time the live camera was used (no pictures, only numbers). Hold = waiting for the phone to steady at new books, next = moving on after a photo.
+      Photos: steady / rough (only roughly steady for 1.5 s) / leaving (moved on before the pause ended).</p>
+      ${sessions.length ? table(['When', 'Reader', 'Kind', 'Time', 'Photos', 'Hold', 'Next', 'Too fast', 'Dark', 'Speed (median)', 'Ended', ''], sessions.map((c) => {
+        const st = c.stats, ph = st.photos ?? [], by = (h) => ph.filter((p) => p.how === h).length;
+        return [esc(new Date(c.created_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })),
+          c.user_id ? `<a href="/r/${c.user_id}">${esc(c.screen_name ?? `#${c.user_id}`)}</a>` : '—',
+          esc(`${c.kind} · ${st.screen ?? ''}`), `${sec(st.ms ?? 0)} s`, `<b>${ph.length}</b> <span class="muted small">${by('steady')}/${by('rough')}/${by('leaving')}</span>`,
+          share(st, 'hold'), share(st, 'next'), share(st, 'fast'), share(st, 'dark'), st.speed ? median(st.speed) : '—', esc(st.ended ?? ''),
+          `<details><summary>…</summary><pre class="small">${esc(JSON.stringify({ ...st, ua: c.ua }, null, 1))}</pre></details>`];
+      })) : '<p class="note">No camera sessions yet.</p>'}`;
   }
 
   async function reviews() {
@@ -141,6 +167,7 @@ export default async function adminView(root) {
       if (tab === 'texts') { body.innerHTML = await texts(); return; }
       if (tab === 'reviews') { body.innerHTML = await reviews(); return; }
       if (tab === 'readers') { body.innerHTML = await readersTab(); return; }
+      if (tab === 'camera') { body.innerHTML = await camera(); return; }
       data ??= await api('/api/admin/overview');
       body.innerHTML = tab === 'stats' ? stats() : pages();
     } catch (e) {

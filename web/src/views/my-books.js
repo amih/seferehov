@@ -160,7 +160,7 @@ export async function addMyBooksView(root) {
     showQueue();
     return line;
   } });
-  const burst = burstShots({ panel: root.querySelector('#burst-panel'), onBatch: async (blobs) => {
+  const burst = burstShots({ screen: 'home', panel: root.querySelector('#burst-panel'), onBatch: async (blobs) => {
     const line = await sendShelf(blobs);
     showQueue();
     return line;
