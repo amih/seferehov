@@ -13,7 +13,9 @@ import { t, lang } from './i18n.js';
 // (queue.js): each picture is saved on the phone the moment it is taken, and the book
 // is sent by itself once its back is taken (or "no back", or the camera closes for any
 // reason: ✕, the screen going off, another app, leaving the screen). Nothing waits for a
-// button; a wrong picture is declined later in the approval queue. target({ isbn }) gives
+// button: for RETAKE_MS after a book the camera shows its two pictures with "retake" on
+// each (the first take is sometimes too quick); untouched, or once the next book's front
+// is taken, the book goes. A wrong book is declined later in the approval queue. target({ isbn }) gives
 // the address and fields to send the book to; sent(answer) the line to show once sent.
 // While the camera is on, it also looks for the barcode: a whole back cover in one
 // photo leaves the barcode too small to decode from the still, but the live picture,
@@ -35,6 +37,8 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   let session = {}; // this time only: { intro, single, only, target, sent, stack }
   let stack = null; // many books: { phase: fronts|backs, fronts, ids, backs, codes, frontAt, bookAt, away, auto }
   let held = null;  // one book: the outbox id (a promise) of its pictures so far
+  let last = null;  // the book just taken, during its retake time: { id, f, b, code, timer }
+  const RETAKE_MS = 6000;
   let storing = Promise.resolve();
   let isBook = null; // the book detector, once loaded (null: loading, or this phone cannot run it)
   let noBookSince = 0;
@@ -340,6 +344,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   // Front, then back (then a few seconds for the barcode), then the book is sent.
   function took(blob) {
     if (stack) return tookStack(blob);
+    if (last) sendLast(); // the next book has begun: the last one is fine
     const name = side === 'front' ? 'photo' : 'back';
     if (side === 'front') front = blob; else back = blob;
     keepPicture(name, blob);
@@ -366,10 +371,41 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     const id = held, f = front, b = back, code = preset || liveCode;
     lastCode = liveCode ?? lastCode;
     held = null; front = null; back = null; side = session.only ?? 'front'; liveCode = null; preset = null;
+    last = { id, f, b, code, timer: setTimeout(() => { sendLast(); if (session.single) stop(); }, RETAKE_MS) };
+    showLast();
+    if (!session.single) { moved = false; since = Date.now(); animate('next'); }
+    else since = Infinity; // one book only: nothing more to take, the camera waits for a retake
+  }
+  // The book just taken, over the camera: its pictures, each with "retake", and the time left.
+  function showLast() {
+    const box = panel.querySelector('.shot-live') ?? panel;
+    box.querySelector('.shot-last')?.remove();
+    if (!last) return;
+    const sides = [['front', last.f], ['back', last.b]].filter(([, x]) => x);
+    box.insertAdjacentHTML('beforeend', `<div class="shot-last"><span class="shot-last-ok">✓ ${t('shots.last_saved')}</span>
+      <span class="shot-last-pics">${sides.map(([k, x]) => `<button data-shots="retake-${k}">${thumb(x)}<b>↻ ${t(`shots.again_${k}`)}</b></button>`).join('')}</span>
+      <span class="shot-last-bar"><i style="animation-duration:${RETAKE_MS}ms"></i></span></div>`);
+  }
+  function sendLast() {
+    if (!last) return;
+    clearTimeout(last.timer);
+    const { id, f, b, code } = last;
+    last = null;
+    showLast();
     sendBook(id, f, b, code);
-    if (session.single) { stop(); return; }
-    moved = false; since = Date.now();
-    animate('next');
+  }
+  // Retake one side of the book just taken: back to the camera for that side; then it is
+  // shown again for its retake time.
+  function retake(k) {
+    if (!last) return;
+    clearTimeout(last.timer);
+    ({ id: held, f: front, b: back, code: liveCode } = last);
+    last = null;
+    showLast();
+    hunting = false; side = k;
+    moved = true; steady = 0; dropBest(); since = Date.now() + 800; // time to turn the book
+    refresh();
+    if (k === 'front' && back) animate('turn');
   }
   function sendBook(idPromise, f, b, code) {
     const li = document.createElement('li');
@@ -505,7 +541,8 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   // Whatever was taken goes: the row of books, or the book begun (front only).
   async function finish() {
     if (stack) finishStack();
-    else if (held) { const single = session.single; session.single = false; finishBook(); session.single = single; }
+    else if (held) { finishBook(); sendLast(); }
+    sendLast();
     await storing;
   }
   const onHidden = () => { if (document.visibilityState === 'hidden' && stream) stop({ hidden: true }); };
@@ -546,6 +583,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     else if (act === 'end') stop();
     else if (act === 'skip' && front) endHunt();
     else if (act === 'nocode') endHunt();
+    else if (act.startsWith('retake-')) retake(act.slice(7));
   });
   panel.hidden = true;
   return { start, stop };
