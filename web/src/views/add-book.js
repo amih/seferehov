@@ -1,5 +1,5 @@
 import { api, getMe } from '../api.js';
-import { enqueue } from '../queue.js';
+import { enqueue, flush } from '../queue.js';
 import { navigate } from '../nav.js';
 import { esc, getPosition, shrinkImage, noStringsNote } from '../ui.js';
 import { t, lang } from '../i18n.js';
@@ -110,7 +110,12 @@ export default async function addBookView(root, [code], query) {
   };
 
   // Each batch of photos the camera took by itself is one scan (its line shows in the panel).
-  const burst = burstShots({ panel: root.querySelector('#burst-panel'), onBatch: async (blobs) => {
+  const burst = burstShots({ panel: root.querySelector('#burst-panel'), park: async (blobs) => {
+    photos += blobs.length;
+    await enqueue(`/api/locations/${code}/scans`, { kind: mode, lang: lang(), lat: pos?.lat ?? '', lon: pos?.lon ?? '' },
+      Object.fromEntries(blobs.map((b, i) => [`photo${i}`, b])), 'shelf');
+    flush();
+  }, onBatch: async (blobs) => {
     const li = document.createElement('li');
     photos += blobs.length;
     await upload(Object.fromEntries(blobs.map((b, i) => [`photo${i}`, b])), t('add3.photos_n', { n: blobs.length }), li);

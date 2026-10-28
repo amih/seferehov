@@ -2,7 +2,7 @@ import { api, getMe } from '../api.js';
 import { navigate } from '../nav.js';
 import { esc, timeAgo, toast, confirmDialog } from '../ui.js';
 import { t, lang } from '../i18n.js';
-import { enqueue } from '../queue.js';
+import { enqueue, flush } from '../queue.js';
 import { placeBook, ownerLabel } from '../mybooks.js';
 import { bookShots, sendCovers } from '../shots.js';
 import { burstShots } from '../burst.js';
@@ -160,7 +160,10 @@ export async function addMyBooksView(root) {
     showQueue();
     return line;
   } });
-  const burst = burstShots({ screen: 'home', panel: root.querySelector('#burst-panel'), onBatch: async (blobs) => {
+  const burst = burstShots({ screen: 'home', panel: root.querySelector('#burst-panel'), park: async (blobs) => {
+    await enqueue('/api/my-books/scans', { owner: 'mine', lang: lang() }, Object.fromEntries(blobs.map((b, i) => [`photo${i}`, b])), 'shelf');
+    flush();
+  }, onBatch: async (blobs) => {
     const line = await sendShelf(blobs);
     showQueue();
     return line;

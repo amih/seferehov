@@ -16,6 +16,10 @@ import { cameraLog } from './camlog.js';
 // Every BATCH photos go to onBatch(blobs) as one scan, in the background (its photos are
 // read together, so a spine seen in two of them counts once); the rest when the reader
 // stops. onBatch resolves to a line to show. Without a live camera, start() returns false.
+// When the screen goes off or the reader switches apps (the phone put in a pocket), or
+// leaves the screen, the camera stops and the photos not sent yet go to park(blobs),
+// which keeps them on the phone (queue.js) until they can be sent: before, they were in
+// memory only and were lost.
 // Each session's numbers (speeds, waits, photos, how it ended) go to /api/camera-log
 // (camlog.js), so the limits can be set from real shelves, not guessed.
 const TICK_MS = 150;
@@ -62,7 +66,7 @@ function align(a, b, w, h) {
   return best;
 }
 
-export function burstShots({ panel, onBatch, onEnd, screen = 'library' }) {
+export function burstShots({ panel, onBatch, park, onEnd, screen = 'library' }) {
   let stream = null, video = null, timer = null, log = null;
   const small = document.createElement('canvas');
   const ctx = small.getContext('2d', { willReadFrequently: true });
@@ -98,6 +102,7 @@ export function burstShots({ panel, onBatch, onEnd, screen = 'library' }) {
     settleUntil = Date.now() + 700; // exposure and focus settle
     log = cameraLog('shelf', { screen, cam: `${video.videoWidth}x${video.videoHeight}`, steady: STEADY, rough: ROUGH, next: NEXT });
     timer = setInterval(tick, TICK_MS);
+    document.addEventListener('visibilitychange', onHidden);
     return true;
   }
 
@@ -221,17 +226,35 @@ export function burstShots({ panel, onBatch, onEnd, screen = 'library' }) {
     onBatch(blobs).then((line) => { li.innerHTML = line; }, (err) => { li.textContent = `⚠️ ${err.message}`; });
   }
 
-  // done: send what is left and close the camera; the lines of what was sent stay.
-  async function stop(done = true) {
+  const onHidden = () => { if (document.visibilityState === 'hidden' && stream) stop('hidden'); };
+
+  // Kept on the phone and sent from there (park), or sent now if there is no park.
+  function keep() {
+    if (!batch.length) return Promise.resolve();
+    const blobs = batch;
+    batch = [];
+    log?.batch();
+    const li = document.createElement('li');
+    li.textContent = `💾 ${t('burst.parked', { n: blobs.length })}`;
+    panel.querySelector('.shot-done')?.prepend(li);
+    return (park ? park(blobs) : onBatch(blobs)).catch((err) => { li.textContent = `⚠️ ${err.message}`; });
+  }
+
+  // how: true = "Done": send what is left; 'hidden' = screen off or another app; false =
+  // the screen is closed. The camera closes; the lines of what was sent stay.
+  async function stop(how = true) {
+    const running = !!stream;
     clearInterval(timer);
+    document.removeEventListener('visibilitychange', onHidden);
     stream?.getTracks().forEach((tr) => tr.stop());
     stream = null;
     best = null; spare = null;
-    log?.end(done ? 'done' : 'left');
+    log?.end(how === true ? 'done' : how || 'left');
     log = null;
-    if (!done) return;
+    if (how !== true && !running) return;
     await saving; // the last photo may still be being shrunk
-    send();
+    if (how === true) send(); else await keep();
+    if (how === false) return;
     const sent = panel.querySelector('.shot-done');
     panel.innerHTML = '';
     if (sent?.children.length) panel.append(sent); else panel.hidden = true;
