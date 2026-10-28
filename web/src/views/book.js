@@ -29,13 +29,9 @@ export default async function bookView(root, [code, id], _q, fresh = false) {
     photoSaver: async () => {
       const p = await getPosition({ timeout: 8000 }).catch(() => null);
       if (!p || distanceM(p, l) > NEAR_M) return null;
-      return async ({ front, back }) => {
-        const fd = new FormData();
-        if (front) fd.append('photo', front, 'photo.jpg');
-        if (back) fd.append('back', back, 'back.jpg');
-        fd.append('lat', p.lat); fd.append('lon', p.lon);
-        const r = await api(`/api/locations/${code}/books/${id}/photos`, { method: 'POST', form: fd });
-        if (r.sighting.status !== 'approved') toast(t('loc.thanks_review'));
+      return {
+        target: () => ({ url: `/api/locations/${code}/books/${id}/photos`, fields: { lat: p.lat, lon: p.lon }, label: 'photo' }),
+        sent: (r) => { if (r?.sighting && r.sighting.status !== 'approved') toast(t('loc.thanks_review')); },
       };
     },
     back: `<a href="/l/${code}">${t('back.to', { name: esc(l.name || t('free_library')) })}</a>`,
@@ -57,13 +53,10 @@ export async function myBookView(root, [id], _q, fresh = false) {
   const { item, book: b, photos } = data;
   return renderBook(root, {
     b, photos, texts: data.texts, again: () => myBookView(root, [id], null, true),
-    photoSaver: async () => async ({ front, back }) => {
-      const fd = new FormData();
-      if (front) fd.append('photo', front, 'photo.jpg');
-      if (back) fd.append('back', back, 'back.jpg');
-      await api(`/api/my-books/${item.id}/photos`, { method: 'POST', form: fd });
-      toast(t('shots.thanks'));
-    },
+    photoSaver: async () => ({
+      target: () => ({ url: `/api/my-books/${item.id}/photos`, fields: {}, label: 'photo' }),
+      sent: () => toast(t('shots.thanks')),
+    }),
     back: `<a href="/books">${t('mybooks.back')}</a>`,
     status: item.placed_at ? `<p class="ok">📍 <a href="/l/${item.code}">${esc(item.location_name || t('free_library'))}</a> · ${timeAgo(item.placed_at)}</p>`
       : `<p class="muted">${item.owner === 'mine' ? t('mybooks.home') : ownerLabel(item)}</p>`,
@@ -156,10 +149,11 @@ function renderBook(root, { b, photos, texts, again, back, status, actions, wire
       if (!save || location.pathname !== path) return;
       const box = root.querySelector('.add-photos');
       box.hidden = false;
-      shots = bookShots({ on: root, panel: root.querySelector('#shots'), onBook: async ({ front, back }) => {
-        await save({ front, back });
+      // Saved on the phone and sent from there (queue.js); the page shows it once sent.
+      shots = bookShots({ on: root, panel: root.querySelector('#shots'), target: save.target, sent: (r) => {
+        save.sent(r);
         toast(t('book.photo_saved'));
-        again();
+        if (location.pathname === path) again();
         return '';
       } });
       box.onclick = (e) => {

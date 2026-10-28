@@ -1,5 +1,5 @@
 import { toast } from './ui.js';
-import { pendingCount } from './queue.js';
+import { busy } from './queue.js';
 import { t } from './i18n.js';
 
 // How the app stays current without anyone ever needing a "hard refresh":
@@ -63,11 +63,12 @@ export function checkForUpdate() {
 }
 
 // Called by the router on every screen change and when the app goes to the
-// background. Never switches while uploads are waiting in the offline queue.
+// background. Never in the middle of sending, or while a batch of photos is being taken
+// (uploads that wait are on the phone and are sent by the new version just the same).
 export async function maybeApply({ hidden = false } = {}) {
   if (!waiting || !reg?.waiting) return;
   if (hidden && BUSY_SCREENS.test(location.pathname)) return;
-  if (await pendingCount()) return;
+  if (busy()) return;
   waiting = false;
   reg.waiting.postMessage({ type: 'SKIP_WAITING' });
 }

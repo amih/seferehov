@@ -2,7 +2,7 @@ import { api, getMe } from '../api.js';
 import { navigate } from '../nav.js';
 import { esc, toast, getPosition, timeAgo } from '../ui.js';
 import { t } from '../i18n.js';
-import { bookShots, sendCovers } from '../shots.js';
+import { bookShots, coversTarget } from '../shots.js';
 
 // After shelf photos at a library (several uploads within a few hours are one visit):
 // the books the photos confirmed as still there, spines found in no catalogue (take the
@@ -63,12 +63,8 @@ export default async function shelfCheckView(root, [code]) {
     const c = e.target.closest('[data-covers]');
     if (c) {
       const li = c.closest('li');
-      shots.start({ single: true, intro: t('check.covers_intro', { title: esc(li.querySelector('b').textContent) }), onBook: async ({ front, back, isbn }) => {
-        const line = await sendCovers({ code, kind: 'seen', pos, isbn, front, back, replaces: c.dataset.covers });
-        li.remove();
-        toast(t('check.covers_sent'));
-        return line;
-      } });
+      shots.start({ single: true, intro: t('check.covers_intro', { title: esc(li.querySelector('b').textContent) }), target: coversTarget({ code, kind: 'seen', pos, replaces: c.dataset.covers }),
+        sent: () => { li.remove(); toast(t('check.covers_sent')); return null; } });
       return;
     }
     const k = e.target.closest('[data-kind]');

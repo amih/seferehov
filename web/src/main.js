@@ -1,7 +1,7 @@
 import './style.css';
 import { initUpdates, maybeApply } from './update.js';
-import { startQueue, onQueueChange, flush } from './queue.js';
-import { toast } from './ui.js';
+import { startQueue, onQueueChange, kick, failedItems, retryFailed, discard } from './queue.js';
+import { toast, choose, esc } from './ui.js';
 import { api, getMe } from './api.js';
 import { navigate, mapUnderneath, closeLayer } from './nav.js';
 import { trackPageView } from './analytics.js';
@@ -118,9 +118,29 @@ window.addEventListener('popstate', () => { if (!closeLayer()) render(); });
 window.addEventListener('seferehov:navigate', render);
 
 const badge = document.getElementById('queue-badge');
-let queued = 0;
-const showBadge = () => { badge.hidden = !queued; badge.textContent = t('queue.waiting', { n: queued }); };
-onQueueChange((n) => { queued = n; showBadge(); });
+let queued = { waiting: 0, failed: 0 };
+const showBadge = () => {
+  badge.hidden = !queued.waiting && !queued.failed;
+  badge.textContent = queued.failed ? `⚠️ ${t('out.failed_n', { n: queued.failed })}` : t('queue.waiting', { n: queued.waiting });
+};
+let wasWaiting = 0;
+onQueueChange((c) => {
+  if (wasWaiting && !c.waiting && !c.failed) toast(t('queue.uploaded', { n: wasWaiting }));
+  wasWaiting = c.waiting; queued = c; showBadge();
+});
+// The badge: send now; uploads the server refused are listed, to try again or give up.
+badge.onclick = async () => {
+  kick();
+  const failed = await failedItems();
+  if (!failed.length) { toast(t(navigator.onLine ? 'out.sending_now' : 'out.waiting_offline')); return; }
+  const k = await choose({
+    title: t('out.failed_title'),
+    html: `<ul>${failed.map((i) => `<li>${esc(t(`out.label_${i.label}`) || i.label)} · <span class="muted small">${esc(new Date(i.createdAt).toLocaleString())} — ${esc(i.error ?? '')}</span></li>`).join('')}</ul>`,
+    choices: [['retry', `↻ ${t('out.retry')}`, 'primary'], ['drop', `🗑 ${t('out.drop')}`, 'danger'], ['close', t('cancel')]],
+  });
+  if (k === 'retry') retryFailed();
+  else if (k === 'drop') for (const i of failed) await discard(i.id);
+};
 
 // Static shell text; views re-render themselves on a language change.
 // "N books wait for your approval" — reading takes minutes, users wander off.
@@ -158,10 +178,6 @@ addEventListener('error', (e) => report(e.message, `${e.filename}:${e.lineno}:${
 addEventListener('unhandledrejection', (e) => report(String(e.reason?.message ?? e.reason), 'promise', e.reason?.stack));
 initUpdates();
 startQueue();
-window.addEventListener('online', async () => {
-  const sent = await flush();
-  if (sent.length) toast(t('queue.uploaded', { n: sent.length }));
-});
 document.getElementById('app-version').textContent = __APP_VERSION__;
 mapUnderneath();
 render();

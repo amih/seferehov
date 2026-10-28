@@ -1,7 +1,7 @@
-import { api } from './api.js';
-import { enqueue } from './queue.js';
+import { enqueue, append, release, discard, removeFiles } from './queue.js';
+import { trackLine } from './outbox-ui.js';
 import { scanImage, detectFrame } from './scanner.js';
-import { esc, shrinkImage, choose } from './ui.js';
+import { esc, shrinkImage } from './ui.js';
 import { loadBookModel } from './bookai.js';
 import { t, lang } from './i18n.js';
 
@@ -9,9 +9,12 @@ import { t, lang } from './i18n.js';
 // book over, the back cover, next book. The picture is taken by itself the moment the
 // camera holds still on a sharp picture, or else the sharpest of the frames seen while
 // the book was held roughly still for a moment (a button takes it at once); a short animation
-// then shows turning the book over, or the next book coming. Both pictures are then
-// shown, to keep or to take one side again. Each book is handed to
-// onBook({ front, back, isbn }) in the background, which resolves to a line to show.
+// then shows turning the book over, or the next book coming. Store and forward
+// (queue.js): each picture is saved on the phone the moment it is taken, and the book
+// is sent by itself once its back is taken (or "no back", or the camera closes for any
+// reason: ✕, the screen going off, another app, leaving the screen). Nothing waits for a
+// button; a wrong picture is declined later in the approval queue. target({ isbn }) gives
+// the address and fields to send the book to; sent(answer) the line to show once sent.
 // While the camera is on, it also looks for the barcode: a whole back cover in one
 // photo leaves the barcode too small to decode from the still, but the live picture,
 // read many times a second, usually catches it. If it has not by the time the back
@@ -19,19 +22,20 @@ import { t, lang } from './i18n.js';
 // Without a live camera, the phone's camera app is used instead, one photo at a time.
 // Many books at once (stack): the books lie in a row, all the front covers are taken one
 // after another, then every book is turned over in place and the backs are taken in the
-// same order; the pairs are shown together before they are sent. Here a photo is taken
+// same order; each book is sent as soon as its back is taken. Here a photo is taken
 // only when the camera has paused on a book (bookai.js), so aiming at the first book,
 // moving between books or pointing away after the last one takes nothing; a wrong photo
 // can still be removed from the strip. The switch to the backs is noticed by itself: after
 // the fronts, a long while with no book in view (the books being turned over), then books
 // again — these are taken as the backs, with a banner saying so and a button to undo.
-export function bookShots({ on, panel, onBook, onStart, onEnd }) {
+export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   let stream = null, video = null, timer = null, side = 'front', front = null, back = null, preset = null, busy = false;
-  let reviewing = false;
   let liveCode = null, lastCode = null, looking = false, ticks = 0;
   let hunting = false, huntUntil = 0; // after the back cover: a few seconds for a close-up of the barcode
-  let session = {}; // this time only: { intro, single, onBook, stack }
-  let stack = null; // many books: { phase: fronts|backs|review, fronts, backs, codes, reversed, frontAt, bookAt, away, auto }
+  let session = {}; // this time only: { intro, single, only, target, sent, stack }
+  let stack = null; // many books: { phase: fronts|backs, fronts, ids, backs, codes, frontAt, bookAt, away, auto }
+  let held = null;  // one book: the outbox id (a promise) of its pictures so far
+  let storing = Promise.resolve();
   let isBook = null; // the book detector, once loaded (null: loading, or this phone cannot run it)
   let noBookSince = 0;
   // A pause over a book, hand-held: from tick to tick the picture changes by less than
@@ -52,27 +56,9 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   const title = (k) => { const el = panel.querySelector('.shot-title'); if (el) el.textContent = k ? t(k) : ''; };
   const say = () => {
     if (stack) return sayStack();
-    title(reviewing ? null : hunting ? 'shots.title_code' : side === 'front' ? 'shots.title_front' : 'shots.title_back');
-    const live = panel.querySelector('.shot-live');
-    if (live) live.hidden = reviewing;
-    panel.querySelector('.shot-cam')?.toggleAttribute('hidden', reviewing);
-    panel.querySelector('[data-shots="snap"]')?.toggleAttribute('hidden', reviewing || hunting);
+    title(hunting ? 'shots.title_code' : side === 'front' ? 'shots.title_front' : 'shots.title_back');
+    panel.querySelector('[data-shots="snap"]')?.toggleAttribute('hidden', hunting);
     panel.querySelector('[data-shots="nocode"]')?.toggleAttribute('hidden', !hunting);
-    const rev = panel.querySelector('.shot-review');
-    rev.hidden = !reviewing;
-    if (reviewing) {
-      panel.querySelector('.shot-say').innerHTML = `<b>${t('shots.review')}</b>`;
-      panel.querySelector('[data-shots="skip"]').hidden = true;
-      const sides = session.only ? [session.only] : ['front', 'back'];
-      rev.innerHTML = `<div class="shot-pair">${sides.map((s) => {
-        const blob = s === 'front' ? front : back;
-        return `<figure>${blob ? `<img src="${esc(URL.createObjectURL(blob))}" alt="">` : `<div class="shot-none">${t('shots.no_back_yet')}</div>`}
-          <figcaption><button class="btn small" data-shots="again-${s}">📷 ${t(blob ? `shots.again_${s}` : 'shots.back')}</button></figcaption></figure>`;
-      }).join('')}</div>
-        <p class="row"><button class="btn primary" data-shots="ok">✓ ${t(session.single ? 'shots.ok_single' : 'shots.ok')}</button></p>`;
-      center(rev);
-      return;
-    }
     if (hunting) {
       panel.querySelector('.shot-say').innerHTML = `<b>${t('shots.code_close')}</b><br><span class="muted small">${t('shots.code_close_how')}</span>`;
       panel.querySelector('[data-shots="skip"]').hidden = true;
@@ -87,48 +73,25 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   // Many books: what to photograph now, the book whose back is wanted, and the pairs at the end.
   const sayStack = () => {
     const { phase, fronts, backs } = stack;
-    const reviewingAll = phase === 'review';
     const el = panel.querySelector('.shot-title');
-    if (el) el.textContent = reviewingAll ? t('stack.title_review', { n: fronts.length })
-      : phase === 'fronts' ? t(stack.away ? 'stack.title_away' : 'stack.title_front', { n: fronts.length + 1 }) : t('stack.title_back', { n: backs.length + 1, total: fronts.length });
-    panel.querySelector('.shot-live').hidden = reviewingAll;
-    panel.querySelector('[data-shots="snap"]').hidden = reviewingAll;
+    if (el) el.textContent = phase === 'fronts' ? t(stack.away ? 'stack.title_away' : 'stack.title_front', { n: fronts.length + 1 }) : t('stack.title_back', { n: backs.length + 1, total: fronts.length });
     panel.querySelector('[data-shots="skip"]').hidden = phase !== 'backs';
     panel.querySelector('[data-shots="stack-backs"]').hidden = phase !== 'fronts' || !fronts.length;
     const match = panel.querySelector('.shot-match');
     match.hidden = phase !== 'backs';
     if (phase === 'backs') match.src = URL.createObjectURL(fronts[backs.length]);
-    const rev = panel.querySelector('.shot-review');
-    rev.hidden = !reviewingAll;
-    if (!reviewingAll) {
-      panel.querySelector('.shot-say').innerHTML = phase === 'fronts'
-        ? `<b>${t('stack.fronts_now')}</b><br><span class="muted small">${t('stack.fronts_how')}</span>${fronts.length ? `<span class="stack-strip">${fronts.map((f, i) => `<span class="strip-item">${thumb(f)}<button class="strip-x" data-shots="drop-${i}" aria-label="${esc(t('stack.drop'))}">✕</button></span>`).join('')}</span>` : ''}`
-        : `${stack.auto ? `<span class="auto-backs">🔄 <b>${t('stack.auto_backs')}</b> <button class="btn small" data-shots="still-fronts">${t('stack.still_fronts')}</button></span><br>` : ''}<b>${t('stack.backs_now')}</b><br><span class="muted small">${t('stack.backs_how')}</span>`;
-      if (phase === 'fronts' && stack.away) panel.querySelector('.shot-say').insertAdjacentHTML('afterbegin', `<span class="auto-backs">🔄 ${t('stack.away')}</span><br>`);
-      const banner = panel.querySelector('.stack-banner');
-      banner.hidden = !(phase === 'backs' && stack.auto) && !(phase === 'fronts' && stack.away);
-      banner.textContent = phase === 'backs' ? `🔄 ${t('stack.banner_backs')}` : `🔄 ${t('stack.banner_away')}`;
-      if (phase === 'backs') showCode();
-      return;
-    }
-    const pairs = stackPairs();
-    panel.querySelector('.shot-say').innerHTML = `<b>${t('stack.review')}</b>`;
-    rev.innerHTML = `<ol class="stack-pairs">${pairs.map(({ f, b }, i) => `<li><span class="n">${i + 1}</span>${thumb(f)}${b ? thumb(b) : `<span class="shot-thumb shot-none">${t('shots.no_back_yet')}</span>`}
-        ${i < pairs.length - 1 ? `<button class="btn small" data-shots="swap-${i}" aria-label="${esc(t('stack.swap'))}" title="${esc(t('stack.swap'))}">⇅</button>` : ''}
-        <button class="btn small" data-shots="rm-${i}" aria-label="${esc(t('stack.remove'))}" title="${esc(t('stack.remove'))}">✕</button></li>`).join('')}</ol>
-      <p class="row"><label class="small"><input type="checkbox" data-shots="reverse"${stack.reversed ? ' checked' : ''}> ${t('stack.reversed')}</label></p>
-      <p class="row"><button class="btn primary" data-shots="stack-save">✓ ${t('stack.save', { n: pairs.length })}</button>
-        <button class="btn" data-shots="stack-again">↻ ${t('stack.backs_again')}</button></p>`;
-    center(rev);
-  };
-  // The backs in the order of the fronts (taken from the other end, if so marked).
-  const stackPairs = () => {
-    const order = stack.fronts.map((_, i) => (stack.reversed ? stack.fronts.length - 1 - i : i));
-    return stack.fronts.map((f, i) => ({ f, b: stack.backs[order[i]] ?? null, code: stack.codes[order[i]] ?? null }));
+    panel.querySelector('.shot-say').innerHTML = phase === 'fronts'
+      ? `<b>${t('stack.fronts_now')}</b><br><span class="muted small">${t('stack.fronts_how')}</span>${fronts.length ? `<span class="stack-strip">${fronts.map((f, i) => `<span class="strip-item">${thumb(f)}<button class="strip-x" data-shots="drop-${i}" aria-label="${esc(t('stack.drop'))}">✕</button></span>`).join('')}</span>` : ''}`
+      : `${stack.auto ? `<span class="auto-backs">🔄 <b>${t('stack.auto_backs')}</b> <button class="btn small" data-shots="still-fronts">${t('stack.still_fronts')}</button></span><br>` : ''}<b>${t('stack.backs_now')}</b><br><span class="muted small">${t('stack.backs_how')}</span>`;
+    if (phase === 'fronts' && stack.away) panel.querySelector('.shot-say').insertAdjacentHTML('afterbegin', `<span class="auto-backs">🔄 ${t('stack.away')}</span><br>`);
+    const banner = panel.querySelector('.stack-banner');
+    banner.hidden = !(phase === 'backs' && stack.auto) && !(phase === 'fronts' && stack.away);
+    banner.textContent = phase === 'backs' ? `🔄 ${t('stack.banner_backs')}` : `🔄 ${t('stack.banner_away')}`;
+    if (phase === 'backs') showCode();
   };
   const showCode = () => {
     const say = panel.querySelector('.shot-say');
-    if (liveCode && say && !reviewing && !say.querySelector('.code-seen')) say.insertAdjacentHTML('beforeend', `<br><span class="ok small code-seen">${t('shots.code_seen')}</span>`);
+    if (liveCode && say && !say.querySelector('.code-seen')) say.insertAdjacentHTML('beforeend', `<br><span class="ok small code-seen">${t('shots.code_seen')}</span>`);
   };
   // Every few ticks, in the background: the detector is slower than a tick.
   async function lookForCode() {
@@ -137,25 +100,26 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     const code = await detectFrame(video).catch(() => null);
     looking = false;
     // The book just saved may still be in view: its code is not the next book's.
-    if (code && code !== lastCode && !liveCode && !reviewing) { liveCode = code; navigator.vibrate?.(30); showCode(); }
+    if (code && code !== lastCode && !liveCode) { liveCode = code; navigator.vibrate?.(30); showCode(); }
   }
   // The camera (or the review) in the middle of the screen.
   const center = (el) => requestAnimationFrame(() => el?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
   const thumb = (blob) => `<img class="shot-thumb" src="${esc(URL.createObjectURL(blob))}" alt="">`;
 
   // only: 'front' or 'back' = one picture of that side (a new or missing one).
-  async function start({ isbn = null, intro = null, single = false, only = null, onBook: own = null, many = false, go = false } = {}) {
+  async function start({ isbn = null, intro = null, single = false, only = null, target: to = null, sent: done = null, many = false, go = false } = {}) {
+    await finish();
     stopCamera();
     if (many && !go) return comic();
     preset = isbn;
-    session = { intro, single: single || !!only, only, onBook: own, stack: many };
+    session = { intro, single: single || !!only, only, target: to ?? target, sent: done ?? sent, stack: many };
     stack = many ? newStack() : null;
     pausedSince = 0; noBookSince = 0; motion = 99;
     if (many) loadBookModel().then((d) => { isBook = d; });
     refresh = say;
     side = only ?? 'front';
     prev = null; steady = 0; moved = true; dropBest();
-    front = null; back = null; reviewing = false; liveCode = null; hunting = false;
+    front = null; back = null; held = null; liveCode = null; hunting = false;
     panel.hidden = false;
     panel.innerHTML = `${intro ? `<p class="shot-intro">${intro}</p>` : ''}
       <h2 class="shot-title"></h2>
@@ -165,7 +129,6 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
         <button class="shot-x" data-shots="end" aria-label="${t('shots.stop')}">✕</button>
         <button class="shot-torch" data-shots="torch" hidden aria-label="${t('shots.torch')}">🔦</button></div>
       <p class="shot-say"></p>
-      <div class="shot-review" hidden></div>
       <p class="row"><button class="btn primary" data-shots="snap">📸 ${t('shots.snap')}</button>
         <button class="btn" data-shots="skip" hidden>${t(many ? 'stack.no_back' : 'shots.skip')}</button>
         <button class="btn" data-shots="nocode" hidden>${t('shots.no_code')}</button>
@@ -188,6 +151,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     center(panel.querySelector('.shot-live'));
     since = Date.now() + 600; // the camera settles its exposure and focus
     timer = setInterval(tick, 120);
+    document.addEventListener('visibilitychange', onHidden);
   }
 
   // Still and sharp? Movement = mean change of a small grey copy between ticks;
@@ -205,7 +169,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
       if (liveCode || Date.now() > huntUntil) endHunt();
       return;
     }
-    if (busy || reviewing || stack?.phase === 'review' || !video.videoWidth) return;
+    if (busy || !video.videoWidth) return;
     if (++ticks % 4 === 0 && stack?.phase !== 'fronts') lookForCode();
     const w = 160, h = Math.round((w * video.videoHeight) / video.videoWidth);
     small.width = w; small.height = h;
@@ -314,7 +278,7 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   // auto: the frame on screen right now, or the given one (instant). The button asks the
   // camera for a full photo, which can take a moment to focus.
   async function snap(auto = false, from = null) {
-    if (busy || reviewing || stack?.phase === 'review' || !video?.videoWidth) return;
+    if (busy || !video?.videoWidth) return;
     busy = true;
     const blob = from ? await toJpeg(from) : auto ? await frame() : await still();
     dropBest();
@@ -373,33 +337,90 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     animate.timer = setTimeout(() => { el.hidden = true; el.innerHTML = ''; }, ms);
   }
 
-  // Front, then back, then both are shown; a side taken again goes back to the review.
+  // Front, then back (then a few seconds for the barcode), then the book is sent.
   function took(blob) {
     if (stack) return tookStack(blob);
+    const name = side === 'front' ? 'photo' : 'back';
     if (side === 'front') front = blob; else back = blob;
+    keepPicture(name, blob);
     if (side === 'front' && !session.only && !back) { side = 'back'; animate('turn'); }
     else if (side === 'back' && stream && !liveCode && !preset) { hunting = true; huntUntil = Date.now() + 4000; }
-    else reviewing = true;
+    else finishBook();
     refresh();
+  }
+  // Onto the phone at once (shrunk), into the book's held upload.
+  function keepPicture(name, blob) {
+    const was = held;
+    held = storing = storing.then(async () => {
+      const small = await shrinkImage(blob, 2400);
+      const id = await was;
+      if (id && await append(id, { [name]: small })) return id;
+      const { url, fields, label } = session.target({ isbn: preset });
+      return enqueue(url, fields, { [name]: small }, label ?? 'book', { hold: true });
+    }).catch((err) => { console.warn('cover not saved', err); return null; });
+  }
+  // The book's pictures go, with the barcode if one was read (live, or from the stills).
+  function finishBook() {
+    hunting = false;
+    if (!held) return;
+    const id = held, f = front, b = back, code = preset || liveCode;
+    lastCode = liveCode ?? lastCode;
+    held = null; front = null; back = null; side = session.only ?? 'front'; liveCode = null; preset = null;
+    sendBook(id, f, b, code);
+    if (session.single) { stop(); return; }
+    moved = false; since = Date.now();
+    animate('next');
+  }
+  function sendBook(idPromise, f, b, code) {
+    const li = document.createElement('li');
+    panel.querySelector('.shot-done')?.prepend(li);
+    const { target: to, sent: done } = session;
+    storing = storing.then(async () => {
+      const id = await idPromise;
+      if (!id) return;
+      const isbn = code || (b && await scanImage(b).catch(() => null)) || (f && await scanImage(f).catch(() => null));
+      trackLine(li, id, { label: t('out.label_book'), before: `${f ? thumb(f) : ''}${b ? thumb(b) : ''}`, sent: (data) => done?.(data) ?? bookSentLine(data) });
+      const { url, fields, alt } = to({ isbn });
+      await release(id, { url, fields, alt });
+    }).catch((err) => { li.textContent = `⚠️ ${err.message}`; });
   }
   // Many books: the next front, or the back of the next book in the row (null = none).
   function tookStack(blob) {
     if (stack.phase === 'fronts') {
       stack.fronts.push(blob);
+      stack.ids.push(storeFront(blob));
       stack.frontAt.push(Date.now());
       stack.bookAt = Date.now();
       animate('next');
     } else {
+      const i = stack.backs.length;
       stack.backs.push(blob);
       stack.codes.push(liveCode);
+      if (blob) { const id = stack.ids[i]; storing = storing.then(async () => append(await id, { back: await shrinkImage(blob, 2400) })).catch(() => {}); }
       lastCode = liveCode ?? lastCode;
       liveCode = null;
-      if (stack.backs.length >= stack.fronts.length) stack.phase = 'review';
+      if (stack.backs.length >= stack.fronts.length) finishStack();
       else animate('next');
     }
     refresh();
   }
-  const newStack = () => ({ phase: 'fronts', fronts: [], backs: [], codes: [], reversed: false, frontAt: [], bookAt: Date.now(), away: false, auto: false });
+  function storeFront(blob) {
+    const p = storing.then(async () => {
+      const { url, fields, label } = session.target({ isbn: null });
+      return enqueue(url, fields, { photo: await shrinkImage(blob, 2400) }, label ?? 'book', { hold: true });
+    });
+    storing = p.catch(() => {});
+    return p;
+  }
+  // Every book of the row goes (those with no back yet with the front only).
+  function finishStack() {
+    if (!stack?.fronts.length) return;
+    stack.fronts.forEach((f, i) => sendBook(stack.ids[i], f, stack.backs[i] ?? null, stack.codes[i] ?? null));
+    stack = newStack();
+    moved = false; since = Date.now();
+    refresh();
+  }
+  const newStack = () => ({ phase: 'fronts', fronts: [], ids: [], backs: [], codes: [], frontAt: [], bookAt: Date.now(), away: false, auto: false });
   // How long without a book means "turning them over": 2.5 times the usual time between
   // two fronts, and at least 5 seconds.
   function awayMs() {
@@ -415,7 +436,13 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   }
   // "No, still fronts": the photos taken as backs join the fronts.
   function stillFronts() {
-    stack.fronts.push(...stack.backs.filter(Boolean));
+    stack.backs.forEach((b, i) => {
+      if (!b) return;
+      const id = stack.ids[i];
+      storing = storing.then(async () => removeFiles(await id, ['back'])).catch(() => {});
+      stack.fronts.push(b);
+      stack.ids.push(storeFront(b));
+    });
     Object.assign(stack, { phase: 'fronts', backs: [], codes: [], auto: false, away: false, bookAt: Date.now() });
     refresh();
   }
@@ -427,16 +454,6 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     center(panel.querySelector('.shot-live'));
     animate('flipall');
   }
-  // Each pair is sent like a single book, one after another (the phone's memory).
-  let sending = Promise.resolve();
-  function saveStack() {
-    for (const { f, b, code } of stackPairs()) sending = sending.then(() => save(f, b, code)).catch(() => {});
-    stack = newStack();
-    moved = false; since = Date.now();
-    refresh();
-    center(panel.querySelector('.shot-live'));
-  }
-
   // How the many-books mode works, as a small comic, before the camera opens.
   function comic() {
     panel.hidden = false;
@@ -456,50 +473,15 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
   }
 
   function endHunt() {
-    hunting = false;
-    reviewing = true;
+    finishBook();
     refresh();
-  }
-
-  function again(s) {
-    reviewing = false; side = s;
-    moved = true; steady = 0; since = Date.now() + 800; // time to turn the book
-    refresh();
-    center(panel.querySelector('.shot-live'));
-    if (s === 'front') animate('turn');
-  }
-
-  function keep() {
-    save(session.only === 'back' ? null : front, session.only === 'front' ? null : back, liveCode);
-    lastCode = liveCode ?? lastCode;
-    front = null; back = null; reviewing = false; side = 'front'; liveCode = null;
-    if (session.single) return stop();
-    moved = false; since = Date.now();
-    refresh();
-    center(panel.querySelector('.shot-live'));
-    animate('next');
-  }
-
-  // In the background, so the next book can be photographed meanwhile.
-  async function save(f, b, seen = null) {
-    const handle = session.onBook ?? onBook;
-    const isbn = preset || seen || (b && await scanImage(b).catch(() => null)) || (f && await scanImage(f).catch(() => null));
-    preset = null;
-    const li = document.createElement('li');
-    li.innerHTML = `${f ? thumb(f) : ''}${b ? thumb(b) : ''}<span><span class="spinner"></span></span>`;
-    panel.querySelector('.shot-done')?.prepend(li);
-    let line;
-    try {
-      line = await handle({ front: f && await shrinkImage(f, 2400), back: b ? await shrinkImage(b, 2400) : null, isbn });
-    } catch (err) { line = `⚠️ ${esc(err.message)}`; }
-    li.lastElementChild.innerHTML = line;
   }
 
   // No live camera: the camera app, one photo at a time.
   function fallback() {
     stack = null; session.stack = false;
     const cam = (s, label) => `<label class="btn primary">📷 ${label}<input type="file" accept="image/*" capture="environment" hidden data-side="${s}"></label>`;
-    panel.innerHTML = `<h2 class="shot-title"></h2><p class="shot-say"></p><div class="shot-review" hidden></div><p class="row"><span class="shot-cam"></span>
+    panel.innerHTML = `<h2 class="shot-title"></h2><p class="shot-say"></p><p class="row"><span class="shot-cam"></span>
       <button class="btn" data-shots="skip" hidden>${t('shots.skip')}</button></p>
       <button class="btn shot-stop" data-shots="end">■ ${t('shots.stop')}</button>
       <ul class="shot-done"></ul>`;
@@ -514,28 +496,31 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
 
   function stopCamera() {
     clearInterval(timer);
+    document.removeEventListener('visibilitychange', onHidden);
     torch = false;
     best = null; spare = null; bestScore = 0; window0 = 0;
     stream?.getTracks().forEach((tr) => tr.stop());
     stream = null;
   }
-  // ask: from the stop buttons. With many-books photos not yet saved, the reader chooses
-  // to save them, delete them or go on (leaving the screen never asks).
-  async function stop({ ask = false } = {}) {
-    if (ask && stack?.fronts.length) {
-      const n = stack.fronts.length, backs = stack.backs.filter(Boolean).length;
-      const k = await choose({
-        title: t('stack.leave_title'),
-        html: `<p>${t('stack.leave_body', { n, backs })}</p><span class="stack-strip">${stack.fronts.map(thumb).join('')}</span>`,
-        choices: [['save', `✓ ${t('stack.save', { n })}`, 'primary'], ['go', `📸 ${t('stack.go_on')}`], ['drop', `🗑 ${t('stack.delete', { n })}`, 'danger']],
-      });
-      if (k === 'save') { saveStack(); await sending; } else if (k !== 'drop') return;
-    }
-    stack = null;
+  // Whatever was taken goes: the row of books, or the book begun (front only).
+  async function finish() {
+    if (stack) finishStack();
+    else if (held) { const single = session.single; session.single = false; finishBook(); session.single = single; }
+    await storing;
+  }
+  const onHidden = () => { if (document.visibilityState === 'hidden' && stream) stop({ hidden: true }); };
+  // ✕, the screen going off, leaving the screen: the camera closes and everything taken
+  // is sent (no question asked). The lines of what was sent stay.
+  async function stop({ hidden = false } = {}) {
     stopCamera();
-    panel.hidden = true;
+    await finish();
+    stack = null;
+    const done = panel.querySelector('.shot-done');
     panel.innerHTML = '';
     panel.onchange = null;
+    if (hidden && done?.children.length) panel.insertAdjacentHTML('beforeend', `<p class="note">${t('burst.closed_hidden')}</p>`);
+    if (done?.children.length) panel.append(done);
+    panel.hidden = !panel.children.length;
     onEnd?.();
   }
 
@@ -547,61 +532,41 @@ export function bookShots({ on, panel, onBook, onStart, onEnd }) {
     else if (act === 'stack') { onStart?.(); start({ many: true }); }
     else if (act === 'stack-go') start({ many: true, go: true });
     else if (act === 'stack-backs') toBacks();
-    else if (act === 'stack-again') toBacks();
-    else if (act === 'still-fronts') stillFronts();
-    else if (act === 'stack-save') saveStack();
-    else if (act === 'reverse') { stack.reversed = b.checked; refresh(); }
-    else if (act.startsWith('swap-')) {
-      // Swap two neighbouring backs (as shown, in the order of the fronts).
-      const i = Number(act.slice(5)), n = stack.fronts.length;
-      const [x, y] = stack.reversed ? [n - 1 - i, n - 2 - i] : [i, i + 1];
-      [stack.backs[x], stack.backs[y]] = [stack.backs[y], stack.backs[x]];
-      [stack.codes[x], stack.codes[y]] = [stack.codes[y], stack.codes[x]];
-      refresh();
-    }
     else if (act === 'skip' && stack?.phase === 'backs') tookStack(null);
     else if (act.startsWith('drop-')) {
       // A wrong photo in the strip of fronts.
-      stack.fronts.splice(Number(act.slice(5)), 1);
-      stack.frontAt.splice(Number(act.slice(5)), 1);
-      refresh();
-    }
-    else if (act.startsWith('rm-')) {
-      // A book taken out at the review (both its covers, as shown).
-      const i = Number(act.slice(3)), n = stack.fronts.length;
-      const j = stack.reversed ? n - 1 - i : i;
-      stack.fronts.splice(i, 1);
-      if (j < stack.backs.length) { stack.backs.splice(j, 1); stack.codes.splice(j, 1); }
-      if (!stack.fronts.length) Object.assign(stack, { phase: 'fronts', backs: [], codes: [] });
+      const i = Number(act.slice(5));
+      const id = stack.ids[i];
+      storing = storing.then(async () => discard(await id)).catch(() => {});
+      stack.fronts.splice(i, 1); stack.ids.splice(i, 1); stack.frontAt.splice(i, 1);
       refresh();
     }
     else if (act === 'snap') snap(false);
     else if (act === 'torch') toggleTorch();
-    else if (act === 'end') stop({ ask: true });
-    else if (act === 'skip' && front) { reviewing = true; refresh(); }
+    else if (act === 'end') stop();
+    else if (act === 'skip' && front) endHunt();
     else if (act === 'nocode') endHunt();
-    else if (act === 'ok') keep();
-    else if (act.startsWith('again-')) again(act.slice(6));
   });
   panel.hidden = true;
   return { start, stop };
 }
 
-// A book no catalogue knows (or with no barcode read): its covers go to the server,
-// which reads them; the book then waits in the approval queue.
-export async function sendCovers({ code = null, kind = 'seen', pos = null, isbn = null, front, back, owner = null, friend_name: friend = null, replaces = null }) {
-  const fields = { code, kind, isbn, owner, friend_name: friend, replaces, lang: lang(), lat: pos?.lat ?? '', lon: pos?.lon ?? '' };
-  const files = { photo: front, back };
-  try {
-    if (!navigator.onLine) throw new TypeError('offline');
-    const fd = new FormData();
-    Object.entries(fields).forEach(([k, v]) => v != null && fd.append(k, v));
-    Object.entries(files).forEach(([k, b]) => b && fd.append(k, b, `${k}.jpg`));
-    await api('/api/covers', { method: 'POST', form: fd });
-    return `📤 ${t('shots.reading_later')}`;
-  } catch (err) {
-    if (!(err instanceof TypeError)) throw err;
-    await enqueue('/api/covers', fields, files, 'book');
-    return `💾 ${t('bc.saved_offline')}`;
-  }
+// Where a book's pictures go. With a barcode read: straight to the library (direct:
+// 'sighting') or to My books (direct: 'mine'); a barcode no catalogue knows falls back
+// (alt) to the covers, which the server reads; the book then waits in the approval queue.
+// pos: the position, or a function giving it (it may arrive later).
+export function coversTarget({ code = null, kind = 'seen', pos = null, owner = null, friend_name: friend = null, replaces = null, direct = null } = {}) {
+  return ({ isbn = null } = {}) => {
+    const p = typeof pos === 'function' ? pos() : pos;
+    const at = { lat: p?.lat ?? '', lon: p?.lon ?? '' };
+    const covers = { url: '/api/covers', fields: { code, kind, isbn, owner, friend_name: friend, replaces, lang: lang(), ...at } };
+    if (isbn && direct === 'sighting' && code) return { url: `/api/locations/${code}/sightings`, fields: { isbn, kind, ...at }, alt: covers };
+    if (isbn && direct === 'mine') return { url: '/api/my-books', fields: { isbn }, alt: covers };
+    return covers;
+  };
+}
+// The line for a book once sent: its title when the catalogue knew it, else "read later".
+export function bookSentLine(data) {
+  if (data?.book?.title) return `<span class="ok">✓ ${esc(data.book.title)}</span>${data.sighting && data.sighting.status !== 'approved' ? ` <span class="muted small">${t('mybooks.pending')}</span>` : ''}`;
+  return `📤 ${t('shots.reading_later')}`;
 }

@@ -131,7 +131,7 @@ export default async function addLocationView(root) {
         const d = e.body.location;
         if (confirm(t('addloc.dup', { name: d.name || d.code }))) navigate(`/l/${d.code}`);
         else submit(true, confirmPrivate);
-      } else if (e.status === undefined || e instanceof TypeError) {
+      } else if (e.status === undefined || e instanceof TypeError || e.status >= 500 || e.status === 429) {
         await enqueue('/api/locations', fields, { photo }, 'library');
         toast(t('addloc.conn'));
       } else toast(e.message);

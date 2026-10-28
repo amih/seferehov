@@ -4,7 +4,7 @@ import { navigate } from '../nav.js';
 import { startScanner, scanImage } from '../scanner.js';
 import { esc, getPosition, toast } from '../ui.js';
 import { t, lang } from '../i18n.js';
-import { bookShots, sendCovers } from '../shots.js';
+import { bookShots, coversTarget, bookSentLine } from '../shots.js';
 import { chime } from '../sound.js';
 
 // Live barcode scanning, one book after another. Each barcode is looked up and put
@@ -58,7 +58,8 @@ export default async function barcodeView(root, [code], query) {
       Object.entries(fields).forEach(([k, v]) => fd.append(k, v));
       r = await api(url, { method: 'POST', form: fd });
     } catch (e) {
-      if (!(e instanceof TypeError)) {
+      // Refused (a wrong number): said at once. No signal, or the server busy: kept on the phone and sent later.
+      if (!(e instanceof TypeError) && e.status < 500 && e.status !== 429 && e.status !== 401) {
         done.delete(isbn);
         result.innerHTML = `<p class="note">${e.body?.error === 'invalid_isbn' ? t('addbook.invalid') : esc(e.message)}</p>`;
         return;
@@ -105,11 +106,8 @@ export default async function barcodeView(root, [code], query) {
   // A barcode no catalogue knows: one book's covers, then back to scanning.
   const shots = bookShots({
     on: root, panel: root.querySelector('#shots'), onEnd: () => { if (left || stop) return; root.querySelector('.scanner').hidden = false; start(); },
-    onBook: async ({ front, back, isbn }) => {
-      const line = await sendCovers({ code, kind, pos, isbn, front, back });
-      result.innerHTML = `<p>${line} ${t('shots.thanks')}</p>`;
-      return line;
-    },
+    target: (x) => coversTarget({ code, kind, pos: () => pos })(x),
+    sent: (data) => { result.innerHTML = `<p>${bookSentLine(data)} ${t('shots.thanks')}</p>`; return null; },
   });
 
   root.querySelector('#still').onchange = async (e) => {

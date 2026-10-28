@@ -2,9 +2,8 @@ import { api, getMe } from '../api.js';
 import { navigate } from '../nav.js';
 import { esc, timeAgo, toast, confirmDialog } from '../ui.js';
 import { t, lang } from '../i18n.js';
-import { enqueue, flush } from '../queue.js';
 import { placeBook, ownerLabel } from '../mybooks.js';
-import { bookShots, sendCovers } from '../shots.js';
+import { bookShots, coversTarget, bookSentLine } from '../shots.js';
 import { burstShots } from '../burst.js';
 import { offerDialog, offerLine } from '../offers.js';
 import { rememberList } from '../pager.js';
@@ -143,52 +142,15 @@ export async function addMyBooksView(root) {
     queueLink.innerHTML = c.open + c.later || c.processing ? `<a class="btn" href="/queue">📥 ${t('queue.link', c)}</a>` : '';
   }).catch(() => {});
   showQueue();
-  const shots = bookShots({ on: root, panel: root.querySelector('#shots'), onStart: () => burst.stop(), onBook: async ({ front, back, isbn }) => {
-    if (isbn && navigator.onLine) {
-      const fd = new FormData();
-      fd.append('isbn', isbn);
-      fd.append('photo', front, 'photo.jpg');
-      if (back) fd.append('back', back, 'back.jpg');
-      try {
-        const r = await api('/api/my-books', { method: 'POST', form: fd });
-        return `<span class="ok">✓ ${esc(r.book.title)}</span>`;
-      } catch (e) {
-        if (e.body?.error !== 'book_not_found' && !(e instanceof TypeError)) throw e;
-      }
-    }
-    const line = await sendCovers({ isbn, front, back, owner: 'mine' });
-    showQueue();
-    return line;
-  } });
-  const burst = burstShots({ screen: 'home', panel: root.querySelector('#burst-panel'), park: async (blobs) => {
-    await enqueue('/api/my-books/scans', { owner: 'mine', lang: lang() }, Object.fromEntries(blobs.map((b, i) => [`photo${i}`, b])), 'shelf');
-    flush();
-  }, onBatch: async (blobs) => {
-    const line = await sendShelf(blobs);
-    showQueue();
-    return line;
-  } });
+  // Saved on the phone as taken and sent from there (queue.js); a known barcode goes
+  // straight to My books, anything else is read on the server and waits in the queue.
+  const shots = bookShots({ on: root, panel: root.querySelector('#shots'), onStart: () => burst.stop(),
+    target: coversTarget({ owner: 'mine', direct: 'mine' }), sent: (data) => { showQueue(); return bookSentLine(data); } });
+  const burst = burstShots({ screen: 'home', panel: root.querySelector('#burst-panel'),
+    request: () => ({ url: '/api/my-books/scans', fields: { owner: 'mine', lang: lang() } }), onSent: () => { showQueue(); return null; } });
   root.querySelector('#burst').onclick = async () => {
     shots.stop();
     if (!await burst.start()) toast(t('burst.no_camera'));
   };
   return () => { shots.stop(); burst.stop(false); };
-}
-
-// Shelf photos taken at home: read for spines; the books found wait in the queue.
-async function sendShelf(blobs) {
-  const files = Object.fromEntries(blobs.map((b, i) => [`photo${i}`, b]));
-  const fields = { owner: 'mine', lang: lang() };
-  try {
-    if (!navigator.onLine) throw new TypeError('offline');
-    const fd = new FormData();
-    Object.entries(fields).forEach(([k, v]) => fd.append(k, v));
-    Object.entries(files).forEach(([k, b]) => fd.append(k, b, `${k}.jpg`));
-    await api('/api/my-books/scans', { method: 'POST', form: fd });
-    return `📤 ${esc(t('add3.photos_n', { n: blobs.length }))} — ${t('shots.reading_later')}`;
-  } catch (err) {
-    if (!(err instanceof TypeError)) return `⚠️ ${esc(err.status === 413 ? t('addbook.too_large') : err.message)}`;
-    await enqueue('/api/my-books/scans', fields, files, 'shelf');
-    return `💾 ${t('bc.saved_offline')}`;
-  }
 }

@@ -26,6 +26,7 @@ import fixRoutes, { startFixWorker } from './fixes.js';
 import { startOcrWorker } from './ocr.js';
 import clientErrorRoutes from './clienterrors.js';
 import cameraLogRoutes from './camlog.js';
+import { uploadReceipts } from './receipts.js';
 
 const app = Fastify({ logger: true, trustProxy: '127.0.0.1', bodyLimit: 1024 * 1024 });
 
@@ -49,6 +50,8 @@ app.addHook('onRequest', async (req, reply) => {
   }
   req.user = await currentUser(req);
 });
+
+uploadReceipts(app);
 
 await app.register(authRoutes);
 await app.register(locationRoutes);

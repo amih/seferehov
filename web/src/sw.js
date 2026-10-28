@@ -3,6 +3,7 @@ import { registerRoute, NavigationRoute } from 'workbox-routing';
 import { CacheFirst, StaleWhileRevalidate } from 'workbox-strategies';
 import { ExpirationPlugin } from 'workbox-expiration';
 import { clientsClaim } from 'workbox-core';
+import { flush } from './queue.js';
 
 // The new worker installs in the background and then WAITS. The page decides
 // when it is safe to switch (no upload in progress) and sends SKIP_WAITING.
@@ -54,6 +55,14 @@ registerRoute(
   ({ url }) => url.hostname === 'covers.openlibrary.org' || url.hostname.endsWith('books.google.com'),
   new CacheFirst({ cacheName: 'covers', plugins: [new ExpirationPlugin({ maxEntries: 500, maxAgeSeconds: 60 * 86400 })] }),
 );
+
+// Uploads waiting on the phone (queue.js) are sent from here too, when the browser says
+// there is signal — also after the app was closed. Still waiting afterwards: fail the
+// sync, so the browser tries again later.
+self.addEventListener('sync', (e) => {
+  if (e.tag !== 'outbox') return;
+  e.waitUntil(flush().then(({ pending }) => { if (pending) throw new Error('uploads still waiting'); }));
+});
 
 // Phone notifications: a book someone waits for was reported on a shelf.
 self.addEventListener('push', (e) => {

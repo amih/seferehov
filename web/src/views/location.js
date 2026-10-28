@@ -3,7 +3,7 @@ import { esc, getPosition, timeAgo, toast, avatarHtml, noStringsNote, confirmDia
 import { navigate } from '../nav.js';
 import { t, lang } from '../i18n.js';
 import { rememberList } from '../pager.js';
-import { bookShots, sendCovers } from '../shots.js';
+import { bookShots, coversTarget } from '../shots.js';
 
 const STATES = ['ok', 'messy', 'damaged', 'empty', 'missing'];
 const STALE_MS = 182 * 86400_000; // not seen for half a year: maybe gone
@@ -124,12 +124,8 @@ export default async function locationView(root, [code]) {
       if (!c || needLogin()) return;
       const li = c.closest('li');
       const pos = await getPosition({ timeout: 8000 }).catch(() => null);
-      shots.start({ single: true, intro: t('check.covers_intro', { title: esc(li.querySelector('b').textContent) }), onBook: async ({ front, back, isbn }) => {
-        const line = await sendCovers({ code, kind: 'seen', pos, isbn, front, back, replaces: c.dataset.covers });
-        li.remove();
-        toast(t('spines.sent'));
-        return line;
-      } });
+      shots.start({ single: true, intro: t('check.covers_intro', { title: esc(li.querySelector('b').textContent) }), target: coversTarget({ code, kind: 'seen', pos, replaces: c.dataset.covers }),
+        sent: () => { li.remove(); toast(t('spines.sent')); return null; } });
     };
   }
 

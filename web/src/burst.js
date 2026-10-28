@@ -1,6 +1,8 @@
 import { esc, shrinkImage } from './ui.js';
 import { t } from './i18n.js';
 import { cameraLog } from './camlog.js';
+import { enqueue, append, release } from './queue.js';
+import { trackLine } from './outbox-ui.js';
 
 // Shelf photos taken by themselves: the reader moves the phone along the shelves and
 // stops for a moment at each group of spines. The camera is looked at about 7 times a
@@ -13,13 +15,12 @@ import { cameraLog } from './camlog.js';
 // the sharpest frame of the pause is kept, full size: after PAUSE_MS held steady, or
 // after ROUGH_MS held only roughly steady (a shaky hand still gets its photo). A bar on
 // the picture says what it is waiting for: hold steady (it fills), move on, slower.
-// Every BATCH photos go to onBatch(blobs) as one scan, in the background (its photos are
-// read together, so a spine seen in two of them counts once); the rest when the reader
-// stops. onBatch resolves to a line to show. Without a live camera, start() returns false.
-// When the screen goes off or the reader switches apps (the phone put in a pocket), or
-// leaves the screen, the camera stops and the photos not sent yet go to park(blobs),
-// which keeps them on the phone (queue.js) until they can be sent: before, they were in
-// memory only and were lost.
+// Each photo is saved on the phone the moment it is taken (queue.js, store and forward),
+// into a batch that is sent as one scan once it has BATCH photos (its photos are read
+// together, so a spine seen in two of them counts once), or as soon as the camera closes
+// for any reason: ✕ or Done, the screen going off, another app, leaving the screen. No
+// button has to be pressed for anything to be sent. request() gives the scan's address
+// and fields. Without a live camera, start() returns false.
 // Each session's numbers (speeds, waits, photos, how it ended) go to /api/camera-log
 // (camlog.js), so the limits can be set from real shelves, not guessed.
 const TICK_MS = 150;
@@ -66,14 +67,14 @@ function align(a, b, w, h) {
   return best;
 }
 
-export function burstShots({ panel, onBatch, park, onEnd, screen = 'library' }) {
+export function burstShots({ panel, request, onSent, onEnd, screen = 'library' }) {
   let stream = null, video = null, timer = null, log = null;
   const small = document.createElement('canvas');
   const ctx = small.getContext('2d', { willReadFrequently: true });
   let prev = null, prevAt = 0, last = null, settleUntil = 0;
   let speed = 0, moved = { x: 0, y: 0 }, lost = false, arrived = 0, steadySince = 0;
   let best = null, bestScore = 0, bestSharp = 0, spare = null, sharps = [];
-  let batch = [], taken = 0, saving = Promise.resolve();
+  let batchId = null, inBatch = 0, taken = 0, saving = Promise.resolve();
 
   async function start() {
     stop(false);
@@ -210,38 +211,31 @@ export function burstShots({ panel, onBatch, park, onEnd, screen = 'library' }) 
     saving = saving.then(async () => {
       const blob = await shrinkImage(await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.92)), 2400);
       panel.querySelector('.burst-thumbs')?.insertAdjacentHTML('afterbegin', `<img src="${esc(URL.createObjectURL(blob))}" alt="">`);
-      batch.push(blob);
-      if (batch.length >= BATCH) send();
-    }).catch(() => {});
+      if (!batchId || !await append(batchId, { [`photo${inBatch}`]: blob })) {
+        const { url, fields } = request();
+        batchId = await enqueue(url, fields, { photo0: blob }, 'shelf', { hold: true });
+        inBatch = 0;
+      }
+      if (++inBatch >= BATCH) sendBatch();
+    }).catch((err) => console.warn('shelf photo not saved', err));
   }
 
-  function send() {
-    if (!batch.length) return;
-    const blobs = batch;
-    batch = [];
+  // The batch so far goes (it is already on the phone; this lets it be sent).
+  function sendBatch() {
+    if (!batchId) return;
+    const id = batchId, n = inBatch;
+    batchId = null; inBatch = 0;
     log?.batch();
     const li = document.createElement('li');
-    li.innerHTML = `<span class="spinner"></span> ${esc(t('add3.photos_n', { n: blobs.length }))}`;
     panel.querySelector('.shot-done')?.prepend(li);
-    onBatch(blobs).then((line) => { li.innerHTML = line; }, (err) => { li.textContent = `⚠️ ${err.message}`; });
+    trackLine(li, id, { label: t('add3.photos_n', { n }), sent: (data) => onSent?.(data) ?? null });
+    release(id);
   }
 
   const onHidden = () => { if (document.visibilityState === 'hidden' && stream) stop('hidden'); };
 
-  // Kept on the phone and sent from there (park), or sent now if there is no park.
-  function keep() {
-    if (!batch.length) return Promise.resolve();
-    const blobs = batch;
-    batch = [];
-    log?.batch();
-    const li = document.createElement('li');
-    li.textContent = `💾 ${t('burst.parked', { n: blobs.length })}`;
-    panel.querySelector('.shot-done')?.prepend(li);
-    return (park ? park(blobs) : onBatch(blobs)).catch((err) => { li.textContent = `⚠️ ${err.message}`; });
-  }
-
-  // how: true = "Done": send what is left; 'hidden' = screen off or another app; false =
-  // the screen is closed. The camera closes; the lines of what was sent stay.
+  // how: true = ✕ or Done; 'hidden' = screen off or another app; false = the screen is
+  // closed. The camera closes and whatever was taken is sent; the lines of what was sent stay.
   async function stop(how = true) {
     const running = !!stream;
     clearInterval(timer);
@@ -251,13 +245,15 @@ export function burstShots({ panel, onBatch, park, onEnd, screen = 'library' }) 
     best = null; spare = null;
     log?.end(how === true ? 'done' : how || 'left');
     log = null;
-    if (how !== true && !running) return;
-    await saving; // the last photo may still be being shrunk
-    if (how === true) send(); else await keep();
+    if (!running && how !== true) return;
+    await saving; // the last photo may still be being saved
+    sendBatch();
     if (how === false) return;
     const sent = panel.querySelector('.shot-done');
     panel.innerHTML = '';
-    if (sent?.children.length) panel.append(sent); else panel.hidden = true;
+    if (how === 'hidden' && taken) panel.insertAdjacentHTML('beforeend', `<p class="note">${t('burst.closed_hidden')}</p>`);
+    if (sent?.children.length) panel.append(sent);
+    panel.hidden = !panel.children.length;
     taken = 0;
     onEnd?.();
   }
