@@ -663,3 +663,4 @@ ul.offers li { margin-bottom: 10px; }
 .shot-last-bar i { display: block; height: 100%; background: #9CDB8E; animation: shot-last-drain linear forwards; }
 @keyframes shot-last-drain { from { width: 100%; } to { width: 0; } }
 .shots > .shot-last { position: static; margin: 8px 0; }
+.auto-mode { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }

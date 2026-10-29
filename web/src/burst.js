@@ -3,6 +3,7 @@ import { t } from './i18n.js';
 import { cameraLog } from './camlog.js';
 import { enqueue, append, release } from './queue.js';
 import { trackLine } from './outbox-ui.js';
+import { align, cost, mean, R } from './motion.js';
 
 // Shelf photos taken by themselves: the reader moves the phone along the shelves and
 // stops for a moment at each group of spines. The camera is looked at about 7 times a
@@ -26,7 +27,6 @@ import { trackLine } from './outbox-ui.js';
 const TICK_MS = 150;
 const BATCH = 8;
 const W = 160;            // width of the grey copy; speeds are in its pixels per tick
-const R = 10;             // largest shift looked for per tick; faster = moving on
 const STEADY = 1;         // px/tick: held steady
 const ROUGH = 2.5;        // px/tick: roughly steady (frames still worth keeping)
 const FAST = 6;           // px/tick: too fast (the "slower" hint)
@@ -35,37 +35,6 @@ const CHANGED = 18;       // or the picture changed this much (moved closer, los
 const PAUSE_MS = 400;
 const ROUGH_MS = 1500;
 const MIN_SHARP = 8;
-
-// Mean grey difference of b shifted by (dx, dy) from a, brightness change removed.
-function cost(a, b, w, h, ma, mb, dx, dy, s) {
-  let d = 0, c = 0;
-  const off = mb - ma;
-  for (let y = R; y < h - R; y += s) {
-    const ra = y * w, rb = (y + dy) * w + dx;
-    for (let x = R; x < w - R; x += s) { d += Math.abs(b[rb + x] - a[ra + x] - off); c++; }
-  }
-  return d / c;
-}
-const mean = (g) => { let m = 0; for (let i = 0; i < g.length; i++) m += g[i]; return m / g.length; };
-// The shift that lines b up with a: every second shift on a coarse grid, then the best's neighbours.
-function align(a, b, w, h) {
-  const ma = mean(a), mb = mean(b);
-  let best = { dx: 0, dy: 0, err: Infinity };
-  for (let dy = -R; dy <= R; dy += 2) for (let dx = -R; dx <= R; dx += 2) {
-    const err = cost(a, b, w, h, ma, mb, dx, dy, 4);
-    if (err < best.err) best = { dx, dy, err };
-  }
-  const c = best;
-  best = { dx: 0, dy: 0, err: Infinity };
-  for (let dy = c.dy - 1; dy <= c.dy + 1; dy++) for (let dx = c.dx - 1; dx <= c.dx + 1; dx++) {
-    if (Math.abs(dx) > R || Math.abs(dy) > R) continue;
-    const err = cost(a, b, w, h, ma, mb, dx, dy, 3);
-    if (err < best.err) best = { dx, dy, err };
-  }
-  best.edge = Math.max(Math.abs(best.dx), Math.abs(best.dy)) >= R - 1;
-  best.plain = cost(a, b, w, h, ma, mb, 0, 0, 3);
-  return best;
-}
 
 export function burstShots({ panel, request, onSent, onEnd, screen = 'library' }) {
   let stream = null, video = null, timer = null, log = null;

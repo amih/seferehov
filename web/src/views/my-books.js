@@ -128,7 +128,6 @@ export async function addMyBooksView(root) {
     <h1>${t('mybooks.add_title')}</h1>
     <div class="big-actions">
       <button class="big-btn primary" data-shots="start"><span>📕</span><b>${t('mybooks.add_big')}</b><small>${t('mybooks.add_big_note')}</small></button>
-      <button class="big-btn" data-shots="stack"><span>📚</span><b>${t('stack.start')}</b><small>${t('stack.start_note')}</small></button>
       <button class="big-btn" id="burst"><span>📸</span><b>${t('mybooks.shelf_big')}</b><small>${t('add3.burst_note')}</small></button>
     </div>
     <p class="note">${t('mybooks.add_how')}</p>
