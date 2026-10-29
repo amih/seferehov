@@ -4,6 +4,7 @@ import { scanImage, detectFrame } from './scanner.js';
 import { esc, shrinkImage } from './ui.js';
 import { loadBookModel } from './bookai.js';
 import { t, lang } from './i18n.js';
+import { cameraLog } from './camlog.js';
 
 // Photographing books one after another with the live camera: the front cover, turn the
 // book over, the back cover, next book. The picture is taken by itself the moment the
@@ -30,6 +31,8 @@ import { t, lang } from './i18n.js';
 // can still be removed from the strip. The switch to the backs is noticed by itself: after
 // the fronts, a long while with no book in view (the books being turned over), then books
 // again — these are taken as the backs, with a banner saying so and a button to undo.
+// Each camera session's numbers (the phone, how long each photo and book took, how the
+// barcode was found) go to /api/camera-log (camlog.js), to improve the camera later.
 export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   let stream = null, video = null, timer = null, side = 'front', front = null, back = null, preset = null, busy = false;
   let liveCode = null, lastCode = null, looking = false, ticks = 0;
@@ -56,6 +59,8 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   const BEST_MS = 800;
   let peak = 0, shotGrey = null, ready = 0; // ready: since when a photo may be taken // the recent sharpest (decays): sharp is judged against it, not a fixed number
   let refresh = () => {};
+  let log = null, lastDiff = 99, lastHint = null, lastHow = null;
+  let book = null; // this book's numbers so far: { t0, backAt, huntAt, retakes, frontHow, backHow }
 
   const title = (k) => { const el = panel.querySelector('.shot-title'); if (el) el.textContent = k ? t(k) : ''; };
   const say = () => {
@@ -101,10 +106,15 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   async function lookForCode() {
     if (looking || liveCode || preset || !video?.videoWidth) return;
     looking = true;
+    const t0 = performance.now();
     const code = await detectFrame(video).catch(() => null);
+    log?.count('detects'); log?.count('detectMs', Math.round(performance.now() - t0));
     looking = false;
     // The book just saved may still be in view: its code is not the next book's.
-    if (code && code !== lastCode && !liveCode) { liveCode = code; navigator.vibrate?.(30); showCode(); }
+    if (code && code !== lastCode && !liveCode) {
+      liveCode = code; navigator.vibrate?.(30); showCode();
+      log?.event('code', { side: hunting ? 'hunt' : stack ? stack.phase : side, sinceBook: book ? Date.now() - book.t0 : null });
+    }
   }
   // The camera (or the review) in the middle of the screen.
   const center = (el) => requestAnimationFrame(() => el?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
@@ -115,11 +125,17 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     await finish();
     stopCamera();
     if (many && !go) return comic();
+    log?.end('restart');
+    log = cameraLog(many ? 'stack' : 'covers', { screen: location.pathname.replace(/^\/l\/[^/]+/, '/l'), single: single || !!only, only, preset: !!isbn });
+    book = null;
     preset = isbn;
     session = { intro, single: single || !!only, only, target: to ?? target, sent: done ?? sent, stack: many };
     stack = many ? newStack() : null;
     pausedSince = 0; noBookSince = 0; motion = 99;
-    if (many) loadBookModel().then((d) => { isBook = d; });
+    if (many) {
+      const m0 = Date.now(), lg = log;
+      loadBookModel().then((d) => { isBook = d; lg.event('model', { ms: Date.now() - m0, ok: !!d }); });
+    }
     refresh = say;
     side = only ?? 'front';
     prev = null; steady = 0; moved = true; dropBest();
@@ -141,13 +157,16 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
       <ul class="shot-done"></ul>`;
     video = panel.querySelector('video');
     center(panel.querySelector('.shot-live'));
+    const askedAt = Date.now();
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1440 } } });
       video.srcObject = stream;
       await video.play();
       const track = stream.getVideoTracks()[0];
+      log.opened(track, video, askedAt);
       if (track.getCapabilities?.().torch) panel.querySelector('.shot-torch').hidden = false;
-    } catch {
+    } catch (err) {
+      log.failed(err);
       stopCamera();
       return fallback();
     }
@@ -168,6 +187,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   // a white cover read as a reflection or a camera that keeps refocusing then no
   // longer hold up the photo.
   function tick() {
+    log?.state(hunting ? 'hunt' : last && session.single ? 'retake' : Date.now() <= since ? 'wait' : lastHint ?? (stack ? stack.phase : side));
     if (hunting) {
       lookForCode();
       if (liveCode || Date.now() > huntUntil) endHunt();
@@ -183,7 +203,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     for (let i = 0; i < g.length; i++) g[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
     let diff = 99;
     if (prev?.length === g.length) { diff = 0; for (let i = 0; i < g.length; i++) diff += Math.abs(g[i] - prev[i]); diff /= g.length; }
-    prev = g;
+    prev = g; lastDiff = diff;
     let sum = 0, sq = 0, n = 0;
     const x0 = Math.round(w * 0.12), x1 = w - x0, y0 = Math.round(h * 0.08), y1 = h - y0;
     for (let y = Math.max(1, y0); y < Math.min(h - 1, y1); y++) {
@@ -198,6 +218,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     let bright = 0, burnt = 0;
     for (let i = 0; i < g.length; i++) { bright += g[i]; if (g[i] > 250) burnt++; }
     const hint = burnt / g.length > 0.03 ? 'shots.glare' : bright / g.length < 60 ? 'shots.dark' : null;
+    lastHint = hint && hint.slice(6); // glare | dark
     const hintEl = panel.querySelector('.shot-hint');
     hintEl.hidden = !hint;
     if (hint) hintEl.textContent = t(hint);
@@ -284,7 +305,13 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   async function snap(auto = false, from = null) {
     if (busy || !video?.videoWidth) return;
     busy = true;
+    const t0 = performance.now();
+    const how = from ? 'best' : auto ? 'still' : 'button';
     const blob = from ? await toJpeg(from) : auto ? await frame() : await still();
+    log?.photo(how, lastSharp, lastDiff, { side: stack ? stack.phase : side, wait: ready ? Date.now() - ready : null, hint: lastHint,
+      encMs: Math.round(performance.now() - t0), kb: Math.round((blob?.size ?? 0) / 1024), w: from?.width ?? video.videoWidth, h: from?.height ?? video.videoHeight,
+      bookai: stack ? isBook?.ms ?? null : undefined, real: blob?.real || undefined });
+    lastHow = how;
     dropBest();
     const flash = panel.querySelector('.shot-flash');
     flash.classList.remove('on'); void flash.offsetWidth; flash.classList.add('on');
@@ -301,7 +328,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     if (track && 'ImageCapture' in window) {
       try {
         const photo = await new ImageCapture(track).takePhoto();
-        if (photo?.size) return photo;
+        if (photo?.size) { photo.real = true; return photo; }
       } catch { /* not supported by this camera: the video frame below */ }
     }
     return frame();
@@ -320,6 +347,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     if (!track) return;
     torch = !torch;
     await track.applyConstraints({ advanced: [{ torch }] }).catch(() => { torch = false; });
+    log?.event('torch', { on: torch });
     panel.querySelector('.shot-torch')?.classList.toggle('on', torch);
   }
 
@@ -345,11 +373,14 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   function took(blob) {
     if (stack) return tookStack(blob);
     if (last) sendLast(); // the next book has begun: the last one is fine
+    if (!book) book = { t0: Date.now(), retakes: 0 };
+    if (side === 'back') book.backAt = Date.now();
+    book[`${side}How`] = lastHow;
     const name = side === 'front' ? 'photo' : 'back';
     if (side === 'front') front = blob; else back = blob;
     keepPicture(name, blob);
     if (side === 'front' && !session.only && !back) { side = 'back'; animate('turn'); }
-    else if (side === 'back' && stream && !liveCode && !preset) { hunting = true; huntUntil = Date.now() + 4000; }
+    else if (side === 'back' && stream && !liveCode && !preset) { hunting = true; huntUntil = Date.now() + 4000; book.huntAt = Date.now(); }
     else finishBook();
     refresh();
   }
@@ -361,7 +392,9 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
       const id = await was;
       if (id && await append(id, { [name]: small })) return id;
       const { url, fields, label } = session.target({ isbn: preset });
-      return enqueue(url, fields, { [name]: small }, label ?? 'book', { hold: true });
+      const lg = log, nid = await enqueue(url, fields, { [name]: small }, label ?? 'book', { hold: true, session: lg?.id });
+      lg?.upload(nid, 'book');
+      return nid;
     }).catch((err) => { console.warn('cover not saved', err); return null; });
   }
   // The book's pictures go, with the barcode if one was read (live, or from the stills).
@@ -369,9 +402,11 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     hunting = false;
     if (!held) return;
     const id = held, f = front, b = back, code = preset || liveCode;
+    const bk = book ? { ...book, done: Date.now(), code: preset ? 'preset' : liveCode ? 'live' : null } : null;
+    book = null;
     lastCode = liveCode ?? lastCode;
     held = null; front = null; back = null; side = session.only ?? 'front'; liveCode = null; preset = null;
-    last = { id, f, b, code, timer: setTimeout(() => { sendLast(); if (session.single) stop(); }, RETAKE_MS) };
+    last = { id, f, b, code, bk, timer: setTimeout(() => { sendLast(); if (session.single) stop(); }, RETAKE_MS) };
     showLast();
     if (!session.single) { moved = false; since = Date.now(); animate('next'); }
     else since = Infinity; // one book only: nothing more to take, the camera waits for a retake
@@ -389,17 +424,19 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   function sendLast() {
     if (!last) return;
     clearTimeout(last.timer);
-    const { id, f, b, code } = last;
+    const { id, f, b, code, bk } = last;
     last = null;
     showLast();
-    sendBook(id, f, b, code);
+    sendBook(id, f, b, code, bk);
   }
   // Retake one side of the book just taken: back to the camera for that side; then it is
   // shown again for its retake time.
   function retake(k) {
     if (!last) return;
     clearTimeout(last.timer);
-    ({ id: held, f: front, b: back, code: liveCode } = last);
+    ({ id: held, f: front, b: back, code: liveCode, bk: book } = last);
+    if (book) book.retakes++;
+    log?.count(`retake_${k}`);
     last = null;
     showLast();
     hunting = false; side = k;
@@ -407,14 +444,20 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     refresh();
     if (k === 'front' && back) animate('turn');
   }
-  function sendBook(idPromise, f, b, code) {
+  // bk: the book's numbers (one book: from its front photo; many: front/back times).
+  function sendBook(idPromise, f, b, code, bk = null) {
     const li = document.createElement('li');
     panel.querySelector('.shot-done')?.prepend(li);
     const { target: to, sent: done } = session;
+    const lg = log, sentAt = Date.now();
     storing = storing.then(async () => {
       const id = await idPromise;
       if (!id) return;
+      const s0 = performance.now();
       const isbn = code || (b && await scanImage(b).catch(() => null)) || (f && await scanImage(f).catch(() => null));
+      lg?.book({ id, front: !!f, back: !!b, code: code ? bk?.code ?? 'live' : isbn ? 'still' : null, stillScanMs: code ? null : Math.round(performance.now() - s0),
+        frontToBack: bk?.backAt ? bk.backAt - bk.t0 : null, hunt: bk?.huntAt ? (bk.done ?? sentAt) - bk.huntAt : null,
+        total: bk?.t0 ? (bk.done ?? sentAt) - bk.t0 : null, retakes: bk?.retakes ?? 0, frontHow: bk?.frontHow, backHow: bk?.backHow });
       trackLine(li, id, { label: t('out.label_book'), before: `${f ? thumb(f) : ''}${b ? thumb(b) : ''}`, sent: (data) => done?.(data) ?? bookSentLine(data) });
       const { url, fields, alt } = to({ isbn });
       await release(id, { url, fields, alt });
@@ -431,6 +474,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     } else {
       const i = stack.backs.length;
       stack.backs.push(blob);
+      stack.backsAt.push(Date.now());
       stack.codes.push(liveCode);
       if (blob) { const id = stack.ids[i]; storing = storing.then(async () => append(await id, { back: await shrinkImage(blob, 2400) })).catch(() => {}); }
       lastCode = liveCode ?? lastCode;
@@ -443,7 +487,9 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   function storeFront(blob) {
     const p = storing.then(async () => {
       const { url, fields, label } = session.target({ isbn: null });
-      return enqueue(url, fields, { photo: await shrinkImage(blob, 2400) }, label ?? 'book', { hold: true });
+      const lg = log, nid = await enqueue(url, fields, { photo: await shrinkImage(blob, 2400) }, label ?? 'book', { hold: true, session: lg?.id });
+      lg?.upload(nid, 'book');
+      return nid;
     });
     storing = p.catch(() => {});
     return p;
@@ -451,12 +497,15 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   // Every book of the row goes (those with no back yet with the front only).
   function finishStack() {
     if (!stack?.fronts.length) return;
-    stack.fronts.forEach((f, i) => sendBook(stack.ids[i], f, stack.backs[i] ?? null, stack.codes[i] ?? null));
+    const { frontAt: fa, backsAt: ba } = stack;
+    stack.fronts.forEach((f, i) => sendBook(stack.ids[i], f, stack.backs[i] ?? null, stack.codes[i] ?? null,
+      { t0: fa[i], backAt: ba[i], done: ba[i] ?? fa[i], code: stack.codes[i] ? 'live' : null, retakes: 0 }));
+    log?.event('row', { books: stack.fronts.length, backs: stack.backs.filter(Boolean).length, auto: stack.auto });
     stack = newStack();
     moved = false; since = Date.now();
     refresh();
   }
-  const newStack = () => ({ phase: 'fronts', fronts: [], ids: [], backs: [], codes: [], frontAt: [], bookAt: Date.now(), away: false, auto: false });
+  const newStack = () => ({ phase: 'fronts', fronts: [], ids: [], backs: [], codes: [], frontAt: [], backsAt: [], bookAt: Date.now(), away: false, auto: false });
   // How long without a book means "turning them over": 2.5 times the usual time between
   // two fronts, and at least 5 seconds.
   function awayMs() {
@@ -465,7 +514,8 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   }
   // Books again after the long break: the backs, in the same order.
   function autoBacks() {
-    Object.assign(stack, { phase: 'backs', backs: [], codes: [], away: false, auto: true });
+    Object.assign(stack, { phase: 'backs', backs: [], backsAt: [], codes: [], away: false, auto: true });
+    log?.event('auto_backs', { fronts: stack.fronts.length });
     liveCode = null; lastCode = null;
     navigator.vibrate?.([40, 80, 40]);
     refresh();
@@ -477,13 +527,16 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
       const id = stack.ids[i];
       storing = storing.then(async () => removeFiles(await id, ['back'])).catch(() => {});
       stack.fronts.push(b);
+      stack.frontAt.push(stack.backsAt[i] ?? Date.now());
       stack.ids.push(storeFront(b));
     });
-    Object.assign(stack, { phase: 'fronts', backs: [], codes: [], auto: false, away: false, bookAt: Date.now() });
+    Object.assign(stack, { phase: 'fronts', backs: [], backsAt: [], codes: [], auto: false, away: false, bookAt: Date.now() });
+    log?.event('still_fronts');
     refresh();
   }
   function toBacks() {
-    Object.assign(stack, { phase: 'backs', backs: [], codes: [], away: false, auto: false });
+    Object.assign(stack, { phase: 'backs', backs: [], backsAt: [], codes: [], away: false, auto: false });
+    log?.event('to_backs', { fronts: stack.fronts.length });
     liveCode = null; lastCode = null;
     moved = true; steady = 0; dropBest();
     refresh();
@@ -525,7 +578,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     refresh = show;
     panel.onchange = (e) => {
       const file = e.target.closest('input[data-side]')?.files[0];
-      if (file) took(file);
+      if (file) { lastHow = 'file'; log?.photo('file', null, null, { side, kb: Math.round(file.size / 1024), type: file.type }); took(file); }
     };
     show();
   }
@@ -551,6 +604,8 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   async function stop({ hidden = false } = {}) {
     stopCamera();
     await finish();
+    log?.end(hidden ? 'hidden' : 'done');
+    log = null;
     stack = null;
     const done = panel.querySelector('.shot-done');
     panel.innerHTML = '';
@@ -576,6 +631,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
       const id = stack.ids[i];
       storing = storing.then(async () => discard(await id)).catch(() => {});
       stack.fronts.splice(i, 1); stack.ids.splice(i, 1); stack.frontAt.splice(i, 1);
+      log?.count('dropped');
       refresh();
     }
     else if (act === 'snap') snap(false);

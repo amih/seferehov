@@ -1,7 +1,8 @@
 import wasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url';
+import { cameraLog } from './camlog.js';
 
 const FORMATS = ['ean_13', 'ean_8', 'upc_a'];
-let detectorPromise;
+let detectorPromise, detectorKind = null;
 
 // Native BarcodeDetector where available (Android Chrome); otherwise the
 // ZXing WebAssembly ponyfill, served from our own origin so it works offline.
@@ -9,9 +10,10 @@ async function getDetector() {
   detectorPromise ??= (async () => {
     if ('BarcodeDetector' in window) {
       const supported = await window.BarcodeDetector.getSupportedFormats();
-      if (supported.includes('ean_13')) return new window.BarcodeDetector({ formats: FORMATS });
+      if (supported.includes('ean_13')) { detectorKind = 'native'; return new window.BarcodeDetector({ formats: FORMATS }); }
     }
     const { BarcodeDetector, prepareZXingModule } = await import('barcode-detector/ponyfill');
+    detectorKind = 'zxing';
     prepareZXingModule({ overrides: { locateFile: (p) => (p.endsWith('.wasm') ? wasmUrl : p) } });
     return new BarcodeDetector({ formats: FORMATS });
   })();
@@ -28,16 +30,29 @@ const bookCode = (s) => {
 };
 
 // Starts the camera in <video>, calls onIsbn(isbn) for every new book barcode.
-// Returns stop().
+// Returns stop(). The session's numbers (detector, time per look, time to each code)
+// go to /api/camera-log (camlog.js).
 export async function startScanner(video, onIsbn) {
+  const t0 = Date.now();
   const detector = await getDetector();
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-    audio: false,
-  });
-  video.srcObject = stream;
-  video.setAttribute('playsinline', '');
-  await video.play();
+  const log = cameraLog('barcode', { detector: detectorKind, loadMs: Date.now() - t0 });
+  const askedAt = Date.now();
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    });
+    video.srcObject = stream;
+    video.setAttribute('playsinline', '');
+    await video.play();
+  } catch (err) {
+    log.failed(err); log.end('failed');
+    stream?.getTracks().forEach((t) => t.stop());
+    throw err;
+  }
+  log.opened(stream.getVideoTracks()[0], video, askedAt);
+  let codeAt = Date.now();
 
   let running = true;
   let last = '';
@@ -46,9 +61,15 @@ export async function startScanner(video, onIsbn) {
     if (!running) return;
     if (video.readyState >= 2) {
       try {
-        for (const code of await detector.detect(video)) {
+        const d0 = performance.now();
+        const found = await detector.detect(video);
+        log.count('detects'); log.count('detectMs', Math.round(performance.now() - d0));
+        for (const code of found) {
           const v = bookCode(code.rawValue);
+          if (!v) log.count('not_book');
           if (v && (v !== last || Date.now() - lastAt > 4000)) {
+            log.event('code', { format: code.format, wait: Date.now() - codeAt, again: v === last });
+            codeAt = Date.now();
             last = v;
             lastAt = Date.now();
             navigator.vibrate?.(60);
@@ -60,7 +81,7 @@ export async function startScanner(video, onIsbn) {
     setTimeout(tick, 200);
   };
   tick();
-  return () => { running = false; stream.getTracks().forEach((t) => t.stop()); video.srcObject = null; };
+  return () => { running = false; log.end('done'); stream.getTracks().forEach((t) => t.stop()); video.srcObject = null; };
 }
 
 // One look at the live camera picture: the book code in it, or null.

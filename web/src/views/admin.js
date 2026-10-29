@@ -72,13 +72,16 @@ export default async function adminView(root) {
         : '<p class="note">Nothing waits for a check.</p>'}`;
   }
 
-  // Live-camera sessions: where the time went (holding, moving on, too fast, too dark),
-  // the photos and how each was taken, and how fast the phone moved (px of a 160-px-wide
-  // copy per 0.15 s tick; bucket tops 0.5 1 1.5 2 2.5 3 4 6 10, last = faster / lost).
+  // Live-camera sessions: the phone (model · system · browser), where the time went
+  // (holding, moving on, too fast, too dark, glare, waiting for the barcode), the photos
+  // and how each was taken, the median time from "ready" to the photo, books (front →
+  // back) and how fast the phone moved (shelf: px of a 160-px-wide copy per 0.15 s tick;
+  // bucket tops 0.5 1 1.5 2 2.5 3 4 6 10, last = faster / lost). Below: each upload from
+  // the outbox (waited on the phone, upload time, server time). Full numbers under "…".
   async function camera() {
-    const { sessions } = await api('/api/admin/camera-sessions');
-    const sec = (ms) => (ms / 1000).toFixed(ms < 10000 ? 1 : 0);
-    const share = (st, k) => (st.ms ? `${Math.round((100 * (st.states?.[k] ?? 0)) / st.ms)}%` : '—');
+    const { sessions, uploads } = await api('/api/admin/camera-sessions');
+    const sec = (ms) => (ms == null ? '—' : `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`);
+    const share = (st, k) => (st.ms && st.states?.[k] ? `${Math.round((100 * st.states[k]) / st.ms)}%` : '—');
     const tops = [0.5, 1, 1.5, 2, 2.5, 3, 4, 6, 10];
     const median = (hist) => {
       const n = hist.reduce((a, b) => a + b, 0);
@@ -86,16 +89,48 @@ export default async function adminView(root) {
       for (let i = 0; i < hist.length; i++) if ((c += hist[i]) >= n / 2) return i < tops.length ? `<${tops[i]}` : '>10';
       return '—';
     };
-    return `<p>Each time the live camera was used (no pictures, only numbers). Hold = waiting for the phone to steady at new books, next = moving on after a photo.
-      Photos: steady / rough (only roughly steady for 1.5 s) / leaving (moved on before the pause ended).</p>
-      ${sessions.length ? table(['When', 'Reader', 'Kind', 'Time', 'Photos', 'Hold', 'Next', 'Too fast', 'Dark', 'Speed (median)', 'Ended', ''], sessions.map((c) => {
-        const st = c.stats, ph = st.photos ?? [], by = (h) => ph.filter((p) => p.how === h).length;
-        return [esc(new Date(c.created_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })),
+    const mid = (xs) => { const v = xs.filter((x) => x != null).sort((a, b) => a - b); return v.length ? v[v.length >> 1] : null; };
+    const when = (d) => esc(new Date(d).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }));
+    // Model · system · browser, from userAgentData (Android Chrome) or the user agent string (iPhone, others).
+    const phone = (d, ua) => {
+      const u = d?.uaData, s = d?.ua ?? ua ?? '';
+      const model = u?.model || (/iPhone|iPad/.exec(s)?.[0]) || (/Android [\d.]+; ([^;)]+)/.exec(s)?.[1]) || '';
+      const os = u?.platform ? `${u.platform} ${u.platformVersion ?? ''}`.trim()
+        : /OS ([\d_]+) like Mac/.test(s) ? `iOS ${/OS ([\d_]+)/.exec(s)[1].replace(/_/g, '.')}` : (/Android [\d.]+/.exec(s)?.[0] ?? (/Windows|Mac OS X|Linux/.exec(s)?.[0] ?? ''));
+      const m = /(CriOS|FxiOS|EdgA|SamsungBrowser|Firefox|Chrome|Version)\/([\d.]+)/.exec(s);
+      const br = u?.fullVersionList?.find((b) => !/Not.?A.?Brand|Chromium/i.test(b.brand)) ?? (m && { brand: m[1].replace('Version', 'Safari'), version: m[2] });
+      return [model, os, br ? `${br.brand} ${br.version.split('.')[0]}` : ''].filter(Boolean).join(' · ') || '?';
+    };
+    const kb = (b) => (b == null ? '—' : `${Math.round(b / 1024)} KB`);
+    return `<p>Each time a live camera was used (no pictures, only numbers). Hold = waiting for the phone to steady at new books, next = moving on after a photo,
+      hunt = waiting for a barcode close-up, wait = animation / settling. Photos: shelf steady / rough / leaving; covers still (2 still ticks) / best (sharpest of a
+      moment) / button / file (camera app). Ready → photo = median time from the moment a photo could be taken to the photo.</p>
+      ${sessions.length ? table(['When', 'Reader', 'Phone', 'Kind', 'Camera', 'Open', 'Time', 'Photos', 'Ready → photo', 'Books (front→back)', 'Codes', 'Hold', 'Next', 'Too fast', 'Dark', 'Glare', 'Speed (median)', 'Ended', ''], sessions.map((c) => {
+        const st = c.stats, ph = st.photos ?? [], by = (h) => ph.filter((p) => p.how === h).length, bk = st.books ?? [];
+        const hows = [...new Set(ph.map((p) => p.how))].map((h) => `${h} ${by(h)}`).join(' / ');
+        const codes = (st.events ?? []).filter((e) => e.e === 'code').length + bk.filter((b) => b.code === 'still').length;
+        const set = c.camera?.settings;
+        return [when(c.created_at),
           c.user_id ? `<a href="/r/${c.user_id}">${esc(c.screen_name ?? `#${c.user_id}`)}</a>` : '—',
-          esc(`${c.kind} · ${st.screen ?? ''}`), `${sec(st.ms ?? 0)} s`, `<b>${ph.length}</b> <span class="muted small">${by('steady')}/${by('rough')}/${by('leaving')}</span>`,
-          share(st, 'hold'), share(st, 'next'), share(st, 'fast'), share(st, 'dark'), st.speed ? median(st.speed) : '—', esc(st.ended ?? ''),
-          `<details><summary>…</summary><pre class="small">${esc(JSON.stringify({ ...st, ua: c.ua }, null, 1))}</pre></details>`];
-      })) : '<p class="note">No camera sessions yet.</p>'}`;
+          esc(phone(c.device, c.ua)),
+          esc(`${c.kind} · ${st.screen ?? st.detector ?? ''}`),
+          esc(set ? `${set.width}×${set.height}${set.frameRate ? ` @${Math.round(set.frameRate)}` : ''}` : st.cam ?? '—'),
+          st.openError ? `<b>${esc(st.openError)}</b>` : sec(st.openMs),
+          sec(st.ms ?? 0), `<b>${ph.length}</b> <span class="muted small">${esc(hows)}</span>`,
+          sec(mid(ph.map((p) => p.wait))),
+          bk.length ? `${bk.length} <span class="muted small">(${sec(mid(bk.map((b) => b.frontToBack)))})</span>` : '—',
+          codes || '—',
+          share(st, 'hold'), share(st, 'next'), share(st, 'fast'), share(st, 'dark'), share(st, 'glare'), st.ticks ? median(st.speed) : '—', esc(st.ended ?? ''),
+          `<details><summary>…</summary><pre class="small">${esc(JSON.stringify({ ...st, device: c.device, camera: c.camera, ua: c.ua }, null, 1))}</pre></details>`];
+      })) : '<p class="note">No camera sessions yet.</p>'}
+      <h2>Uploads</h2>
+      <p>Each try of an upload from the phone's outbox. On phone = stored on the phone → sent (no signal, batch still being taken);
+        upload = sent → answer, on the phone; server = handling time.</p>
+      ${uploads?.length ? table(['When', 'Reader', 'What', 'Size', 'On phone', 'Upload', 'Server', 'Try', 'Net', 'Status', 'Became'], uploads.map((u) => [
+        when(u.created_at), esc(u.screen_name ?? '—'), esc(`${u.label ?? ''} · ${u.files ?? 0} files`), kb(u.bytes),
+        sec(u.queued_ms), sec(u.client_ms), sec(u.server_ms), u.tries + 1, esc(`${u.sender ?? ''} ${u.net ?? ''}`), u.status,
+        esc(u.result ? Object.entries(u.result).filter(([, v]) => v != null).map(([k, v]) => `${k} ${v}`).join(', ') : '')]))
+        : '<p class="note">No uploads timed yet.</p>'}`;
   }
 
   async function reviews() {

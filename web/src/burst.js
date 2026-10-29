@@ -89,19 +89,22 @@ export function burstShots({ panel, request, onSent, onEnd, screen = 'library' }
       <button class="btn primary shot-stop" data-burst="end">✓ ${t('burst.stop')}</button>
       <ul class="shot-done"></ul>`;
     video = panel.querySelector('video');
+    log = cameraLog('shelf', { screen, steady: STEADY, rough: ROUGH, next: NEXT });
+    const askedAt = Date.now();
     try {
       // As many pixels as the camera gives: small print on the spines needs them.
       stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: 'environment', width: { ideal: 3840 }, height: { ideal: 2160 } } });
       video.srcObject = stream;
       await video.play();
-    } catch {
+      log.opened(stream.getVideoTracks()[0], video, askedAt);
+    } catch (err) {
+      log.failed(err);
       stop();
       return false;
     }
     requestAnimationFrame(() => panel.querySelector('.shot-live')?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
     prev = null; last = null; speed = 0; lost = false; arrived = 0; steadySince = 0; sharps = []; dropBest();
     settleUntil = Date.now() + 700; // exposure and focus settle
-    log = cameraLog('shelf', { screen, cam: `${video.videoWidth}x${video.videoHeight}`, steady: STEADY, rough: ROUGH, next: NEXT });
     timer = setInterval(tick, TICK_MS);
     document.addEventListener('visibilitychange', onHidden);
     return true;
@@ -196,8 +199,8 @@ export function burstShots({ panel, request, onSent, onEnd, screen = 'library' }
   }
 
   function take(how) {
-    const c = best;
-    log?.photo(how, bestSharp, speed);
+    const c = best, lg = log;
+    const rec = lg?.photo(how, bestSharp, speed, { wait: arrived ? Date.now() - arrived : null, w: c.width, h: c.height });
     if (how === 'steady') sharps = [...sharps.slice(-9), bestSharp];
     last = c.grey;
     moved = { x: 0, y: 0 }; lost = false; arrived = 0; steadySince = 0;
@@ -209,11 +212,14 @@ export function burstShots({ panel, request, onSent, onEnd, screen = 'library' }
     panel.querySelector('.burst-count').textContent = ++taken;
     show('next', 0, null);
     saving = saving.then(async () => {
+      const t0 = performance.now();
       const blob = await shrinkImage(await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.92)), 2400);
+      if (rec) { rec.encMs = Math.round(performance.now() - t0); rec.kb = Math.round(blob.size / 1024); }
       panel.querySelector('.burst-thumbs')?.insertAdjacentHTML('afterbegin', `<img src="${esc(URL.createObjectURL(blob))}" alt="">`);
       if (!batchId || !await append(batchId, { [`photo${inBatch}`]: blob })) {
         const { url, fields } = request();
-        batchId = await enqueue(url, fields, { photo0: blob }, 'shelf', { hold: true });
+        batchId = await enqueue(url, fields, { photo0: blob }, 'shelf', { hold: true, session: lg?.id });
+        lg?.upload(batchId, 'shelf');
         inBatch = 0;
       }
       if (++inBatch >= BATCH) sendBatch();

@@ -55,9 +55,10 @@ export const busy = () => flushing || live.size > 0;
 
 // fields: plain values; files: { name: Blob }. alt: { url, fields } to send instead when
 // the server answers 404 book_not_found (a barcode no catalogue knows: send the covers).
-export async function enqueue(url, fields, files = {}, label = 'upload', { alt = null, keepFailed = true, hold = false } = {}) {
+// session: the camera session (camlog.js) the photos come from, for the upload timings.
+export async function enqueue(url, fields, files = {}, label = 'upload', { alt = null, keepFailed = true, hold = false, session = null } = {}) {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  await set(id, { id, url, fields, files, label, alt, keepFailed, createdAt: Date.now(), tries: 0, nextAt: 0,
+  await set(id, { id, url, fields, files, label, alt, keepFailed, session, createdAt: Date.now(), tries: 0, nextAt: 0,
     hold, holder: hold ? PAGE : null, heldAt: hold ? Date.now() : null }, store);
   if (hold) live.add(id);
   navigator.storage?.persist?.().catch(() => {});
@@ -153,15 +154,27 @@ async function sendOne(it) {
   for (const [k, blob] of Object.entries(it.files ?? {})) if (blob) form.append(k, blob, `${k}.jpg`);
   emit(it.id, 'sending');
   let res;
+  // For the upload timings (server/src/receipts.js): when it was taken and stored, when
+  // released, the try, the size, the network now, and who sent it (page or service worker).
+  const bytes = Object.values(it.files ?? {}).reduce((a, b) => a + (b?.size ?? 0), 0);
+  const c = typeof navigator !== 'undefined' ? navigator.connection : null;
+  const timing = { created: it.createdAt, held: it.heldAt ?? null, sentAt: Date.now(), tries: it.tries ?? 0, bytes,
+    files: Object.keys(it.files ?? {}).length, label: it.label, session: it.session ?? null,
+    by: typeof self.document === 'undefined' ? 'sw' : 'page', net: c ? `${c.effectiveType ?? ''}/${c.downlink ?? ''}/${c.rtt ?? ''}` : null };
   try {
     res = await fetch(it.url, { method: 'POST', body: form, credentials: 'same-origin', signal: AbortSignal.timeout(300_000),
-      headers: { 'X-App-Build': String(__APP_BUILD__), 'X-Upload-Id': it.id } });
+      headers: { 'X-App-Build': String(__APP_BUILD__), 'X-Upload-Id': it.id, 'X-Upload-Timing': encodeURIComponent(JSON.stringify(timing)) } });
   } catch {
     await save(it, { tries: (it.tries ?? 0) + 1, nextAt: Date.now() + backoff(it.tries ?? 0), hold: false });
     emit(it.id, 'waiting', 'offline');
     return { stop: true, retryIn: backoff(it.tries ?? 0) };
   }
   const data = await res.json().catch(() => null);
+  // How long the upload took (the server sees only its end: nginx holds the body first).
+  if (res.ok && !res.headers.get('X-Upload-Replay')) {
+    fetch('/api/upload-timing', { method: 'POST', headers: { 'content-type': 'application/json' }, keepalive: true, credentials: 'same-origin',
+      body: JSON.stringify({ id: it.id, ms: Date.now() - timing.sentAt }) }).catch(() => {});
+  }
   if (res.ok) {
     await del(it.id, store);
     live.delete(it.id);
