@@ -71,7 +71,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   let book = null; // this book's numbers so far: { t0, backAt, huntAt, retakes, frontHow, backHow }
   // auto: one book or many, not decided yet (null), or 'single' | 'row'; travel since the first photo.
   const ROW_TRAVEL = 0.2; // a real row (phone video): 0.33; a book turned over in the hand: 0
-  let decided = null, travel = null, canSwitch = false;
+  let decided = null, travel = null, canSwitch = false, rows = 0; // rows: rows of books sent this time
 
   const title = (k) => { const el = panel.querySelector('.shot-title'); if (el) el.textContent = k ? t(k) : ''; };
   const say = () => {
@@ -151,7 +151,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     preset = isbn;
     session = { intro, single: single || !!only, only, target: to ?? target, sent: done ?? sent, auto };
     stack = null;
-    decided = null; travel = null; canSwitch = false;
+    decided = null; travel = null; canSwitch = false; rows = 0;
     pausedSince = 0; noBookSince = 0; motion = 99;
     if (auto) { // the book detector, in case it is many books
       const m0 = Date.now(), lg = log;
@@ -548,8 +548,24 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     return p;
   }
   // Every book of the row goes (those with no back yet with the front only).
-  function finishStack() {
+  // ending: the camera is closing. Taken as many books but closed after just two photos
+  // (two fronts, no backs, nothing else this time): it was one book after all, its front
+  // and back — sent as one book.
+  function finishStack(ending = false) {
     if (!stack?.fronts.length) return;
+    if (ending && session.auto && !rows && stack.fronts.length === 2 && !stack.backs.some(Boolean)) {
+      const [f, b] = stack.fronts, [id, id2] = stack.ids;
+      storing = storing.then(async () => {
+        const [a, c] = [await id, await id2];
+        await append(a, { back: await shrinkImage(b, 2400) });
+        await discard(c);
+      }).catch(() => {});
+      log?.event('auto_fix', { to: 'single', by: 'end' });
+      sendBook(id, f, b, null, { t0: stack.frontAt[0], backAt: stack.frontAt[1], done: stack.frontAt[1], code: null, retakes: 0 });
+      stack = newStack();
+      return;
+    }
+    rows++;
     const { frontAt: fa, backsAt: ba } = stack;
     stack.fronts.forEach((f, i) => sendBook(stack.ids[i], f, stack.backs[i] ?? null, stack.codes[i] ?? null,
       { t0: fa[i], backAt: ba[i], done: ba[i] ?? fa[i], code: stack.codes[i] ? 'live' : null, retakes: 0 }));
@@ -670,7 +686,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   }
   // Whatever was taken goes: the row of books, or the book begun (front only).
   async function finish() {
-    if (stack) finishStack();
+    if (stack) finishStack(true);
     else if (held) { finishBook(); sendLast(); }
     sendLast();
     await storing;
