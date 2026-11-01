@@ -344,7 +344,7 @@ export default async function locationRoutes(app) {
     } else if (fields.title) {
       book = await findOrCreateBook({ title: String(fields.title).slice(0, 300), authors: splitAuthors(fields.author), source: 'user' });
     }
-    if (!book) return reply.code(422).send({ error: 'book_not_found' });
+    if (!book) return reply.code(404).send({ error: 'book_not_found' });
 
     const distance = await distanceTo(loc.id, parseLatLon(fields.lat, fields.lon));
     const photo = files.photo && await savePhoto(files.photo, { userId: req.user.id, kind: 'cover' });

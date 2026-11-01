@@ -50,7 +50,7 @@ export default async function myBookRoutes(app) {
       if (r.error) return reply.code(400).send(r);
       book = r.book;
       if (!book && fields.title) book = await upsertBook({ isbn13: r.isbn, danacode: r.danacode, title: String(fields.title).slice(0, 300), authors: splitAuthors(fields.author), source: 'user' });
-      if (!book) return reply.code(422).send({ error: 'book_not_found', isbn: r.isbn ?? r.danacode });
+      if (!book) return reply.code(404).send({ error: 'book_not_found', isbn: r.isbn ?? r.danacode });
     } else if (String(fields.title ?? '').trim()) {
       book = await findOrCreateBook({ title: String(fields.title).trim().slice(0, 300), authors: splitAuthors(fields.author), source: 'user' });
     }

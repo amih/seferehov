@@ -43,6 +43,8 @@ It runs at https://seferehov.com. Hebrew is the default (right to left); English
 - The service worker sends too (Background Sync): uploads left when the app is closed go when the phone has signal (Chrome/Android).
 - Refused by the server (another 4xx): kept as "not sent" with the reason; the header badge says so and lists them, to try again or delete; also retried when the app starts (up to 6 times). A refusal the reader is watching (a mistyped ISBN) is said at once instead.
 - A barcode the catalogue knows goes straight to the library (or My books); one it does not know falls back to sending the covers to be read.
+- The badge lists what is still on the phone, each with its picture, when it was taken, what went wrong the first time and the latest time, in plain words, and how many tries. "Try again" sends them at once, and the list comes back saying what that try did (how many went, how many are still there).
+- A barcode no catalogue knows (usual for a Danacode, the code on most Israeli books, the first time anyone scans that book): the covers go to be read instead, with the barcode, and the book waits in the approval queue.
 - Every upload carries an id (`X-Upload-Id`); the server keeps the answer 14 days (`upload_receipts`, `server/src/receipts.js`), so an upload sent again because its answer was lost is never saved twice.
 
 **Camera and upload reports** (for later analysis, to improve scanning; no pictures, numbers only, kept a year):

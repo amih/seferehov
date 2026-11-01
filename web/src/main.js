@@ -1,11 +1,12 @@
 import './style.css';
 import { initUpdates, maybeApply } from './update.js';
-import { startQueue, onQueueChange, kick, failedItems, retryFailed, discard } from './queue.js';
+import { startQueue, onQueueChange, kick, unsentItems, retryNow, discard } from './queue.js';
 import { toast, choose, esc } from './ui.js';
+import { whyText } from './outbox-ui.js';
 import { api, getMe } from './api.js';
 import { navigate, mapUnderneath, closeLayer } from './nav.js';
 import { trackPageView } from './analytics.js';
-import { t, applyLang } from './i18n.js';
+import { t, lang, applyLang } from './i18n.js';
 import mapView from './views/map.js';
 import locationView from './views/location.js';
 import addLocationView from './views/add-location.js';
@@ -128,19 +129,36 @@ onQueueChange((c) => {
   if (wasWaiting && !c.waiting && !c.failed) toast(t('queue.uploaded', { n: wasWaiting }));
   wasWaiting = c.waiting; queued = c; showBadge();
 });
-// The badge: send now; uploads the server refused are listed, to try again or give up.
-badge.onclick = async () => {
-  kick();
-  const failed = await failedItems();
-  if (!failed.length) { toast(t(navigator.onLine ? 'out.sending_now' : 'out.waiting_offline')); return; }
+// The badge: sends now, and lists what is still on the phone with why: what happened the
+// first time and the latest. After "try again" the list comes back with what that try did.
+const when = (at) => new Date(at).toLocaleString(lang(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+function unsentLine(i) {
+  const file = Object.values(i.files ?? {}).find(Boolean);
+  const pic = file ? `<img class="unsent-pic" src="${esc(URL.createObjectURL(file))}" alt="">` : '';
+  // Older items kept only the last refusal, with no time.
+  const latest = i.lastProblem ?? (i.error ? { why: i.error, at: i.createdAt } : null);
+  const first = i.firstProblem ?? latest;
+  const why = !latest ? `<span class="muted small">${t('out.why_waiting')}</span>`
+    : `<span class="small">${t('out.first_time', { when: esc(when(first.at)), why: esc(whyText(first)) })}</span>${
+      latest.at !== first.at ? `<br><span class="small">${t('out.last_time', { when: esc(when(latest.at)), why: esc(whyText(latest)), n: (i.tries ?? 0) })}</span>` : ''}`;
+  return `<li class="unsent">${pic}<span><b>${esc(t(`out.label_${i.label}`) || i.label)}</b> <span class="muted small">${t('out.taken', { when: esc(when(i.createdAt)) })}</span><br>${why}</span></li>`;
+}
+async function showUnsent(result = null) {
+  const items = await unsentItems();
+  if (!items.length) { toast(result?.sent ? t('out.all_sent', { n: result.sent }) : t('out.sending_now')); return; }
+  const said = result ? `<p class="note">${t('out.tried', { sent: result.sent, left: items.length })}</p>` : '';
   const k = await choose({
-    title: t('out.failed_title'),
-    html: `<ul>${failed.map((i) => `<li>${esc(t(`out.label_${i.label}`) || i.label)} · <span class="muted small">${esc(new Date(i.createdAt).toLocaleString())} — ${esc(i.error ?? '')}</span></li>`).join('')}</ul>`,
+    title: t(items.some((i) => i.failed) ? 'out.failed_title' : 'out.unsent_title'),
+    html: `${said}<ul class="unsent-list">${items.map(unsentLine).join('')}</ul>`,
     choices: [['retry', `↻ ${t('out.retry')}`, 'primary'], ['drop', `🗑 ${t('out.drop')}`, 'danger'], ['close', t('cancel')]],
   });
-  if (k === 'retry') retryFailed();
-  else if (k === 'drop') for (const i of failed) await discard(i.id);
-};
+  if (k === 'retry') {
+    toast(t('out.sending_now'));
+    return showUnsent(await retryNow());
+  }
+  if (k === 'drop') for (const i of items) await discard(i.id);
+}
+badge.onclick = () => { kick(); showUnsent(); };
 
 // Static shell text; views re-render themselves on a language change.
 // "N books wait for your approval" — reading takes minutes, users wander off.

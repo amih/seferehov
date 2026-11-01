@@ -128,9 +128,11 @@ export async function flush({ failed: retryFailed = false } = {}) {
           if (live.has(it.id) || now - it.heldAt < (it.holder === PAGE ? Infinity : HOLD_MS)) { pending = true; next = Math.min(next, HOLD_MS); continue; }
           it.hold = false; // its page is gone
         }
-        if (it.failed && !(retryFailed && (it.tries ?? 0) < MAX_TRIES)) continue;
+        // A barcode no catalogue knows always has another way to go: its covers.
+        const canRetry = (it.tries ?? 0) < MAX_TRIES || (it.alt && it.error === 'book_not_found');
+        if (it.failed && !(retryFailed && canRetry)) continue;
         if (!it.failed && it.nextAt > now) { pending = true; next = Math.min(next, it.nextAt - now); continue; }
-        if (typeof navigator !== 'undefined' && navigator.onLine === false) { pending = true; emit(it.id, 'waiting', 'offline'); break; }
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) { pending = true; await save(it, problem(it, 'offline')); emit(it.id, 'waiting', 'offline'); break; }
         const outcome = await sendOne(it);
         if (outcome.sent) { results.push({ item: it, status: outcome.status, data: outcome.data }); continue; }
         if (outcome.stop) { pending = true; next = Math.min(next, outcome.retryIn ?? 30_000); break; }
@@ -165,7 +167,7 @@ async function sendOne(it) {
     res = await fetch(it.url, { method: 'POST', body: form, credentials: 'same-origin', signal: AbortSignal.timeout(300_000),
       headers: { 'X-App-Build': String(__APP_BUILD__), 'X-Upload-Id': it.id, 'X-Upload-Timing': encodeURIComponent(JSON.stringify(timing)) } });
   } catch {
-    await save(it, { tries: (it.tries ?? 0) + 1, nextAt: Date.now() + backoff(it.tries ?? 0), hold: false });
+    await save(it, { ...problem(it, 'offline'), tries: (it.tries ?? 0) + 1, nextAt: Date.now() + backoff(it.tries ?? 0), hold: false });
     emit(it.id, 'waiting', 'offline');
     return { stop: true, retryIn: backoff(it.tries ?? 0) };
   }
@@ -183,14 +185,14 @@ async function sendOne(it) {
   }
   if (res.status === 404 && data?.error === 'book_not_found' && it.alt) {
     // A barcode no catalogue knows: the covers go to be read instead (straight away).
-    const next = { ...it, url: it.alt.url, fields: it.alt.fields, alt: null, hold: false };
+    const next = { ...it, ...problem(it, 'book_not_found', res.status), url: it.alt.url, fields: it.alt.fields, alt: null, hold: false, failed: false, tries: 0 };
     await set(it.id, next, store);
     return sendOne(next);
   }
-  if (res.status === 401) { await save(it, { hold: false }); emit(it.id, 'waiting', 'signin'); return { stop: true, retryIn: 60_000 }; }
-  if (res.status === 426) { await save(it, { hold: false }); emit(it.id, 'waiting', 'server'); return { stop: true, retryIn: 60_000 }; }
+  if (res.status === 401) { await save(it, { ...problem(it, 'signin', 401), hold: false }); emit(it.id, 'waiting', 'signin'); return { stop: true, retryIn: 60_000 }; }
+  if (res.status === 426) { await save(it, { ...problem(it, 'update', 426), hold: false }); emit(it.id, 'waiting', 'server'); return { stop: true, retryIn: 60_000 }; }
   if (res.status >= 500 || res.status === 429 || res.status === 408 || res.status === 425) {
-    await save(it, { tries: (it.tries ?? 0) + 1, nextAt: Date.now() + backoff(it.tries ?? 0), hold: false });
+    await save(it, { ...problem(it, 'server', res.status), tries: (it.tries ?? 0) + 1, nextAt: Date.now() + backoff(it.tries ?? 0), hold: false });
     emit(it.id, 'waiting', 'server');
     return { stop: true, retryIn: backoff(it.tries ?? 0) };
   }
@@ -200,17 +202,31 @@ async function sendOne(it) {
     emit(it.id, 'failed', { reason, status: res.status, data, dropped: true });
     return { sent: false, status: res.status, data };
   }
-  await save(it, { failed: true, error: reason, tries: (it.tries ?? 0) + 1, hold: false });
+  await save(it, { ...problem(it, reason, res.status), failed: true, error: reason, tries: (it.tries ?? 0) + 1, hold: false });
   emit(it.id, 'failed', { reason, status: res.status, data });
   return { sent: false, status: res.status, data };
 }
 const save = (it, change) => set(it.id, { ...it, ...change }, store);
+// What went wrong, kept with the item: the first time and the latest, to show the reader.
+function problem(it, why, status = null) {
+  const now = { why, status, at: Date.now() };
+  return { firstProblem: it.firstProblem ?? now, lastProblem: now };
+}
 
 // Not sent: what and why (for the badge's list), and removing one the reader gives up on.
 export const failedItems = async () => (await all()).filter((i) => i.failed);
-export async function retryFailed() {
-  for (const it of await failedItems()) await save(it, { failed: false, nextAt: 0 });
-  kick();
+// Everything not sent yet, with why (a batch still being taken is not listed).
+export const unsentItems = async () => (await all()).filter((i) => !i.hold);
+// "Try again": all of them, now, and the answer: how many went, and what is still here.
+export async function retryNow() {
+  const before = await unsentItems();
+  for (const it of before) await save(it, { failed: false, nextAt: 0 });
+  clearTimeout(timer);
+  for (let i = 0; i < 20 && flushing; i++) await new Promise((r) => setTimeout(r, 500)); // a pass already running
+  await flush().catch(() => {});
+  const left = await unsentItems();
+  kick(30_000);
+  return { sent: before.length - left.length, left };
 }
 
 export function startQueue() {
