@@ -72,7 +72,32 @@ const isHebrew = (s) => /[\u0590-\u05FF]/.test(s ?? '');
 // Hebrew covers are also read by OCR (text: front, then back), which checks the model:
 // it reads the layout well but invents Hebrew letters it cannot make out. alternatives:
 // other readings worth a catalogue lookup.
-export async function readCover(front, back = null) {
+// The lines of one photo, corrected by what other frames of the same cover read: lines
+// that are the same text (similar) vote, most votes then most words hspell knows; a line
+// only another frame saw is added if it read it clearly. Measured on a real shelf video:
+// frames differ in the words they get right (גליה עוד / גליה עוז); a stacked, sharpened
+// picture read far worse than any one frame, so frames are read, not merged.
+export async function voteLines(lines, others) {
+  const groups = lines.map((l) => ({ ...l, votes: [l.text] }));
+  for (const other of others) {
+    for (const o of other) {
+      let best = null, top = 0;
+      for (const g of groups) { const x = titleSimilarity(g.text, o.text); if (x > top) [best, top] = [g, x]; }
+      if (top >= 0.6) best.votes.push(o.text);
+      else if (o.confidence >= 0.8 && normTitle(o.text).length >= 3) groups.push({ text: o.text, h: o.h, votes: [o.text] });
+    }
+  }
+  for (const g of groups) {
+    const count = new Map();
+    for (const v of g.votes) count.set(v, (count.get(v) ?? 0) + 1);
+    let win = g.text, winScore = -1;
+    for (const [v, n] of count) { const score = n * 10 + await knownWords(v, 3); if (score > winScore) [win, winScore] = [v, score]; }
+    g.text = win;
+  }
+  return groups.map(({ votes, ...l }) => l);
+}
+
+export async function readCover(front, back = null, extras = { front: [], back: [] }) {
   const reads = [];
   for (const angle of [0, 90, 270]) {
     const [b] = parseBooks((await generate(await prepare(front, angle), FRONT_PROMPT, 120)).trim().split('\n')[0]);
@@ -81,13 +106,26 @@ export async function readCover(front, back = null) {
   }
   let book = reads.find((b) => b.quality !== 'low') ?? reads[0] ?? null;
   const model = book;
-  let text = '', pick = null, backText = null;
+  let text = '', pick = null, backText = null, variants = [];
   if (!book || reads.some((b) => isHebrew(b.title + b.author))) {
     const ocr = await suryaRead(front).catch(() => null);
     const lines = (ocr?.boxes ?? []).filter((b) => b.confidence >= 0.5 && /\p{L}{2}/u.test(b.text))
       .map((b) => ({ text: b.text.replace(/\s+/g, ' ').trim(), h: Math.round(b.bbox[3] - b.bbox[1]) }));
+    // More frames of the cover: read too, and they vote.
+    const others = [];
+    for (const x of extras.front) {
+      const r = await suryaRead(x).catch(() => null);
+      others.push((r?.boxes ?? []).filter((b) => b.confidence >= 0.5 && /\p{L}{2}/u.test(b.text))
+        .map((b) => ({ text: b.text.replace(/\s+/g, ' ').trim(), h: Math.round(b.bbox[3] - b.bbox[1]), confidence: b.confidence })));
+    }
+    if (others.length) {
+      const voted = await voteLines(lines, others);
+      variants = [...new Set(others.flat().map((l) => l.text))];
+      await step('frames-vote', { note: 'the OCR lines of each frame of the cover, compared', frames: others.length + 1, before: lines.map((l) => l.text), after: voted.map((l) => l.text) });
+      lines.splice(0, lines.length, ...voted);
+    }
     if (lines.length) {
-      text = lines.map((l) => l.text).join('\n');
+      text = [...new Set([...lines.map((l) => l.text), ...variants])].join('\n'); // what any frame read counts as printed
       // The model picks the title and author among the OCR lines: OCR spelling, model layout.
       [pick] = parseBooks((await generate(await prepare(front, 0), PICK_PROMPT(lines.slice(0, 40)), 160)).trim().split('\n')[0]);
       const known = [...lines.map((l) => l.text), pick?.title, pick?.author].filter(Boolean);
@@ -99,6 +137,8 @@ export async function readCover(front, back = null) {
     }
   }
   const codes = [...(back ? await readBookCodes(back) : []), ...await readBookCodes(front)];
+  // A frame just after the back cover often holds the barcode closer, or steadier.
+  for (const x of extras.back) if (!codes.length) codes.push(...await readBookCodes(x));
   const fromBarcodes = codes.length;
   if (!codes.length && back) {
     const printed = parsePrintedCode(await generate(await prepare(back, 0, 1600), BACK_PROMPT, 40));
@@ -109,7 +149,9 @@ export async function readCover(front, back = null) {
   const unique = [...new Set(codes)];
   // Barcodes and ISBNs carry a check digit; a Danacode read from print does not.
   const unchecked = fromBarcodes ? [] : unique.filter((c) => !normalizeIsbn(c));
-  const alternatives = [pick, model].filter((b) => b?.title && normTitle(b.title) !== normTitle(book?.title)).map((b) => ({ title: b.title, author: b.author ?? null }));
+  // Another frame's spelling of the title may be the one the catalogue knows (the vote can lose it).
+  const spellings = book?.title ? variants.filter((v) => titleSimilarity(v, book.title) >= 0.6).slice(0, 3).map((title) => ({ title, author: book.author })) : [];
+  const alternatives = [pick, model, ...spellings].filter((b) => b?.title && normTitle(b.title) !== normTitle(book?.title)).map((b) => ({ title: b.title, author: b.author ?? null }));
   await step('cover-read', { title: book?.title ?? null, author: book?.author ?? null, quality: book?.quality ?? 'low', model: model && { title: model.title, author: model.author }, pick: pick && { title: pick.title, author: pick.author }, alternatives, barcodes: codes.slice(0, fromBarcodes), codes: unique, unchecked });
   return { title: book?.title ?? null, author: book?.author ?? null, quality: book?.quality ?? 'low', isbn: unique[0] ?? null, codes: unique, unchecked,
     alternatives, text: [text, backText].filter(Boolean).join('\n') };

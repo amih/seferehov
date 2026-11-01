@@ -31,7 +31,7 @@ import { uploadReceipts } from './receipts.js';
 const app = Fastify({ logger: true, trustProxy: '127.0.0.1', bodyLimit: 1024 * 1024 });
 
 await app.register(cookie);
-await app.register(multipart, { limits: { fileSize: 15 * 1024 * 1024, files: 4, fields: 20 } });
+await app.register(multipart, { limits: { fileSize: 15 * 1024 * 1024, files: 8, fields: 20 } });
 await app.register(rateLimit, { global: false });
 
 // The web build writes version.json; the API echoes it so open clients notice a deploy.

@@ -39,6 +39,13 @@ import { align } from './motion.js';
 // next book's front (many books in a row); else the book was turned over in the hand
 // (one book). A line under the camera says which, with a tap to switch while that can
 // still be undone (until the next photo). The signals go to the camera log, to tune it.
+// A photo is held back while the whole book is not in the picture (bookai.js: a corner or
+// edge off the frame, which the server cannot cut out and straighten): the reader is told to
+// move back. After WHOLE_WAIT_MS of that it is taken anyway, so that a cover the model
+// misjudges cannot stop the camera; the camera report says so.
+// Right after each photo, while the phone is almost not moving, a couple more frames are
+// kept with it (photo2, photo3, back2, back3): each frame gets different words right, and the
+// server reads them all (vision.js voteLines). A frame adds nothing to the reader's time.
 // Each camera session's numbers (the phone, how long each photo and book took, how the
 // barcode was found) go to /api/camera-log (camlog.js), to improve the camera later.
 export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
@@ -73,6 +80,11 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   let book = null; // this book's numbers so far: { t0, backAt, huntAt, retakes, frontHow, backHow }
   // auto: one book or many, not decided yet (null), or 'single' | 'row'; travel since the first photo.
   const ROW_TRAVEL = 0.2; // a real row (phone video): 0.33; a book turned over in the hand: 0
+  const WHOLE = 0.5, WHOLE_WAIT_MS = 6000, ANSWER_WAIT_MS = 3000, MODEL_WAIT_MS = 5000;
+  let wholeAvg = null, wholeSince = 0, wholeAt = 0, wholeAsked = 0, modelState = 'loading';
+  // More frames of the photo just taken: where they go, how many yet, until when.
+  const MORE_FRAMES = 2, MORE_GAP_MS = 240, MORE_MS = 1500, MORE_DIFF = 12;
+  let more = null;
   let decided = null, travel = null, canSwitch = false, rows = 0; // rows: rows of books sent this time
 
   const title = (k) => { const el = panel.querySelector('.shot-title'); if (el) el.textContent = k ? t(k) : ''; };
@@ -162,9 +174,11 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     decided = null; travel = null; canSwitch = false; rows = 0;
     usedCodes.clear(); bookGen = 0;
     pausedSince = 0; noBookSince = 0; motion = 99;
-    if (auto) { // the book detector, in case it is many books
+    wholeAvg = null; wholeSince = 0; wholeAsked = 0; more = null;
+    if (!isBook) modelState = 'loading';
+    { // the book detector: is the whole book in view; a book at all, if it is many books
       const m0 = Date.now(), lg = log;
-      loadBookModel().then((d) => { isBook = d; lg.event('model', { ms: Date.now() - m0, ok: !!d }); });
+      loadBookModel().then((d) => { isBook = d; modelState = d ? 'ready' : 'none'; lg.event('model', { ms: Date.now() - m0, ok: !!d }); });
     }
     refresh = say;
     side = only ?? 'front';
@@ -219,6 +233,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   function tick() {
     log?.state(hunting ? 'hunt' : last && session.single ? 'retake' : Date.now() <= since ? 'wait' : lastHint ?? (stack ? stack.phase : side));
     if (hunting) {
+      if (more && !busy) moreFrame(0);
       lookForCode();
       if (liveCode || Date.now() > huntUntil) endHunt();
       return;
@@ -253,6 +268,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
       travel.prev = c;
     }
     prev = g; lastDiff = diff;
+    if (more) moreFrame(diff);
     let sum = 0, sq = 0, n = 0;
     const x0 = Math.round(w * 0.12), x1 = w - x0, y0 = Math.round(h * 0.08), y1 = h - y0;
     for (let y = Math.max(1, y0); y < Math.min(h - 1, y1); y++) {
@@ -291,6 +307,8 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     // in the frame: sharp enough = near the recent best, above a low floor.
     const sharpEnough = sharp > 5 && sharp >= 0.8 * peak;
     if (stack) { stackTick(diff, sharp, burnt / g.length, hint, hintEl); return; }
+    const whole = wholeInView(hint, hintEl);
+    if (!whole) { dropBest(); return; }
     if (!hint && sharpEnough && focused && steady >= 2) { snap(true); return; }
     // The longer the wait, the more shake a candidate may have (a hand that never quite
     // holds still still gets its photo within a second or two); the stillest win.
@@ -322,7 +340,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
       if (!hint && now - pausedSince >= NO_MODEL_MS) { pausedSince = 0; snap(true, best); }
       return;
     }
-    isBook.look(video);
+    const whole = wholeInView(hint, hintEl);
     const seen = now - (isBook.latest?.at ?? 0) <= ANSWER_MS ? isBook.latest.p : null;
     if (window.shotDebug) console.log(`stack diff=${diff.toFixed(1)} paused=${now - pausedSince} book=${seen?.toFixed(2) ?? '-'} ms=${isBook.ms}`);
     if (seen === null) return;
@@ -330,11 +348,29 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
       noBookSince = 0;
       if (stack.phase === 'fronts' && stack.away) autoBacks();
       stack.bookAt = now;
-      if (!hint && now - pausedSince >= PAUSE_MS) { pausedSince = 0; snap(true, best); }
+      if (!hint && whole && now - pausedSince >= PAUSE_MS) { pausedSince = 0; snap(true, best); }
       return;
     }
     noBookSince ||= now;
     if (now - noBookSince > 2000 && hintEl.hidden) { hintEl.hidden = false; hintEl.textContent = t('stack.no_book'); }
+  }
+
+  // Is the whole book in the picture? Asks the model (it answers in the background), a few
+  // answers smoothed. A photo waits for the answer about this picture: briefly, and for the
+  // model itself while it loads the first time. This phone cannot run it: nothing is held back.
+  function wholeInView(hint, hintEl) {
+    const now = Date.now();
+    if (modelState === 'none') return true;
+    if (modelState === 'loading') { wholeAsked ||= now; return now - wholeAsked >= MODEL_WAIT_MS; }
+    isBook.look(video);
+    const a = isBook.latest;
+    if (a && a.at !== wholeAt) { wholeAt = a.at; wholeAvg = wholeAvg === null ? a.whole : 0.5 * wholeAvg + 0.5 * a.whole; }
+    if (wholeAvg === null) { wholeAsked ||= now; return now - wholeAsked >= ANSWER_WAIT_MS; }
+    if (wholeAvg >= WHOLE) { wholeSince = 0; return true; }
+    if (!wholeSince) { wholeSince = now; log?.count('whole_held'); }
+    if (now - wholeSince >= WHOLE_WAIT_MS) { log?.count('whole_gave_up'); wholeSince = 0; wholeAvg = null; return true; }
+    if (!hint) { hintEl.hidden = false; hintEl.textContent = t('shots.whole'); lastHint = 'whole'; }
+    return false;
   }
 
   // The frame now, full size, as the best candidate (two canvases, swapped, no copying).
@@ -357,7 +393,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     const t0 = performance.now();
     const how = from ? 'best' : auto ? 'still' : 'button';
     const blob = from ? await toJpeg(from) : auto ? await frame() : await still();
-    log?.photo(how, lastSharp, lastDiff, { side: stack ? stack.phase : side, wait: ready ? Date.now() - ready : null, hint: lastHint,
+    log?.photo(how, lastSharp, lastDiff, { side: stack ? stack.phase : side, wait: ready ? Date.now() - ready : null, hint: lastHint, whole: wholeAvg === null ? null : +wholeAvg.toFixed(2),
       encMs: Math.round(performance.now() - t0), kb: Math.round((blob?.size ?? 0) / 1024), w: from?.width ?? video.videoWidth, h: from?.height ?? video.videoHeight,
       bookai: stack ? isBook?.ms ?? null : undefined, real: blob?.real || undefined });
     lastHow = how;
@@ -366,6 +402,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     flash.classList.remove('on'); void flash.offsetWidth; flash.classList.add('on');
     navigator.vibrate?.(40);
     moved = false; steady = 0; since = Date.now() + 300; shotGrey = prev; peak = 0;
+    wholeAvg = null; wholeSince = 0; wholeAsked = 0; more = null;
     took(blob);
     busy = false;
   }
@@ -418,6 +455,22 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     animate.timer = setTimeout(() => { el.hidden = true; el.innerHTML = ''; }, ms);
   }
 
+  // A couple more frames of the photo just taken, to be read too.
+  const moreOf = (name, id) => { more = { name, id, n: 2, next: Date.now() + MORE_GAP_MS, until: Date.now() + MORE_MS }; };
+  function moreFrame(diff) {
+    const now = Date.now();
+    if (now > more.until || diff > 2 * MORE_DIFF || more.n > MORE_FRAMES + 1) { more = null; return; }
+    if (now < more.next || diff > MORE_DIFF || !stream) return;
+    const { name, id, n } = more, lg = log;
+    more.n++; more.next = now + MORE_GAP_MS;
+    const c = document.createElement('canvas');
+    c.width = video.videoWidth; c.height = video.videoHeight;
+    c.getContext('2d').drawImage(video, 0, 0);
+    storing = storing.then(async () => {
+      const small = await shrinkImage(await toJpeg(c), 1600); // OCR reads as well at this size
+      if (await append(await id, { [`${name}${n}`]: small })) lg?.count('more_frames');
+    }).catch(() => {});
+  }
   // Front, then back (then a few seconds for the barcode), then the book is sent.
   function took(blob) {
     if (stack) return tookStack(blob);
@@ -436,6 +489,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     const name = side === 'front' ? 'photo' : 'back';
     if (side === 'front') front = blob; else back = blob;
     keepPicture(name, blob);
+    moreOf(name, held);
     if (side === 'front' && !session.only && !back) {
       side = 'back';
       if (session.auto && !decided) travel = { x: 0, y: 0, lost: 0, share: 0 }; // turned over, or the next book?
@@ -496,6 +550,9 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   function retake(k) {
     if (!last) return;
     clearTimeout(last.timer);
+    more = null;
+    // Its extra frames go with the picture being taken again.
+    { const id = last.id, name = k === 'front' ? 'photo' : 'back'; storing = storing.then(async () => removeFiles(await id, [`${name}2`, `${name}3`])).catch(() => {}); }
     ({ id: held, f: front, b: back, code: liveCode, bk: book } = last);
     if (book) book.retakes++;
     log?.count(`retake_${k}`);
@@ -532,6 +589,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     if (stack.phase === 'fronts') {
       stack.fronts.push(blob);
       stack.ids.push(storeFront(blob));
+      moreOf('photo', stack.ids[stack.ids.length - 1]);
       stack.frontAt.push(Date.now());
       stack.bookAt = Date.now();
       animate('next');
@@ -540,7 +598,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
       stack.backs.push(blob);
       stack.backsAt.push(Date.now());
       stack.codes.push(liveCode);
-      if (blob) { const id = stack.ids[i]; storing = storing.then(async () => append(await id, { back: await shrinkImage(blob, 2400) })).catch(() => {}); }
+      if (blob) { const id = stack.ids[i]; storing = storing.then(async () => append(await id, { back: await shrinkImage(blob, 2400) })).catch(() => {}); moreOf('back', id); }
       bookGen++;
       if (liveCode) usedCodes.add(liveCode);
       liveCode = null;
@@ -606,7 +664,8 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
       if (!src?.b) return;
       if (last) { clearTimeout(last.timer); last = null; showLast(); }
       const { id, f, b } = src;
-      storing = storing.then(async () => removeFiles(await id, ['back'])).catch(() => {});
+      more = null;
+      storing = storing.then(async () => removeFiles(await id, ['back', 'back2', 'back3'])).catch(() => {});
       held = id; front = f; back = null; book = book ?? { t0: Date.now(), retakes: 0 };
       decided = 'row';
       log?.event('auto_fix', { to: 'row' });
@@ -648,7 +707,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     stack.backs.forEach((b, i) => {
       if (!b) return;
       const id = stack.ids[i];
-      storing = storing.then(async () => removeFiles(await id, ['back'])).catch(() => {});
+      storing = storing.then(async () => removeFiles(await id, ['back', 'back2', 'back3'])).catch(() => {});
       stack.fronts.push(b);
       stack.frontAt.push(stack.backsAt[i] ?? Date.now());
       stack.ids.push(storeFront(b));

@@ -1,6 +1,7 @@
 // The book detector (bookai.js) off the main thread, so the camera never waits for it.
 import { FilesetResolver, ImageEmbedder } from '@mediapipe/tasks-vision';
 import head from './bookhead.json';
+import wholeHead from './wholehead.json';
 
 // MediaPipe loads its runtime with importScripts, which module workers do not have (it
 // throws): this one does the same, a synchronous fetch run in the worker's global scope.
@@ -31,8 +32,11 @@ self.onmessage = async ({ data }) => {
     const t0 = performance.now();
     const e = embedder.embed(data.image).embeddings[0].floatEmbedding;
     data.image.close();
-    let z = head.bias;
-    for (let i = 0; i < head.weights.length; i++) z += head.weights[i] * e[i];
-    self.postMessage({ type: 'score', id: data.id, p: 1 / (1 + Math.exp(-z)), ms: Math.round(performance.now() - t0) });
+    const weigh = ({ bias, weights }) => {
+      let z = bias;
+      for (let i = 0; i < weights.length; i++) z += weights[i] * e[i];
+      return 1 / (1 + Math.exp(-z));
+    };
+    self.postMessage({ type: 'score', id: data.id, p: weigh(head), whole: weigh(wholeHead), ms: Math.round(performance.now() - t0) });
   }
 };

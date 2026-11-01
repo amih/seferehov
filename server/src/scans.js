@@ -59,13 +59,14 @@ export default async function scanRoutes(app) {
     const media = [];
     const fields = {};
     try {
-      for await (const part of req.parts({ limits: { files: 2, fileSize: MAX_PHOTO_BYTES } })) {
+      for await (const part of req.parts({ limits: { files: 6, fileSize: MAX_PHOTO_BYTES } })) {
         if (part.type !== 'file') { fields[part.fieldname] = part.value; continue; }
-        if (!['photo', 'back'].includes(part.fieldname)) { part.file.resume(); continue; }
-        const name = `${part.fieldname === 'photo' ? 0 : 1}.img`;
+        // The two covers, and the frames taken just after each (read too, see readCover).
+        const name = { photo: '0.img', back: '1.img', photo2: 'x-front-2.img', photo3: 'x-front-3.img', back2: 'x-back-2.img', back3: 'x-back-3.img' }[part.fieldname];
+        if (!name) { part.file.resume(); continue; }
         await pipeline(part.file, createWriteStream(join(dir, name)));
         if (part.file.truncated) throw Object.assign(new Error('too_large'), { statusCode: 413 });
-        media.push({ path: name, type: 'image' });
+        media.push({ path: name, type: name.startsWith('x-') ? 'extra' : 'image' });
       }
     } catch (err) {
       await rm(dir, { recursive: true, force: true });
@@ -461,15 +462,19 @@ async function saveCropThumb(jpeg, scanId, n) {
 async function processCover(scan, { dry = false } = {}) {
   const dir = join(MEDIA_DIR, scan.id);
   await setProgress(scan.id, { step: 'reading', done: 0, total: 1 });
-  let [front, back = null] = await Promise.all(scan.media.map((m) => readFile(join(dir, m.path))));
-  await step('input', { note: 'front and back cover photos as sent', code_scanned: scan.book_code ?? null }, { front, back });
+  const covers = scan.media.filter((m) => m.type !== 'extra');
+  let [front, back = null] = await Promise.all(covers.map((m) => readFile(join(dir, m.path))));
+  const extraOf = (side) => Promise.all(scan.media.filter((m) => m.path.startsWith(`x-${side}-`)).map((m) => readFile(join(dir, m.path))));
+  const extras = { front: await extraOf('front'), back: await extraOf('back') };
+  await step('input', { note: 'front and back cover photos as sent', code_scanned: scan.book_code ?? null, extra_frames: extras.front.length + extras.back.length }, { front, back });
   // Cut out and straightened first: tidier pictures, and a clearer read.
   front = await scope('front', () => cropCover(front)).catch(() => null) ?? front;
   if (back) back = await scope('back', () => cropCover(back)).catch(() => null) ?? back;
   const frame = dry ? null : await saveFrameThumb(front, scan.id, 0);
   const backPath = back && !dry ? await saveFrameThumb(back, scan.id, 1) : null;
   if (!dry) for (const [i, b] of [front, back].entries()) if (b) await keepCopy(b, scan.id, i).catch((err) => log.warn({ err, scan: scan.id }, 'keep copy failed'));
-  const read = await readCover(front, back);
+  if (!dry) for (const [i, b] of [...extras.front, ...extras.back].entries()) await keepCopy(b, scan.id, `extra-${i}`).catch(() => {});
+  const read = await readCover(front, back, extras);
   let book = null, lookupId = null, isbn = null, danacode = null;
   // A catalogue record found by title, or by a printed Danacode (which may be misread),
   // counts only if its title agrees with the text on the covers: all of the main title,
