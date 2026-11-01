@@ -43,7 +43,9 @@ import { align } from './motion.js';
 // barcode was found) go to /api/camera-log (camlog.js), to improve the camera later.
 export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   let stream = null, video = null, timer = null, side = 'front', front = null, back = null, preset = null, busy = false;
-  let liveCode = null, lastCode = null, looking = false, ticks = 0;
+  let liveCode = null, looking = false, ticks = 0;
+  const usedCodes = new Set(); // barcodes that went with a book already: never the next book's
+  let bookGen = 0; // goes up with each book done: an answer asked for before that is not about the next book
   let hunting = false, huntUntil = 0; // after the back cover: a few seconds for a close-up of the barcode
   let session = {}; // this time only: { intro, single, only, target, sent, stack }
   let stack = null; // many books: { phase: fronts|backs, fronts, ids, backs, codes, frontAt, bookAt, away, auto }
@@ -126,14 +128,20 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     if (looking || liveCode || preset || !video?.videoWidth) return;
     looking = true;
     const t0 = performance.now();
+    const gen = bookGen, inView = moved || hunting;
     const code = await detectFrame(video).catch(() => null);
     log?.count('detects'); log?.count('detectMs', Math.round(performance.now() - t0));
     looking = false;
-    // The book just saved may still be in view: its code is not the next book's.
-    if (code && code !== lastCode && !liveCode) {
-      liveCode = code; navigator.vibrate?.(30); showCode();
-      log?.event('code', { side: hunting ? 'hunt' : stack ? stack.phase : side, sinceBook: book ? Date.now() - book.t0 : null });
+    if (!code || usedCodes.has(code) || liveCode) return;
+    // The picture has not moved on since the last photo: the book just taken is still in
+    // view, and the barcode is that book's. It once went to the next book, and so on down the row.
+    if (gen !== bookGen || !inView) {
+      if (last && !last.code) { last.code = code; usedCodes.add(code); log?.event('code_late'); }
+      else if (stack?.phase === 'backs' && stack.backs.length && !stack.codes[stack.backs.length - 1]) { stack.codes[stack.backs.length - 1] = code; usedCodes.add(code); log?.event('code_late'); }
+      return;
     }
+    liveCode = code; navigator.vibrate?.(30); showCode();
+    log?.event('code', { side: hunting ? 'hunt' : stack ? stack.phase : side, sinceBook: book ? Date.now() - book.t0 : null });
   }
   // The camera (or the review) in the middle of the screen.
   const center = (el) => requestAnimationFrame(() => el?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
@@ -152,6 +160,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     session = { intro, single: single || !!only, only, target: to ?? target, sent: done ?? sent, auto };
     stack = null;
     decided = null; travel = null; canSwitch = false; rows = 0;
+    usedCodes.clear(); bookGen = 0;
     pausedSince = 0; noBookSince = 0; motion = 99;
     if (auto) { // the book detector, in case it is many books
       const m0 = Date.now(), lg = log;
@@ -456,7 +465,8 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     const id = held, f = front, b = back, code = preset || liveCode;
     const bk = book ? { ...book, done: Date.now(), code: preset ? 'preset' : liveCode ? 'live' : null } : null;
     book = null;
-    lastCode = liveCode ?? lastCode;
+    bookGen++;
+    if (liveCode) usedCodes.add(liveCode);
     held = null; front = null; back = null; side = session.only ?? 'front'; liveCode = null; preset = null;
     last = { id, f, b, code, bk, timer: setTimeout(() => { sendLast(); if (session.single) stop(); }, RETAKE_MS) };
     showLast();
@@ -507,6 +517,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
       if (!id) return;
       const s0 = performance.now();
       const isbn = code || (b && await scanImage(b).catch(() => null)) || (f && await scanImage(f).catch(() => null));
+      if (isbn) usedCodes.add(isbn);
       lg?.book({ id, front: !!f, back: !!b, code: code ? bk?.code ?? 'live' : isbn ? 'still' : null, stillScanMs: code ? null : Math.round(performance.now() - s0),
         frontToBack: bk?.backAt ? bk.backAt - bk.t0 : null, hunt: bk?.huntAt ? (bk.done ?? sentAt) - bk.huntAt : null,
         total: bk?.t0 ? (bk.done ?? sentAt) - bk.t0 : null, retakes: bk?.retakes ?? 0, frontHow: bk?.frontHow, backHow: bk?.backHow });
@@ -530,7 +541,8 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
       stack.backsAt.push(Date.now());
       stack.codes.push(liveCode);
       if (blob) { const id = stack.ids[i]; storing = storing.then(async () => append(await id, { back: await shrinkImage(blob, 2400) })).catch(() => {}); }
-      lastCode = liveCode ?? lastCode;
+      bookGen++;
+      if (liveCode) usedCodes.add(liveCode);
       liveCode = null;
       if (stack.backs.length >= stack.fronts.length) finishStack();
       else animate('next');
@@ -579,7 +591,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     stack = newStack();
     stack.fronts.push(front); stack.ids.push(held); stack.frontAt.push(book?.t0 ?? Date.now());
     held = null; front = null; back = null; side = 'front'; book = null; hunting = false;
-    lastCode = liveCode ?? lastCode; liveCode = null;
+    liveCode = null;
     panel.querySelector('[data-shots="skip"]').textContent = t('stack.no_back');
     tookStack(blob);
     canSwitch = true;
@@ -627,7 +639,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   function autoBacks() {
     Object.assign(stack, { phase: 'backs', backs: [], backsAt: [], codes: [], away: false, auto: true });
     log?.event('auto_backs', { fronts: stack.fronts.length });
-    liveCode = null; lastCode = null;
+    liveCode = null;
     navigator.vibrate?.([40, 80, 40]);
     refresh();
   }
@@ -648,7 +660,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   function toBacks() {
     Object.assign(stack, { phase: 'backs', backs: [], backsAt: [], codes: [], away: false, auto: false });
     log?.event('to_backs', { fronts: stack.fronts.length });
-    liveCode = null; lastCode = null;
+    liveCode = null;
     moved = true; steady = 0; dropBest();
     refresh();
     center(panel.querySelector('.shot-live'));

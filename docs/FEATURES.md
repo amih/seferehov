@@ -44,6 +44,7 @@ It runs at https://seferehov.com. Hebrew is the default (right to left); English
 - Refused by the server (another 4xx): kept as "not sent" with the reason; the header badge says so and lists them, to try again or delete; also retried when the app starts (up to 6 times). A refusal the reader is watching (a mistyped ISBN) is said at once instead.
 - A barcode the catalogue knows goes straight to the library (or My books); one it does not know falls back to sending the covers to be read.
 - The badge lists what is still on the phone, each with its picture, when it was taken, what went wrong the first time and the latest time, in plain words, and how many tries. "Try again" sends them at once, and the list comes back saying what that try did (how many went, how many are still there).
+- A barcode is credited only to the book in view: one read while the picture has not moved on since the last photo belongs to that last book, and a barcode that already went with a book in this session is never given to another.
 - A barcode no catalogue knows (usual for a Danacode, the code on most Israeli books, the first time anyone scans that book): the covers go to be read instead, with the barcode, and the book waits in the approval queue.
 - Every upload carries an id (`X-Upload-Id`); the server keeps the answer 14 days (`upload_receipts`, `server/src/receipts.js`), so an upload sent again because its answer was lost is never saved twice.
 
@@ -67,6 +68,7 @@ It runs at https://seferehov.com. Hebrew is the default (right to left); English
 ## The approval queue
 
 - Every book found, from any photo or barcode, waits in one queue per reader (`/queue`), one book at a time with a big picture: approve, later, or wrong. The title and author can be fixed before approving.
+- Poor shelf reads stay out of the queue: no catalogue knows them, and the read is low quality, title and author are the same words, no word of a Hebrew title is a word, or it is a misread of a book the catalogue found in the same scan. Nothing is deleted: a button at the end of the queue brings them back. Covers are never left out.
 - Duplicates from several photos are merged. Decisions can be undone for 14 days.
 - The page tells readers that each correction or "wrong" helps improve reading for everyone. Those scans (photos without location data, trace, and the decision) are kept for good to study reading errors.
 - A reader who closed the app gets an e-mail when the results are ready.

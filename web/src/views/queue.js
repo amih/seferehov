@@ -50,7 +50,7 @@ export default async function queueView(root) {
       ? `<p class="undo-line">${esc(t(`queue.just_${lastDone.decision}`, { title: lastDone.title }))} <button class="btn small" data-undo="${lastDone.id}">${t('queue.undo')}</button></p>` : '';
     return `${done}${left ? `<p class="queue-count">${t('queue.left', { n: left })}</p>` : ''}${busy}`;
   }
-  const recentLink = () => `<p class="row"><button class="btn small" id="recent">${t('queue.recent')}</button></p>`;
+  const recentLink = () => `<p class="row"><button class="btn small" id="recent">${t('queue.recent')}</button>${counts.hidden ? ` <button class="btn small" id="show-hidden">${t('queue.show_hidden', { n: counts.hidden })}</button>` : ''}</p>`;
 
   async function undo(id) {
     try {
@@ -88,6 +88,7 @@ export default async function queueView(root) {
     const u = e.target.closest('[data-undo]');
     if (u) { u.disabled = true; undo(Number(u.dataset.undo)); }
     else if (e.target.closest('#recent')) { renderRecent(); window.scrollTo(0, 0); }
+    else if (e.target.closest('#show-hidden')) { api('/api/queue/skipped/show', { method: 'POST' }).then(() => location.reload()).catch(() => toast(t('offline'))); }
   });
   function renderHeader() {
     const h = root.querySelector('#qhead');

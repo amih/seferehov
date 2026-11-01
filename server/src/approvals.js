@@ -11,7 +11,8 @@ import { POINTS } from './config.js';
 import { PAIRS_SQL, LOCATION_PAIRS_SQL } from './duplicates.js';
 import { parseLatLon } from './util.js';
 import { readForm } from './multipart.js';
-import { normTitle } from './vision.js';
+import { normTitle, titleSimilarity } from './vision.js';
+import { knownWords } from './hebfix.js';
 import { fixesToVote } from './fixes.js';
 import { queueWaits, keepForReview } from './scans.js';
 
@@ -38,6 +39,8 @@ async function counts(userId) {
               WHERE s.user_id = $1 AND s.status = 'done' AND i.decision IS NULL) AS open,
             (SELECT count(*)::int FROM scan_items i JOIN scans s ON s.id = i.scan_id
               WHERE s.user_id = $1 AND s.status = 'done' AND i.decision = 'later') AS later,
+            (SELECT count(*)::int FROM scan_items i JOIN scans s ON s.id = i.scan_id
+              WHERE s.user_id = $1 AND i.decision = 'skipped') AS hidden,
             (SELECT count(*)::int FROM scans WHERE user_id = $1 AND status IN ('queued', 'processing')) AS processing`,
     [userId],
   );
@@ -192,6 +195,38 @@ export async function shelfCheck(user, loc) {
 // catalogue match, the best reading, a picture, and every source that saw it.
 const RANK = { high: 0, medium: 1, low: 2 };
 const near = (a, b) => a && b && (a === b || (Math.min(a.length, b.length) >= 6 && (a.includes(b) || b.includes(a))));
+// Shelf reads not worth the reader's time stay out of the queue (nothing is deleted; the
+// reader can bring them back): no catalogue knows them, and the read is low quality, or
+// the title and author are the same words, or no word of a Hebrew title is a word, or it
+// is a misread of a book the catalogue found in the same scan. Covers are never skipped:
+// the reader photographed that one book.
+export async function skipMisreads(userId) {
+  const open = await many(
+    `SELECT i.id, i.scan_id, i.title, i.author, i.quality FROM scan_items i JOIN scans s ON s.id = i.scan_id
+      WHERE s.user_id = $1 AND s.status = 'done' AND s.source IN ('photo', 'video') AND i.decision IS NULL
+        AND i.book_id IS NULL AND i.via = 'vision' AND NOT i.keep_read`,
+    [userId],
+  );
+  if (!open.length) return;
+  const found = await many(
+    `SELECT i.scan_id, i.title, b.title AS book_title FROM scan_items i JOIN books b ON b.id = i.book_id WHERE i.scan_id = ANY($1::uuid[])`,
+    [[...new Set(open.map((i) => i.scan_id))]],
+  );
+  const skip = [];
+  const dictionary = (await knownWords('ספר שלום', 2)) > 0; // 0 without hspell: this rule then says nothing
+  for (const i of open) {
+    const title = normTitle(i.title);
+    const hebrew = /[\u0590-\u05FF]/.test(i.title);
+    const misread = i.quality === 'low' || !title || title === normTitle(i.author)
+      || found.some((f) => f.scan_id === i.scan_id && [f.title, f.book_title].some((x) => x && titleSimilarity(i.title, x) >= 0.7))
+      || (dictionary && hebrew && (await knownWords(i.title, 2)) === 0);
+    if (misread) skip.push(i);
+  }
+  if (!skip.length) return;
+  await q(`UPDATE scan_items SET decision = 'skipped', decided_at = now() WHERE id = ANY($1)`, [skip.map((i) => i.id)]);
+  for (const scanId of new Set(skip.map((i) => i.scan_id))) await closeIfDone(scanId);
+}
+
 export async function mergeDuplicates(userId) {
   const open = await many(
     `SELECT i.*, s.location_id, b.title AS book_title FROM scan_items i JOIN scans s ON s.id = i.scan_id
@@ -257,6 +292,7 @@ export default async function approvalRoutes(app) {
 
   // Undecided books first (oldest first), then the ones set aside for later.
   app.get('/api/queue', { preHandler: requireUser() }, async (req) => {
+    await skipMisreads(req.user.id);
     await mergeDuplicates(req.user.id);
     const items = await many(
       `${ITEM_SQL}
@@ -305,6 +341,17 @@ export default async function approvalRoutes(app) {
     }
     await closeIfDone(item.scan_id);
     return { status: result?.sighting?.status ?? null, ...(await counts(req.user.id)) };
+  });
+
+  // Bring back what was left out of the queue, to go through it after all.
+  app.post('/api/queue/skipped/show', { preHandler: requireUser() }, async (req) => {
+    const back = await many(
+      `UPDATE scan_items i SET decision = NULL, decided_at = NULL, keep_read = true FROM scans s
+        WHERE s.id = i.scan_id AND s.user_id = $1 AND i.decision = 'skipped' RETURNING i.scan_id`,
+      [req.user.id],
+    );
+    await q(`UPDATE scans SET status = 'done' WHERE id = ANY($1::uuid[]) AND status = 'confirmed'`, [[...new Set(back.map((x) => x.scan_id))]]);
+    return { shown: back.length };
   });
 
   // The reader's last decisions, newest first: a wrong tap can be undone, a title fixed.
