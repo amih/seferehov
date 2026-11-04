@@ -4,6 +4,7 @@ import { esc, toast } from '../ui.js';
 import { t } from '../i18n.js';
 import { ownerLabel } from '../mybooks.js';
 import { todoTabs } from '../todo.js';
+import { stepsBox, attachSteps } from '../steps.js';
 
 // Books waiting for the reader's approval, from all their photos, videos and barcodes:
 // one at a time, with a large picture. Approve, decline, or set aside for later. The last
@@ -138,9 +139,11 @@ export default async function queueView(root) {
         <button class="btn danger" data-d="declined">✕ ${t('queue.decline')}</button>
       </div>
       <p class="muted small">${t('queue.helps')}</p>
+      ${stepsBox(i.id)}
       ${recentLink()}
     </section>`;
     readyAt = Date.now() + 700;
+    attachSteps(root);
 
     const form = root.querySelector('#f');
     root.querySelector('.decide').onclick = async (e) => {

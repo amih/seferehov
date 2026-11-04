@@ -13,6 +13,7 @@ import signRoutes from './sign.js';
 import editRoutes from './edits.js';
 import scanRoutes, { startScanWorker } from './scans.js';
 import approvalRoutes from './approvals.js';
+import stepRoutes from './steps.js';
 import myBookRoutes from './mybooks.js';
 import offerRoutes from './offers.js';
 import duplicateRoutes from './duplicates.js';
@@ -55,6 +56,7 @@ app.addHook('onRequest', async (req, reply) => {
 uploadReceipts(app);
 
 await app.register(authRoutes);
+await app.register(stepRoutes);
 await app.register(locationRoutes);
 await app.register(reviewRoutes);
 await app.register(signRoutes);

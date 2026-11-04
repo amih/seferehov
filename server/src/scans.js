@@ -16,7 +16,7 @@ import { parseLatLon, normalizeIsbn, normalizeDanacode } from './util.js';
 import { mergeDuplicates, autoConfirmKnown, closeIfDone } from './approvals.js';
 import { ownerOf } from './mybooks.js';
 import { sendMail } from './mail.js';
-import { TRACE_DIR, purgeTraces, scope, step, traceFile, withTrace } from './trace.js';
+import { TRACE_DIR, here, purgeTraces, scope, step, traceFile, withTrace } from './trace.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -572,7 +572,8 @@ async function processScan(scan, { dry = false } = {}) {
       hit.author ||= item.author;
       hit.isbn ||= item.isbn;
       if (hit.quality === 'low' && item.quality && item.quality !== 'low') hit.quality = item.quality;
-      if (!hit.crop && item.crop) Object.assign(hit, { crop: item.crop, verified: item.verified });
+      if (!hit.crop && item.crop) Object.assign(hit, { crop: item.crop, verified: item.verified, at: item.at });
+      hit.at ??= item.at;
       return;
     }
     found.push({ ...item, key, keys: new Set([key]), frames: new Set([i]), reads: new Map(item.title ? [[item.title, 1 + (item.verified ? 0.5 : 0)]] : []) });
@@ -586,7 +587,7 @@ async function processScan(scan, { dry = false } = {}) {
       await step('image', { from_video: fromVideo, t: t ?? null }, { image: buf });
       const codes = await readIsbnBarcodes(buf);
       await step('barcodes', { codes });
-      for (const isbn of codes) add(`isbn:${isbn}`, { isbn, via: 'barcode', frame, fromVideo }, i);
+      for (const isbn of codes) add(`isbn:${isbn}`, { isbn, via: 'barcode', frame, fromVideo, at: here() }, i);
       let books = [];
       try { books = await readBooks(buf); } catch (err) { log.warn({ err, scan: scan.id }, 'vision failed on frame'); await step('error', { error: String(err.message) }); }
       for (const b of books) add(normTitle(b.title), { ...b, via: 'vision', frame, fromVideo }, i);
@@ -641,10 +642,10 @@ async function processScan(scan, { dry = false } = {}) {
   for (const [n, { item, book, title, isbn, quality, lookupId }] of rows.entries()) {
     const crop = item.crop ? await saveCropThumb(item.crop, scan.id, n) : null;
     await q(
-      `INSERT INTO scan_items(scan_id, title, author, isbn13, book_id, via, matched, frame_path, quality, crop_path, lookup_id, sources)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      `INSERT INTO scan_items(scan_id, title, author, isbn13, book_id, via, matched, frame_path, quality, crop_path, lookup_id, sources, trace_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
       [scan.id, title, item.author ?? book?.authors?.[0] ?? null, book?.isbn13 ?? isbn ?? null, book?.id ?? null, item.via, !!book, item.frame, quality, crop, lookupId,
-        [item.via === 'barcode' ? 'barcode' : scan.source]],
+        [item.via === 'barcode' ? 'barcode' : scan.source], item.at?.length ? item.at : null],
     );
   }
 }

@@ -52,6 +52,9 @@ export function scope(label, fn) {
 
 export const tracing = () => !!store.getStore();
 
+// Where in the trace we are now: the labels of the scopes around this call.
+export const here = () => [...(store.getStore()?.path ?? [])];
+
 // One stage: data (JSON) plus pictures { key: Buffer }; each picture is saved as a
 // JPEG (at most `side` px; once, however many steps show it) and its file name put in
 // data[key]. Saved as it goes, so a scan that is still running (or crashed) can be
