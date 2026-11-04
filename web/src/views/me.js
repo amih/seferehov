@@ -1,4 +1,4 @@
-import { api, getMe } from '../api.js';
+import { api, getMe, forgetReader } from '../api.js';
 import { navigate } from '../nav.js';
 import { esc, toast, avatarHtml, contactHtml } from '../ui.js';
 import { t } from '../i18n.js';
@@ -114,6 +114,7 @@ export default async function meView(root, _, query) {
 
   root.querySelector('#logout')?.addEventListener('click', async () => {
     await api('/api/auth/logout', { method: 'POST' });
+    await forgetReader();
     await getMe(true);
     document.dispatchEvent(new Event('seferehov:me'));
     navigate('/');

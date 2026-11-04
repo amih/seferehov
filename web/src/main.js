@@ -4,6 +4,7 @@ import { startQueue, onQueueChange, kick, unsentItems, retryNow, discard } from 
 import { toast, choose, esc } from './ui.js';
 import { whyText } from './outbox-ui.js';
 import { api, getMe } from './api.js';
+import './net.js';
 import { navigate, mapUnderneath, closeLayer } from './nav.js';
 import { trackPageView } from './analytics.js';
 import { t, lang, applyLang } from './i18n.js';
@@ -82,8 +83,9 @@ async function render() {
   const path = location.pathname.replace(/\/+$/, '') || '/';
   const [, view, params] = routes.map(([re, v]) => [re, v, path.match(re)]).find(([, , m]) => m) ?? [];
   document.body.classList.toggle('full', path === '/');
-  // A screen does not wait long for the reader on a bad connection.
-  const me = await Promise.race([getMe(), new Promise((r) => setTimeout(() => r(null), 5000))]);
+  // A screen does not wait long for the reader on a bad connection (getMe answers from the
+  // phone's copy after 1.5 s).
+  const me = await Promise.race([getMe(), new Promise((r) => setTimeout(() => r(null), 3000))]);
   if (stale()) return;
   if (me && !me.screen_name && !['/me', '/about', '/comic'].includes(path)) {
     sessionStorage.setItem('seferehov:next', location.pathname + location.search);
@@ -100,7 +102,10 @@ async function render() {
     return;
   }
   trackPageView();
-  const done = (await view(main, params.slice(1), new URLSearchParams(location.search))) || null;
+  // Until the screen has drawn itself: "Loading…", never an empty page.
+  main.classList.add('loading');
+  main.dataset.loading = t('loading');
+  const done = (await Promise.resolve(view(main, params.slice(1), new URLSearchParams(location.search))).finally(() => main.classList.remove('loading'))) || null;
   if (stale()) { done?.(); return; }
   cleanup = done;
   showReadyBanner(me, path);

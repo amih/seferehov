@@ -1,5 +1,6 @@
 import { dontTrackThisDevice } from './analytics.js';
 import { checkForUpdate, maybeApply } from './update.js';
+import { watched } from './net.js';
 
 export class ApiError extends Error {
   constructor(status, body) {
@@ -18,7 +19,7 @@ export async function api(path, { method = 'GET', json, form, timeout = null } =
   // A request that hangs (a weak phone signal) must not hold up the screen or the menu
   // forever; uploads get longer.
   // A timeout counts as offline (a TypeError, like a failed fetch): uploads are then saved for later.
-  const res = await fetch(path, { method, headers, body, credentials: 'same-origin', signal: AbortSignal.timeout(timeout ?? (form ? 300_000 : 20_000)) })
+  const res = await watched(fetch(path, { method, headers, body, credentials: 'same-origin', signal: AbortSignal.timeout(timeout ?? (form ? 300_000 : 20_000)) }), { upload: !!form })
     .catch((err) => { throw err.name === 'TimeoutError' ? new TypeError('timeout') : err; });
 
   const serverVersion = res.headers.get('X-App-Version');
@@ -32,12 +33,32 @@ export async function api(path, { method = 'GET', json, form, timeout = null } =
   return data;
 }
 
+// The reader as last seen, kept on the phone: a screen does not wait for the server to
+// know who is signed in (a slow or unreachable server showed "signed out" and no Google button).
+// The server's answer replaces it when it comes.
+const ME_KEY = 'seferehov:me';
+const known = () => { try { return JSON.parse(localStorage.getItem(ME_KEY)); } catch { return null; } };
+function remember(u) {
+  try { if (u) localStorage.setItem(ME_KEY, JSON.stringify(u)); else localStorage.removeItem(ME_KEY); } catch { /* private mode */ }
+}
+
 let me;
 export async function getMe(force = false) {
   if (!me || force) {
     // A failed request (no network) is not remembered as "signed out": the next call asks again.
-    me = api('/api/me').then((r) => r.user).catch((err) => { if (err instanceof TypeError) me = null; return null; });
-    me.then((u) => { if (u?.trust_level >= 3) dontTrackThisDevice(); });
+    const asked = api('/api/me').then((r) => { remember(r.user); return r.user; })
+      .catch((err) => { if (err instanceof TypeError) { me = null; return known(); } return null; });
+    me = asked;
+    asked.then((u) => { if (u?.trust_level >= 3) dontTrackThisDevice(); });
   }
-  return me;
+  if (force) return me;
+  const k = known();
+  return k ? Promise.race([me, new Promise((r) => setTimeout(() => r(k), 1500))]) : me;
+}
+
+// Sign-out: nothing the phone kept for this reader stays behind.
+export async function forgetReader() {
+  remember(null);
+  me = null;
+  await caches?.delete('api').catch(() => {});
 }

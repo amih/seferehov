@@ -1,6 +1,6 @@
 import { precacheAndRoute, cleanupOutdatedCaches, createHandlerBoundToURL } from 'workbox-precaching';
 import { registerRoute, NavigationRoute } from 'workbox-routing';
-import { CacheFirst, StaleWhileRevalidate } from 'workbox-strategies';
+import { CacheFirst, NetworkFirst, StaleWhileRevalidate } from 'workbox-strategies';
 import { ExpirationPlugin } from 'workbox-expiration';
 import { clientsClaim } from 'workbox-core';
 import { flush } from './queue.js';
@@ -21,6 +21,33 @@ precacheAndRoute(self.__WB_MANIFEST);
 registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html'), {
   denylist: [/^\/api\//, /^\/uploads\//, /^\/robots\.txt$/, /^\/sitemap/],
 }));
+
+// The server's answers (GET only): fresh when the server answers within 3.5 s, otherwise the
+// last answer the phone kept, marked so the page can say it is not current (net.js). A
+// stale DNS address or a server that hangs then costs a few seconds, not a blank screen.
+// Not kept: who is signed in (api.js keeps that itself), sign-in, the health check, and
+// what changes by the second. Sign-out deletes this cache (api.js forgetReader).
+const NOT_KEPT = /^\/api\/(me$|auth\/|health$|captures|camera-log|client-error|upload-timing|version)/;
+registerRoute(
+  ({ url, request }) => request.method === 'GET' && url.origin === self.location.origin
+    && url.pathname.startsWith('/api/') && !NOT_KEPT.test(url.pathname),
+  new NetworkFirst({
+    cacheName: 'api',
+    networkTimeoutSeconds: 3.5,
+    plugins: [
+      new ExpirationPlugin({ maxEntries: 300, maxAgeSeconds: 14 * 86400 }),
+      {
+        cacheWillUpdate: async ({ response }) => (response.status === 200 ? response : null),
+        cachedResponseWillBeUsed: async ({ cachedResponse }) => {
+          if (!cachedResponse) return null;
+          const headers = new Headers(cachedResponse.headers);
+          headers.set('X-Seferehov-Cached', headers.get('date') || '1');
+          return new Response(cachedResponse.body, { status: cachedResponse.status, statusText: cachedResponse.statusText, headers });
+        },
+      },
+    ],
+  }),
+);
 
 // Uploaded photos never change (unique file names), so cache-first is safe.
 registerRoute(
