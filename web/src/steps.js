@@ -68,6 +68,13 @@ function stepHtml(s, n, files, ctx) {
     case 'whole-read':
       body = `<p class="small">${t('steps.whole_note')}</p>${pic('image')}<pre class="step-answer" dir="auto">${esc(s.answer?.slice(0, 1500) ?? '')}</pre>`;
       break;
+    case 'spine-cut': {
+      const edge = (e) => (e ? t('steps.edge', { deg: e.deg, s: e.strength }) : t('steps.no_edge'));
+      body = `<p class="small">${t('steps.spine_cut_note')}</p>
+        <p class="small">${t('steps.own_lean', { deg: s.lean ?? 0 })} · ${t('steps.top_edge')}: ${edge(s.top)} · ${t('steps.bottom_edge')}: ${edge(s.bottom)}</p>
+        ${s.note ? `<p class="muted small">${esc(s.note)}</p>` : ''}<div class="step-pics">${pic('image')}${pic('crop')}</div>`;
+      break;
+    }
     case 'split-band':
       body = `<p class="small">${t('steps.band_note')}</p>${pic('crop')}
         <p class="small">OCR: <span dir="auto">${esc((s.ocr ?? []).join(' · '))}</span></p>

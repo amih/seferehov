@@ -509,6 +509,17 @@ export async function readCrop(img, w, h, title = null, { split = false } = {}) 
     tries: order.map((x) => ({ angle: x.angle, read: x.read ? { title: x.read.title, author: x.read.author, quality: x.read.quality } : null, score: Math.round(x.score * 100) / 100,
       lines: x.lines.map((b) => ({ text: b.text, confidence: Math.round(b.confidence * 100) / 100, score: Math.round(b.score * 100) / 100 })) })),
   }, images);
+  // Looking for a title (findSpine): the cut-out's title must be in Surya's lines, the author
+  // alone is not enough — the model sometimes takes the title from one spine and the
+  // author from the next, and the cut then follows the wrong spine.
+  if (title && best.score >= ORIENT_OK) {
+    const lit = best.ocr.boxes.filter((b) => b.confidence >= 0.5);
+    const titleSeen = Math.max(0, ...lit.map((b) => Math.max(overlap(title, b.text), overlap(best.read?.title, b.text))));
+    if (titleSeen < ORIENT_OK) {
+      await report('dropped: only the author was confirmed (the model may have mixed two spines)');
+      return best.read ? { ...best.read, crop: null, verified: false, at: here() } : null;
+    }
+  }
   if (best.score < ORIENT_OK) {
     // Often two spines in one box: the model read one of them, Surya the other, so they never
     // agree. Surya's lines show where each spine's print is: cut one band per spine and read
@@ -528,7 +539,9 @@ export async function readCrop(img, w, h, title = null, { split = false } = {}) 
       .map((b) => ({ ...b, score: Math.max(overlap(best.read.title, b.text), 0.8 * overlap(best.read.author, b.text)) }));
     if (own.some((b) => b.score >= 0.4)) lines = own;
   }
-  const crop = spine ? await band(best.jpeg, lines) : best.jpeg;
+  let crop = best.jpeg, cutInfo = null;
+  if (spine) ({ crop, info: cutInfo } = await spineCut(best.jpeg, lines));
+  if (cutInfo) await step('spine-cut', { note: 'this spine turned level for its own lean; its edges found as straight lines at any angle; the neighbour beyond them painted grey', ...cutInfo }, { image: best.jpeg, crop });
   await report('kept', { crop });
   return { ...(best.read ?? { title, author: null, isbn: null, quality: 'medium' }), crop, verified: true, at: here() };
 }
@@ -556,7 +569,8 @@ async function splitByLines(tries) {
   for (const [k, g] of groups.slice(0, 4).entries()) {
     await scope(`band ${k + 1}`, async () => {
       const text = g.map((b) => b.text).join(' ');
-      const piece = await band(x.jpeg, all.map((b) => ({ ...b, score: g.includes(b) ? 1 : 0 })));
+      const { crop: piece, info: cutInfo } = await spineCut(x.jpeg, all.map((b) => ({ ...b, score: g.includes(b) ? 1 : 0 })));
+      if (cutInfo) await step('spine-cut', { note: 'this spine turned level for its own lean; its edges found as straight lines at any angle; the neighbour beyond them painted grey', ...cutInfo }, { image: x.jpeg, crop: piece });
       const line = await generate(piece, SPINE_PROMPT, 80);
       const read = /^NONE\b/i.test(line.trim()) ? null : parseBooks(line.trim().split('\n')[0])[0] ?? null;
       const score = read ? Math.max(overlap(read.title, text), 0.8 * overlap(read.author, text)) : 0;
@@ -631,6 +645,126 @@ export async function band(jpeg, lines) {
   const top = Math.max(0, Math.floor(y1)), height = Math.min(H, Math.ceil(y2)) - top;
   if (height < 12) return jpeg;
   return sharp(jpeg).extract({ left: 0, top, width: W, height }).jpeg({ quality: 90 }).toBuffer();
+}
+
+// The final cut of one spine at its own angle. The cut-out was turned level for the lean of
+// its whole group, but each book leans a little its own way, and a neighbour that leans
+// differently leaves a slanted edge that no level cut can follow. So: (1) the lean of this
+// spine's own print is measured and the picture turned to make it level; (2) above and below
+// the print, the edge where this spine ends is searched for as a straight line at any angle
+// up to ±6° (the strongest colour change along a line that does not cross the print);
+// (3) the cut takes in both lines, and what lies beyond them (the neighbour's wedge) is
+// painted light grey. A side with no clear line falls back to the level cut of band().
+const EDGE_MIN = 40; // mean colour change across a line (sum of R, G, B) that counts as an edge
+export async function spineCut(jpeg, lines) {
+  const hits = lines.filter((b) => b.score >= 0.4).sort((a, b) => b.score - a.score);
+  if (!hits.length) return { crop: jpeg, info: null };
+  const first = hits[0].bbox;
+  const lineH = first[3] - first[1];
+  const mine = hits.filter((b) => b.bbox[1] < first[3] + lineH * 0.5 && b.bbox[3] > first[1] - lineH * 0.5);
+  const ux1 = Math.max(0, Math.min(...mine.map((b) => b.bbox[0]))), ux2 = Math.max(...mine.map((b) => b.bbox[2]));
+  let y1 = Math.min(...mine.map((b) => b.bbox[1])), y2 = Math.max(...mine.map((b) => b.bbox[3]));
+  const { width: W, height: H } = await sharp(jpeg).metadata();
+  const th = y2 - y1;
+  if (th < 6 || ux2 - ux1 < 30) return { crop: await band(jpeg, lines), info: null };
+
+  // (1) This spine's own lean, from its print. The print alone can mislead (a slanted
+  // ornament, letters' own strokes), so the cut is tried both as it is and turned by that
+  // lean, and the one whose edges come out stronger and more level is kept.
+  let measured = 0;
+  try {
+    const txt = await sharp(jpeg).extract({ left: Math.round(ux1), top: Math.max(0, Math.round(y1)), width: Math.round(Math.min(W, ux2) - ux1), height: Math.round(Math.min(H, y2) - Math.max(0, y1)) }).toBuffer();
+    measured = await dominantTilt(txt);
+  } catch { /* level as it is */ }
+  if (Math.abs(measured) < 0.7 || Math.abs(measured) > 12) measured = 0;
+
+  const attempt = async (lean) => {
+    let img = jpeg, W2 = W, H2 = H;
+    if (lean) {
+      const turned = await sharp(jpeg).rotate(-lean, { background: '#ffffff' }).toBuffer({ resolveWithObject: true });
+      img = turned.data; W2 = turned.info.width; H2 = turned.info.height;
+    }
+    // All the print on this spine's rows (title, author, publisher) is kept whole: its boxes in
+    // the level picture. A slanted line of print filled a taller box than its own height.
+    const tan = Math.abs(Math.tan(lean * Math.PI / 180));
+    const level = ([a, b, c, d]) => {
+      const [cx0, cy0] = lean ? rotatePoint([(a + c) / 2, (b + d) / 2], W, H, -lean) : [(a + c) / 2, (b + d) / 2];
+      const hw = (c - a) / 2 * Math.cos(lean * Math.PI / 180), hh = Math.max((d - b) * 0.5, (d - b) - (c - a) * tan) / 2;
+      return [cx0 - hw, cy0 - hh, cx0 + hw, cy0 + hh];
+    };
+    const print = lines.filter((b) => mine.includes(b) || Math.min(b.bbox[3], y2) - Math.max(b.bbox[1], y1) > (b.bbox[3] - b.bbox[1]) * 0.5).map((b) => level(b.bbox));
+    const ty1 = Math.min(...print.map((b) => b[1])), ty2 = Math.max(...print.map((b) => b[3]));
+    const { data } = await sharp(img).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const px = (x, y, c) => data[(y * W2 + x) * 3 + c];
+    const cx = W2 / 2;
+    // (2) The best straight edge on one side of the print.
+    const search = (side, margin) => {
+      let best = null;
+      const edgeY = side < 0 ? ty1 : ty2;
+      for (let deg = -6; deg <= 6; deg += 0.5) {
+        const slope = Math.tan(deg * Math.PI / 180);
+        // From inside the OCR box (a slanted edge can cross the middle there) to well outside.
+        for (let d = -Math.round(th * margin); d <= th * 0.9; d++) {
+          const y0 = edgeY + side * d;
+          const at = (x) => y0 + (x - cx) * slope;
+          // Never through the print: over each line of print the edge stays clear of it
+          // (Surya's boxes run beyond the letters: their outer `margin` may be crossed).
+          if (print.some((b) => { const m = (b[3] - b[1]) * margin; return side < 0 ? Math.max(at(b[0]), at(b[2])) > b[1] + m : Math.min(at(b[0]), at(b[2])) < b[3] - m; })) continue;
+          let sum = 0, n = 0, all = 0;
+          for (let x = 1; x < W2 - 1; x += 3) {
+            all++;
+            const y = Math.round(at(x));
+            if (y < 3 || y > H2 - 4) continue;
+            let dd = 0;
+            for (let c = 0; c < 3; c++) dd += Math.abs(px(x, y - 2, c) - px(x, y + 2, c));
+            sum += dd; n++;
+          }
+          if (n < all * 0.6) continue;
+          const strength = sum / n;
+          // The nearer and the more level edge, all else equal (this spine is level now).
+          const score = strength * (1 - 0.3 * Math.max(0, d) / (th * 0.9)) * (1 - Math.abs(deg) / 18);
+          if (!best || score > best.score) best = { score, strength, deg, y0, slope };
+        }
+      }
+      return best && best.strength >= EDGE_MIN ? best : null;
+    };
+    // A neighbour's slanted edge can come within a few pixels of this spine's letters: it may
+    // reach deeper into the OCR box only when it is far the clearest edge there.
+    const edge = (side) => {
+      const safe = search(side, 0.12), close = search(side, 0.45);
+      return close && close.strength >= 150 && (!safe || close.score >= 2 * safe.score) ? close : safe;
+    };
+    let top = edge(-1), bottom = edge(1);
+    // Edges far apart in angle are not both right (a spine's sides are nearly parallel, though
+    // a neighbour's edge may slant): the clearer one is kept, the other side cut level.
+    if (top && bottom && Math.abs(top.deg - bottom.deg) > 3) { if (top.score >= bottom.score) bottom = null; else top = null; }
+    const score = (top?.score ?? 0) + (bottom?.score ?? 0);
+    return { lean, W2, H2, px, cx, ty1, ty2, top, bottom, score };
+  };
+  const tries = [await attempt(0)];
+  if (measured) tries.push(await attempt(measured));
+  const pick = tries.sort((p, q) => q.score - p.score)[0];
+  const { lean, W2, H2, px, cx, ty1, ty2, top, bottom } = pick;
+  if (!pick.score) return { crop: await band(jpeg, lines), info: { lean: Math.round(measured * 10) / 10, top: null, bottom: null, note: 'no clear edge: level cut' } };
+  // A side without a clear edge: level, a third of the print's height out (as band() would).
+  const tth = ty2 - ty1;
+  const lineAt = (e, fallback) => (e ? (x) => e.y0 + (x - cx) * e.slope : () => fallback);
+  const yTop = lineAt(top, ty1 - tth * 0.3), yBot = lineAt(bottom, ty2 + tth * 0.3);
+  const r0 = Math.max(0, Math.floor(Math.min(yTop(0), yTop(W2 - 1))));
+  const r1 = Math.min(H2, Math.ceil(Math.max(yBot(0), yBot(W2 - 1))));
+  if (r1 - r0 < 12) return { crop: await band(jpeg, lines), info: null };
+  // (3) Only this spine: beyond its edges, light grey.
+  const out = Buffer.alloc(W2 * (r1 - r0) * 3);
+  for (let y = r0; y < r1; y++) {
+    for (let x = 0; x < W2; x++) {
+      const o = ((y - r0) * W2 + x) * 3;
+      const outside = y < yTop(x) || y > yBot(x);
+      for (let c = 0; c < 3; c++) out[o + c] = outside ? 236 : px(x, y, c);
+    }
+  }
+  const crop = await sharp(out, { raw: { width: W2, height: r1 - r0, channels: 3 } }).jpeg({ quality: 90 }).toBuffer();
+  const info = { lean: Math.round(lean * 10) / 10, top: top && { deg: top.deg, strength: Math.round(top.strength) }, bottom: bottom && { deg: bottom.deg, strength: Math.round(bottom.strength) } };
+  return { crop, info };
 }
 
 // Books on a public shelf lean, and an upright box around a leaning spine takes in its
