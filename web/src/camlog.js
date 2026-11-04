@@ -71,8 +71,45 @@ async function cameraInfo(track) {
   return r;
 }
 
-// kind: shelf | covers | stack | barcode. info: anything fixed for the session (screen, limits).
+// Beacons and keepalive requests carry at most 64 KB: a long session's log is trimmed
+// (the oldest photos and events go first) to fit.
+const LIMIT = 60_000;
+function fit(o) {
+  let body = JSON.stringify(o);
+  const st = o.stats;
+  while (body.length > LIMIT && (st.photos.length || st.events.length || st.books.length)) {
+    for (const k of ['events', 'photos', 'books']) if (st[k].length) { st.trimmed = { ...st.trimmed, [k]: (st.trimmed?.[k] ?? 0) + Math.ceil(st[k].length / 4) }; st[k] = st[k].slice(Math.ceil(st[k].length / 4)); }
+    body = JSON.stringify(o);
+  }
+  if (body.length > LIMIT) { o.device = null; o.camera = null; body = JSON.stringify(o); }
+  return body;
+}
+// Sent as a beacon (survives the page closing). A log that could not go is kept on the
+// phone and sent with the next camera session: on 3 Nov 2026 a covers session's log was
+// lost (it was sent only after the photos were saved, and the hidden page was frozen
+// before that).
+const PENDING = 'seferehov:camlog-pending';
+function send(body) {
+  try {
+    if (navigator.sendBeacon?.('/api/camera-log', new Blob([body], { type: 'application/json' }))) return;
+  } catch {}
+  keep(body);
+  fetch('/api/camera-log', { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: body.length < LIMIT, credentials: 'same-origin' })
+    .then((r) => { if (r.ok) unkeep(body); }).catch(() => {});
+}
+function pending() { try { return JSON.parse(localStorage.getItem(PENDING) ?? '[]'); } catch { return []; } }
+function keep(body) { try { localStorage.setItem(PENDING, JSON.stringify([...pending(), body].slice(-5))); } catch {} }
+function unkeep(body) { try { localStorage.setItem(PENDING, JSON.stringify(pending().filter((b) => b !== body))); } catch {} }
+function sendPending() {
+  for (const body of pending()) {
+    fetch('/api/camera-log', { method: 'POST', headers: { 'content-type': 'application/json' }, body, credentials: 'same-origin' })
+      .then((r) => { if (r.ok || r.status === 400) unkeep(body); }).catch(() => {});
+  }
+}
+
+// kind: shelf | covers | stack | barcode | capture. info: anything fixed for the session (screen, limits).
 export function cameraLog(kind, info = {}) {
+  sendPending();
   const started = Date.now();
   const id = sessionId();
   const s = { ...info, sid: id, version: __APP_VERSION__, build: __APP_BUILD__, speed: new Array(SPEEDS.length + 1).fill(0), lost: 0, ticks: 0, alignMs: 0,
@@ -93,11 +130,7 @@ export function cameraLog(kind, info = {}) {
     s.ended = how;
     s.alignMs = s.ticks ? +(s.alignMs / s.ticks).toFixed(1) : 0;
     if (s.ms < 2000 && !s.openError) return; // a camera that would not open counts, however short
-    const body = JSON.stringify({ kind, sid: id, stats: s, device: dev, camera: cam });
-    try {
-      if (navigator.sendBeacon?.('/api/camera-log', new Blob([body], { type: 'application/json' }))) return;
-    } catch {}
-    fetch('/api/camera-log', { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true, credentials: 'same-origin' }).catch(() => {});
+    send(fit({ kind, sid: id, stats: s, device: dev, camera: cam }));
   }
 
   const at = () => Date.now() - started;

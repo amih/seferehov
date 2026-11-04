@@ -1,5 +1,5 @@
 // How far the camera moved between two tiny grey copies of the picture (same size): the
-// shift that lines them up best. Used by the shelf camera (burst.js) for the phone's
+// shift that lines them up best. Used by the free-style camera (capture.js) for the phone's
 // speed, and by the covers camera (shots.js) to tell moving on to the next book in a
 // row from turning a book over in the hand.
 export const R = 10; // largest shift looked for per tick; faster = moving on / lost

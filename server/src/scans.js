@@ -22,7 +22,7 @@ import { promisify } from 'node:util';
 
 // Raw uploads (may carry GPS in EXIF) live outside the public uploads folder and
 // are deleted once read. Only re-encoded thumbnails go to uploads/.
-const MEDIA_DIR = resolve(process.env.SCAN_DIR || join(config.uploadDir, '..', 'scan-media'));
+export const MEDIA_DIR = resolve(process.env.SCAN_DIR || join(config.uploadDir, '..', 'scan-media'));
 // Re-encoded copies (no EXIF/GPS) of what was read and of the photos and video as sent
 // (orig-N), kept a while so a better reader can go over them again (scripts/rescan.js).
 const KEEP_DIR = join(MEDIA_DIR, '..', 'scan-keep');
@@ -297,7 +297,7 @@ async function emailFinished() {
   }
 }
 
-function wake() {
+export function wake() {
   if (busy) return;
   busy = true;
   drain().catch((err) => log.error({ err }, 'scan worker')).finally(() => { busy = false; });
@@ -462,8 +462,12 @@ async function saveCropThumb(jpeg, scanId, n) {
 async function processCover(scan, { dry = false } = {}) {
   const dir = join(MEDIA_DIR, scan.id);
   await setProgress(scan.id, { step: 'reading', done: 0, total: 1 });
+  // A book of which only the back cover was photographed (free-style capture): the back
+  // is read in the front's place (its barcode, and the title its blurb often names).
   const covers = scan.media.filter((m) => m.type !== 'extra');
+  const backOnly = !covers.some((m) => m.path === '0.img');
   let [front, back = null] = await Promise.all(covers.map((m) => readFile(join(dir, m.path))));
+  if (backOnly) [front, back] = [front, front];
   const extraOf = (side) => Promise.all(scan.media.filter((m) => m.path.startsWith(`x-${side}-`)).map((m) => readFile(join(dir, m.path))));
   const extras = { front: await extraOf('front'), back: await extraOf('back') };
   await step('input', { note: 'front and back cover photos as sent', code_scanned: scan.book_code ?? null, extra_frames: extras.front.length + extras.back.length }, { front, back });
@@ -471,7 +475,7 @@ async function processCover(scan, { dry = false } = {}) {
   front = await scope('front', () => cropCover(front)).catch(() => null) ?? front;
   if (back) back = await scope('back', () => cropCover(back)).catch(() => null) ?? back;
   const frame = dry ? null : await saveFrameThumb(front, scan.id, 0);
-  const backPath = back && !dry ? await saveFrameThumb(back, scan.id, 1) : null;
+  const backPath = backOnly ? frame : back && !dry ? await saveFrameThumb(back, scan.id, 1) : null;
   if (!dry) for (const [i, b] of [front, back].entries()) if (b) await keepCopy(b, scan.id, i).catch((err) => log.warn({ err, scan: scan.id }, 'keep copy failed'));
   if (!dry) for (const [i, b] of [...extras.front, ...extras.back].entries()) await keepCopy(b, scan.id, `extra-${i}`).catch(() => {});
   const read = await readCover(front, back, extras);
@@ -513,7 +517,7 @@ async function processCover(scan, { dry = false } = {}) {
     `INSERT INTO scan_items(scan_id, title, author, isbn13, danacode, book_id, via, matched, frame_path, back_path, quality, lookup_id, sources)
      VALUES ($1, $2, $3, $4, $5, $6, 'vision', $7, $8, $9, $10, $11, '{cover}')`,
     [scan.id, title, read.author ?? book?.authors?.[0] ?? null, book?.isbn13 ?? isbn, danacode, book?.id ?? null, !!book, frame, backPath,
-      book ? 'high' : read.quality === 'low' ? 'low' : 'medium', lookupId],
+      book ? 'high' : read.quality === 'low' || backOnly ? 'low' : 'medium', lookupId],
   );
 }
 

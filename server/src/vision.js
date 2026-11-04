@@ -264,20 +264,23 @@ export async function coverCorners(buffer) {
   return pts.length === 4 ? pts : null;
 }
 
+// jpeg: one picture, or several (the model sees them in order: "image 1", "image 2").
 export async function generate(jpeg, prompt, numPredict) {
+  const images = Array.isArray(jpeg) ? jpeg : [jpeg];
   const t0 = Date.now();
   const res = await fetch(`${config.vision.url}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: config.vision.model, prompt, images: [jpeg.toString('base64')], stream: false, think: false,
+      model: config.vision.model, prompt, images: images.map((b) => b.toString('base64')), stream: false, think: false,
       keep_alive: '3m', options: { num_ctx: 8192, num_predict: numPredict, temperature: 0, repeat_penalty: 1.1 },
     }),
     signal: AbortSignal.timeout(120_000),
   });
   if (!res.ok) throw new Error(`vision ${res.status}`);
   const answer = (await res.json()).response ?? '';
-  await step('model', { model: config.vision.model, prompt, answer, ms: Date.now() - t0 }, { image: jpeg }, { side: 1000 });
+  await step('model', { model: config.vision.model, prompt, answer, ms: Date.now() - t0 },
+    Object.fromEntries(images.map((b, i) => [i ? `image${i + 1}` : 'image', b])), { side: 1000 });
   return answer;
 }
 

@@ -3,8 +3,7 @@ import { navigate } from '../nav.js';
 import { esc, timeAgo, toast, confirmDialog } from '../ui.js';
 import { t, lang } from '../i18n.js';
 import { placeBook, ownerLabel } from '../mybooks.js';
-import { bookShots, coversTarget, bookSentLine } from '../shots.js';
-import { burstShots } from '../burst.js';
+import { captureShots, captureFiles } from '../capture.js';
 import { offerDialog, offerLine } from '../offers.js';
 import { rememberList } from '../pager.js';
 import { bookFacts, GENRES, LANGUAGES } from '../genres.js';
@@ -115,10 +114,9 @@ export default async function myBooksView(root) {
   showLists();
 }
 
-// Adding books: photograph the front and the back, book after book (a barcode the camera
-// catches adds the book at once; anything else is read from the covers), or the shelves
-// with photos taken by themselves (burst.js), read for spines. All but caught barcodes
-// are read in the background and wait in the approval queue, to confirm or fix.
+// Adding books: one camera for everything (capture.js) — shelves, front covers, back
+// covers, in any order. The server sorts the photos and pairs the covers; every book
+// found waits in the approval queue, to confirm or fix.
 export async function addMyBooksView(root) {
   const me = await getMe();
   if (!me) return navigate('/login?next=/books/add', { replace: true });
@@ -127,13 +125,13 @@ export async function addMyBooksView(root) {
     <p><a href="/books">${t('mybooks.back')}</a></p>
     <h1>${t('mybooks.add_title')}</h1>
     <div class="big-actions">
-      <button class="big-btn primary" data-shots="start"><span>📕</span><b>${t('mybooks.add_big')}</b><small>${t('mybooks.add_big_note')}</small></button>
-      <button class="big-btn" id="burst"><span>📸</span><b>${t('mybooks.shelf_big')}</b><small>${t('add3.burst_note')}</small></button>
+      <button class="big-btn primary" id="capture"><span>📸</span><b>${t('capture.start')}</b><small>${t('capture.start_note')}</small></button>
+      <label class="big-btn"><span>🖼️</span><b>${t('capture.files')}</b><small>${t('capture.files_note')}</small>
+        <input type="file" accept="image/*" multiple hidden id="files"></label>
     </div>
     <p class="note">${t('mybooks.add_how')}</p>
     <p class="muted small">💡 ${t('mybooks.add_tips')}</p>
-    <div class="shots" id="shots" hidden></div>
-    <div class="shots" id="burst-panel" hidden></div>
+    <div class="shots" id="capture-panel" hidden></div>
     <p id="queue-link"></p>
   </section>`;
   const queueLink = root.querySelector('#queue-link');
@@ -141,15 +139,15 @@ export async function addMyBooksView(root) {
     queueLink.innerHTML = c.open + c.later || c.processing ? `<a class="btn" href="/queue">📥 ${t('queue.link', c)}</a>` : '';
   }).catch(() => {});
   showQueue();
-  // Saved on the phone as taken and sent from there (queue.js); a known barcode goes
-  // straight to My books, anything else is read on the server and waits in the queue.
-  const shots = bookShots({ on: root, panel: root.querySelector('#shots'), onStart: () => burst.stop(),
-    target: coversTarget({ owner: 'mine', direct: 'mine' }), sent: (data) => { showQueue(); return bookSentLine(data); } });
-  const burst = burstShots({ screen: 'home', panel: root.querySelector('#burst-panel'),
-    request: () => ({ url: '/api/my-books/scans', fields: { owner: 'mine', lang: lang() } }), onSent: () => { showQueue(); return null; } });
-  root.querySelector('#burst').onclick = async () => {
-    shots.stop();
-    if (!await burst.start()) toast(t('burst.no_camera'));
+  const request = () => ({ owner: 'mine', lang: lang() });
+  root.querySelector('#files').onchange = async (e) => {
+    const n = await captureFiles(e.target.files, request);
+    e.target.value = '';
+    if (n) { toast(t('capture.sent', { n })); showQueue(); }
   };
-  return () => { shots.stop(); burst.stop(false); };
+  const cam = captureShots({ screen: 'home', panel: root.querySelector('#capture-panel'), request, onEnd: showQueue });
+  root.querySelector('#capture').onclick = async () => {
+    if (!await cam.start()) root.querySelector('#files').click();
+  };
+  return () => { cam.stop(false); };
 }

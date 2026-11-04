@@ -26,6 +26,7 @@ import fixRoutes, { startFixWorker } from './fixes.js';
 import { startOcrWorker } from './ocr.js';
 import clientErrorRoutes from './clienterrors.js';
 import cameraLogRoutes from './camlog.js';
+import captureRoutes, { startCaptureWorker } from './capture.js';
 import { uploadReceipts } from './receipts.js';
 
 const app = Fastify({ logger: true, trustProxy: '127.0.0.1', bodyLimit: 1024 * 1024 });
@@ -71,6 +72,7 @@ await app.register(pushRoutes);
 await app.register(fixRoutes);
 await app.register(clientErrorRoutes);
 await app.register(cameraLogRoutes);
+await app.register(captureRoutes);
 
 app.get('/api/health', async () => ({ ok: true, web: deployed?.version ?? null }));
 
@@ -100,6 +102,7 @@ app.setNotFoundHandler(async (req, reply) => {
 
 await app.listen({ port: config.port, host: config.host });
 startScanWorker(app.log);
+startCaptureWorker(app.log);
 startAdminNotifier(app.log);
 startWatchNotifier(app.log);
 startOcrWorker(app.log);

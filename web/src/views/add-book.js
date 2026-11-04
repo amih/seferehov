@@ -1,17 +1,14 @@
 import { api, getMe } from '../api.js';
-import { enqueue } from '../queue.js';
-import { trackLine } from '../outbox-ui.js';
 import { navigate } from '../nav.js';
-import { esc, getPosition, shrinkImage, noStringsNote } from '../ui.js';
+import { esc, getPosition, noStringsNote, toast } from '../ui.js';
 import { t, lang } from '../i18n.js';
 import { placeBook } from '../mybooks.js';
-import { bookShots, coversTarget, bookSentLine } from '../shots.js';
-import { burstShots } from '../burst.js';
+import { captureShots, captureFiles } from '../capture.js';
 
-// Three ways in: shelf photos taken by themselves while the reader moves along the
-// shelves (burst.js), photos from the camera app, or one book's front and back covers
-// (the live camera also catches its barcode). Photos upload in the background so the
-// next ones can be taken right away; every book found waits in the approval queue.
+// One camera for everything (capture.js): shelves, front covers and back covers, in any
+// order; the server sorts the photos and pairs the covers. Or photos from the camera app,
+// sorted the same way. Every photo is saved on the phone and sent by itself; every book
+// found waits in the approval queue.
 export default async function addBookView(root, [code], query) {
   const me = await getMe();
   if (!me) return navigate(`/login?next=/l/${code}/add`, { replace: true });
@@ -23,15 +20,12 @@ export default async function addBookView(root, [code], query) {
     <h1>${t('addbook.title')}</h1>
     <div class="seg" id="mode"><button data-k="seen">${t('addbook.mode_seen')}</button><button data-k="added">${t('addbook.mode_added')}</button></div>
     <div class="big-actions">
-      <button class="big-btn primary" id="burst"><span>📸</span><b>${t('add3.burst')}</b><small>${t('add3.burst_note')}</small></button>
-      <label class="big-btn"><span>📷</span><b>${t('add3.photo')}</b><small>${t('add3.photo_note')}</small>
-        <input type="file" accept="image/*" capture="environment" multiple hidden id="shelf"></label>
-      <button class="big-btn" data-shots="start"><span>📕</span><b>${t('shots.start')}</b><small>${t('shots.start_note')}</small></button>
+      <button class="big-btn primary" id="capture"><span>📸</span><b>${t('capture.start')}</b><small>${t('capture.start_note')}</small></button>
+      <label class="big-btn"><span>🖼️</span><b>${t('capture.files')}</b><small>${t('capture.files_note')}</small>
+        <input type="file" accept="image/*" multiple hidden id="files"></label>
     </div>
-    <div class="shots" id="burst-panel" hidden></div>
-    <div class="shots" id="shots" hidden></div>
+    <div class="shots" id="capture-panel" hidden></div>
     <div class="from-mine" id="from-mine" hidden></div>
-    <ul class="uploads" id="uploads"></ul>
     <p id="queue-link"></p>
     <p class="muted small">${t('addbook.shelf_lead')}</p>
     ${noStringsNote()}
@@ -75,35 +69,15 @@ export default async function addBookView(root, [code], query) {
   }
   showMine();
 
-  // Every photo is saved on the phone first and sent from there (queue.js), one line each.
-  const list = root.querySelector('#uploads');
-  const scanRequest = () => ({ url: `/api/locations/${code}/scans`, fields: { kind: mode, lang: lang(), lat: pos?.lat ?? '', lon: pos?.lon ?? '' } });
-  const sentShelf = () => { showQueue(); return null; };
-  root.querySelector('#shelf').onchange = async (e) => {
-    const picked = [...e.target.files].slice(0, 8);
+  const request = () => ({ code, kind: mode, lang: lang(), lat: pos?.lat ?? '', lon: pos?.lon ?? '' });
+  root.querySelector('#files').onchange = async (e) => {
+    const n = await captureFiles(e.target.files, request);
     e.target.value = '';
-    if (!picked.length) return;
-    const files = {};
-    for (const [i, f] of picked.entries()) files[`photo${i}`] = await shrinkImage(f, 2400);
-    photos += picked.length;
-    const { url, fields } = scanRequest();
-    const id = await enqueue(url, fields, files, 'shelf');
-    const li = document.createElement('li');
-    list.prepend(li);
-    trackLine(li, id, { label: picked.length === 1 ? t('add3.photo_n', { n: photos }) : t('add3.photos_n', { n: picked.length }), sent: sentShelf });
+    if (n) { photos += n; toast(t('capture.sent', { n })); showQueue(); }
   };
-
-  // The photos the camera takes by itself: saved as taken, sent in batches (burst.js).
-  const burst = burstShots({ panel: root.querySelector('#burst-panel'), request: () => { photos++; return scanRequest(); }, onSent: sentShelf });
-  root.querySelector('#burst').onclick = async () => {
-    shots.stop();
-    if (!await burst.start()) root.querySelector('#shelf').click();
+  const cam = captureShots({ panel: root.querySelector('#capture-panel'), request, onEnd: (n) => { photos += n; showQueue(); } });
+  root.querySelector('#capture').onclick = async () => {
+    if (!await cam.start()) root.querySelector('#files').click();
   };
-
-  // Front and back photos of one book: a known barcode is reported here at once; anything
-  // else is read from the covers on the server and waits in the queue.
-  const shots = bookShots({ on: root, panel: root.querySelector('#shots'), onStart: () => burst.stop(),
-    target: (x) => coversTarget({ code, kind: mode, pos: () => pos, direct: 'sighting' })(x),
-    sent: (data) => { showQueue(); return bookSentLine(data); } });
-  return () => { shots.stop(); burst.stop(false); };
+  return () => { cam.stop(false); };
 }

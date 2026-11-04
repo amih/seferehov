@@ -765,11 +765,13 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
   const onHidden = () => { if (document.visibilityState === 'hidden' && stream) stop({ hidden: true }); };
   // ✕, the screen going off, leaving the screen: the camera closes and everything taken
   // is sent (no question asked). The lines of what was sent stay.
+  // The log goes before anything is awaited: a hidden page may be frozen at any await
+  // (3 Nov 2026: a covers session's log never arrived).
   async function stop({ hidden = false } = {}) {
     stopCamera();
-    await finish();
     log?.end(hidden ? 'hidden' : 'done');
     log = null;
+    await finish();
     stack = null;
     const done = panel.querySelector('.shot-done');
     panel.innerHTML = '';

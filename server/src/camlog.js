@@ -4,7 +4,7 @@
 import { many, q } from './db.js';
 import { requireUser } from './auth.js';
 
-const KINDS = new Set(['shelf', 'covers', 'stack', 'barcode']);
+const KINDS = new Set(['shelf', 'covers', 'stack', 'barcode', 'capture']);
 const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : null);
 
 export default async function cameraLogRoutes(app) {
