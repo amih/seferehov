@@ -7,7 +7,7 @@ import { config } from './config.js';
 import { one, many, q, tx } from './db.js';
 import { requireUser } from './auth.js';
 import { lookupIsbn, lookupTitle, findOrCreateBook } from './books.js';
-import { readBooks, readCover, readIsbnBarcodes, normTitle, titleSimilarity, coverAgrees, authorsAgree } from './vision.js';
+import { readBooks, sharpness, BLURRY, readCover, readIsbnBarcodes, normTitle, titleSimilarity, coverAgrees, authorsAgree } from './vision.js';
 import { pickFrames } from './frames.js';
 import { cropCover } from './covers.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
@@ -549,6 +549,10 @@ async function processScan(scan, { dry = false } = {}) {
     }
   }
   if (!images.length) throw new Error('no usable frames');
+  // A blurred photo (taken while the phone moved) reads nothing and only adds misreadings;
+  // skipped when the scan has a sharp one to read instead.
+  for (const im of images) im.sharp = await sharpness(im.buffer).catch(() => null);
+  const anySharp = images.some((im) => im.sharp >= BLURRY);
 
   // Dedupe across photos/frames. The same spine is read a little differently in each
   // frame, so readings merge when one holds the other ("SELF AND IDENTITY" ≈ "Handbook
@@ -578,13 +582,17 @@ async function processScan(scan, { dry = false } = {}) {
     }
     found.push({ ...item, key, keys: new Set([key]), frames: new Set([i]), reads: new Map(item.title ? [[item.title, 1 + (item.verified ? 0.5 : 0)]] : []) });
   };
-  for (const [i, { buffer: buf, fromVideo, t }] of images.entries()) {
+  for (const [i, { buffer: buf, fromVideo, t, sharp: sharpScore }] of images.entries()) {
     if (!dry && i) await letCoversIn();
     await setProgress(scan.id, { step: 'reading', done: i, total: images.length });
     const frame = dry ? null : await saveFrameThumb(buf, scan.id, i);
     if (!dry) await keepCopy(buf, scan.id, i).catch((err) => log.warn({ err, scan: scan.id }, 'keep copy failed'));
     await scope(fromVideo ? `frame ${i + 1}` : `photo ${i + 1}`, async () => {
-      await step('image', { from_video: fromVideo, t: t ?? null }, { image: buf });
+      await step('image', { from_video: fromVideo, t: t ?? null, sharpness: sharpScore, blurry_below: BLURRY }, { image: buf });
+      if (anySharp && sharpScore != null && sharpScore < BLURRY) {
+        await step('blurry', { note: `too blurred to read (sharpness ${sharpScore}, under ${BLURRY}); the scan's sharper photos are read`, sharpness: sharpScore });
+        return;
+      }
       const codes = await readIsbnBarcodes(buf);
       await step('barcodes', { codes });
       for (const isbn of codes) add(`isbn:${isbn}`, { isbn, via: 'barcode', frame, fromVideo, at: here() }, i);

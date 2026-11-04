@@ -207,7 +207,8 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
     const fields = { ...request(), session: sid, seq, at, meta: JSON.stringify(meta) };
     saving = saving.then(async () => {
       const t0 = performance.now();
-      const blob = await shrinkImage(await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.92)), 2400);
+      // Full size, encoded once: spines are thin, the server needs every pixel to read them.
+      const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9));
       if (rec) { rec.encMs = Math.round(performance.now() - t0); rec.kb = Math.round(blob.size / 1024); }
       panel.querySelector('.burst-thumbs')?.insertAdjacentHTML('afterbegin', `<img src="${esc(URL.createObjectURL(blob))}" alt="">`);
       const id = await enqueue('/api/captures', fields, { photo: blob }, 'capture', { session: lg?.id });
@@ -278,7 +279,7 @@ export async function captureFiles(files, request) {
   const sid = sessionId();
   const picked = [...files].slice(0, 40);
   for (const [seq, f] of picked.entries()) {
-    await enqueue('/api/captures', { ...request(), session: sid, seq, at: '', meta: JSON.stringify({ how: 'file' }) }, { photo: await shrinkImage(f, 2400) }, 'capture');
+    await enqueue('/api/captures', { ...request(), session: sid, seq, at: '', meta: JSON.stringify({ how: 'file' }) }, { photo: await shrinkImage(f, 4000) }, 'capture');
   }
   if (picked.length) await enqueue(`/api/captures/${sid}/end`, { ...request(), n: picked.length }, {}, 'capture-end', { keepFailed: false });
   return picked.length;

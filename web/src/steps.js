@@ -19,7 +19,6 @@ function boxes(src, W, H, list, mine) {
 }
 const img = (src) => (src ? `<figure class="step-pic"><img src="${esc(src)}" alt="" loading="lazy"><figcaption class="muted small" dir="ltr"></figcaption></figure>` : '');
 
-const same = (a, b) => a && b && a.length === b.length && a.every((v, i) => v === b[i]);
 
 function stepHtml(s, n, files, ctx) {
   const pic = (key) => (s[key] ? img(files + s[key]) : '');
@@ -27,7 +26,7 @@ function stepHtml(s, n, files, ctx) {
   let body = '';
   switch (s.kind) {
     case 'image':
-      body = `<p class="small">${t('steps.image_note')}${s.from_video ? ` · ${t('steps.from_video', { t: s.t?.toFixed?.(1) ?? '' })}` : ''}</p>${pic('image')}`;
+      body = `<p class="small">${t('steps.image_note')}${s.sharpness != null ? ` · ${t('steps.sharpness', { n: s.sharpness, min: s.blurry_below })}` : ''}${s.from_video ? ` · ${t('steps.from_video', { t: s.t?.toFixed?.(1) ?? '' })}` : ''}</p>${pic('image')}`;
       break;
     case 'barcodes':
       body = `<p class="small">${s.codes?.length ? s.codes.map(esc).join(', ') : t('steps.none')}</p>`;
@@ -69,6 +68,11 @@ function stepHtml(s, n, files, ctx) {
     case 'whole-read':
       body = `<p class="small">${t('steps.whole_note')}</p>${pic('image')}<pre class="step-answer" dir="auto">${esc(s.answer?.slice(0, 1500) ?? '')}</pre>`;
       break;
+    case 'split-band':
+      body = `<p class="small">${t('steps.band_note')}</p>${pic('crop')}
+        <p class="small">OCR: <span dir="auto">${esc((s.ocr ?? []).join(' · '))}</span></p>
+        <p class="small">${t('steps.model_read')}: <b dir="auto">${esc(s.read?.title ?? '—')}</b>${s.read?.author ? ` <span class="muted" dir="auto">| ${esc(s.read.author)}</span>` : ''} · ${t('steps.score', { s: pct(s.score) })} · <b>${esc(s.verdict ?? '')}</b></p>`;
+      break;
     case 'match':
       body = `<p class="small" dir="auto">${esc(s.read ?? '')} → ${s.book ? `<b>${esc(s.book.title)}</b>${s.book.isbn13 ? ` <span class="muted">${esc(s.book.isbn13)}</span>` : ''}` : t('steps.no_catalogue')}</p><p class="small"><b>${esc(s.verdict ?? '')}</b></p>`;
       break;
@@ -93,7 +97,7 @@ export function attachSteps(root) {
     try {
       const r = await api(`/api/queue/${box.dataset.steps}/steps`);
       if (!r.steps?.length) { body.innerHTML = `<p class="muted small">${t(r.gone ? 'steps.gone' : 'steps.none_found')}</p>`; return; }
-      const cut = r.steps.find((s) => s.kind === 'cut-out' && same(s.path, r.at));
+      const cut = r.steps.find((s) => s.kind === 'cut-out');
       body.innerHTML = `${r.guessed ? `<p class="muted small">${t('steps.guessed')}</p>` : ''}<ol class="steps-list">${r.steps.map((s, k) => stepHtml(s, k + 1, r.files, { cut })).join('')}</ol>`;
       // The size of each picture as stored (the trace keeps copies of at most 1600 px).
       body.querySelectorAll('.step-pic:not(.boxed) img').forEach((im) => {

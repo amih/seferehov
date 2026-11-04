@@ -39,14 +39,18 @@ export function itemSteps(trace, { source, title, trace_at: at0 }) {
   const top = steps.filter((s) => s.path?.length === 1 && s.path[0] === photo);
   const out = top.filter((s) => KINDS_TOP.has(s.kind));
   // The detect step's model answer (boxes) sits just before it.
-  const cutOut = steps.find((s) => inside(s) && s.kind === 'cut-out');
+  const above = (st) => st.path?.length > 1 && st.path.length < at.length && st.path.every((l, k) => at[k] === l);
+  const cutOut = steps.find((s) => (inside(s) || above(s)) && s.kind === 'cut-out');
   const group = cutOut?.from?.match(/^lean group (\d+)/)?.[1];
   if (group) {
     const lean = top.filter((s) => s.kind === 'lean-group')[group - 1];
     if (lean) out.push(lean);
   }
   if (at.length === 1) out.push(...top.filter((s) => s.kind === 'whole-read'));
-  else out.push(...steps.filter(inside));
+  else {
+    // A spine read from a band of a larger cut-out: the cut-out's own steps come first.
+    out.push(...steps.filter((st) => inside(st) || above(st)));
+  }
   // The catalogue lookup and the verdict for this title.
   const want = normTitle(title ?? '');
   out.push(...steps.filter((s) => s.kind === 'match' && titleSimilarity(normTitle(s.read ?? ''), want) > 0.75).slice(-1));

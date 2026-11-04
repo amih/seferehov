@@ -41,18 +41,42 @@ export async function readBooks(buffer, { spines = true } = {}) {
   await step('merged-reads', { note: 'cut-out reads first, then the whole-image read; repeats merged', books: books.map(brief) });
   // Books only the whole-image read found: find their spine too, so the reader
   // approving them sees the straightened cut-out, not the whole shelf.
+  // The spine found is often one already cut out and read (the whole-image read misread its
+  // title): that book is then dropped, not queued a second time under the misread title.
+  // Otherwise the cut-out's own reading replaces the whole-image one.
+  let books2 = books;
   const missing = books.filter((b) => !b.crop).slice(0, MAX_SPINES);
   if (missing.length) {
     const { data: upright, info } = await sharp(buffer).rotate().toBuffer({ resolveWithObject: true });
+    const W = info.width, H = info.height;
+    const placed = books.filter((b) => b.place);
+    const gone = new Set();
     for (const b of missing) {
       try {
-        const found = await scope(`find: ${b.title}`, () => findSpine(upright, info.width, info.height, b.title));
-        if (found) Object.assign(b, { crop: found.crop, at: found.at, verified: true });
+        const found = await scope(`find: ${b.title}`, async () => {
+          const f = await findSpine(upright, W, H, b.title);
+          if (!f) return null;
+          // Same place and alike readings (a box can hold two spines, so place alone is not enough).
+          const alike = (o) => !f.read?.title || [f.read.title, f.read.author].some((x) => x && [o.title, o.author].some((y) => y && titleSimilarity(x, y) >= 0.6));
+          const twin = placed.find((o) => inPlace(o.place, f.center, W, H) && alike(o));
+          if (twin) {
+            await step('find-spine-twin', { note: 'the spine found is one already cut out and read: this whole-image reading is dropped', whole_read: b.title, same_as: twin.title });
+            return { twin };
+          }
+          return f;
+        });
+        if (found?.twin) { gone.add(b); continue; }
+        if (found) {
+          const r = found.read;
+          Object.assign(b, { crop: found.crop, at: found.at, verified: true });
+          if (r?.title) Object.assign(b, { title: r.title, author: r.author || b.author, quality: r.quality ?? b.quality });
+        }
       } catch { /* no cut-out */ }
     }
+    books2 = mergeBooks(books.filter((b) => !gone.has(b)));
   }
-  await step('frame-result', { books: books.map(brief) });
-  return books;
+  await step('frame-result', { books: books2.map(brief) });
+  return books2;
 }
 
 const brief = (b) => ({ title: b.title, author: b.author ?? null, isbn: b.isbn ?? null, quality: b.quality, verified: b.verified, crop: !!b.crop });
@@ -319,6 +343,31 @@ const cut = (img, W, H, [x1, y1, x2, y2], pad) => {
   return sharp(img).extract({ left, top, width: Math.min(W - left, Math.ceil(x2 - x1 + 2 * pad)), height: Math.min(H - top, Math.ceil(y2 - y1 + 2 * pad)) }).toBuffer();
 };
 
+// Is point p (in the upright W×H photo) on the spine at `place` (its box in the photo
+// turned by -tilt, the way readSpines cut it)?
+function inPlace({ tilt, box }, p, W, H) {
+  const [x, y] = tilt ? rotatePoint(p, W, H, -tilt) : p;
+  return x >= box[0] && x <= box[2] && y >= box[1] && y <= box[3];
+}
+
+// How sharp a photo is: the variance of the Laplacian on a grey copy of 1200 px. Measured on
+// readers' shelf photos (Nov 2026): under ~150 no spine was read at all (motion blur), from
+// ~475 most were.
+export const BLURRY = 250;
+export async function sharpness(buffer) {
+  const { data, info } = await sharp(buffer).rotate().greyscale().resize(1200, 1200, { fit: 'inside' }).raw().toBuffer({ resolveWithObject: true });
+  const { width: w, height: h } = info;
+  let n = 0, sum = 0, sum2 = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      const l = 4 * data[i] - data[i - 1] - data[i + 1] - data[i - w] - data[i + w];
+      sum += l; sum2 += l * l; n++;
+    }
+  }
+  return Math.round(sum2 / n - (sum / n) ** 2);
+}
+
 // Where a point of a W×H picture lands after sharp.rotate(deg) (clockwise, canvas grows to fit).
 export function rotatePoint([x, y], W, H, deg) {
   const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
@@ -391,6 +440,7 @@ async function findSpine(upright, W, H, title) {
   const [x1, y1, x2, y2] = m.slice(1, 5).map(Number);
   let box = [x1 * W / 1000, y1 * H / 1000, x2 * W / 1000, y2 * H / 1000];
   if (box[2] - box[0] < 10 || box[3] - box[1] < 10) return null;
+  const located = box;
   let img = upright, w = W, h = H;
   const tilt = await dominantTilt(await cut(upright, W, H, box, 4));
   if (Math.abs(tilt) >= 5) {
@@ -411,7 +461,8 @@ async function findSpine(upright, W, H, title) {
   // Surya agreed with the title (verified), or, without Surya, the vision model reads it back.
   const ok = !!read && (read.verified || (read.verified === null && sameTitle(read.title, title)));
   await step('find-spine', { note: 'a book only the whole-image read found: located by title, cut out, read back', title, tilt: Math.round(tilt * 10) / 10, verdict: ok ? 'cut-out kept' : 'no cut-out' }, { image: piece });
-  return ok ? { crop: read.crop, at: here() } : null;
+  const center = [(located[0] + located[2]) / 2, (located[1] + located[3]) / 2];
+  return ok ? { crop: read.crop, at: here(), read, center } : null;
 }
 
 // One cut-out from a shelf photo: which way up it is, what it says, and a tight
@@ -425,7 +476,7 @@ async function findSpine(upright, W, H, title) {
 // (verified: null). title: the book we are looking for (findSpine), read by the
 // vision model elsewhere.
 const ORIENT_OK = 0.5;
-export async function readCrop(img, w, h, title = null) {
+export async function readCrop(img, w, h, title = null, { split = false } = {}) {
   const spine = h > w * 1.3;
   const angles = spine ? [270, 90] : [0, 180];
   const tries = await Promise.all(angles.map(async (angle) => {
@@ -448,7 +499,10 @@ export async function readCrop(img, w, h, title = null) {
     x.score = Math.max(0, ...x.lines.map((b) => b.score));
   }
   const order = [...tries];
-  const best = tries.sort((a, b) => b.score - a.score)[0];
+  // Surya reads upside-down print too, so with a title to look for (findSpine) its lines can
+  // match both ways up equally; the way the vision model read something wins a tie (or near tie).
+  const rank = (x) => x.score + (x.read ? 0.15 : 0);
+  const best = tries.sort((a, b) => rank(b) - rank(a))[0];
   const report = (verdict, images = {}) => step('crop-read', {
     note: `vision model and Surya read it ${spine ? 'turned both ways (270° and 90°)' : 'upright and upside down'}; kept the way where Surya's lines match the model's title (score ≥ ${ORIENT_OK})`,
     looking_for: title, verdict, angle: best.angle, score: Math.round(best.score * 100) / 100,
@@ -456,12 +510,62 @@ export async function readCrop(img, w, h, title = null) {
       lines: x.lines.map((b) => ({ text: b.text, confidence: Math.round(b.confidence * 100) / 100, score: Math.round(b.score * 100) / 100 })) })),
   }, images);
   if (best.score < ORIENT_OK) {
+    // Often two spines in one box: the model read one of them, Surya the other, so they never
+    // agree. Surya's lines show where each spine's print is: cut one band per spine and read
+    // each band on its own.
+    if (split && spine) {
+      const many = await splitByLines(tries);
+      if (many.length) { await report(`split: the cut-out held ${many.length > 1 ? `${many.length} spines` : 'another spine'}, read band by band`); return many; }
+    }
     await report(best.read ? 'dropped: Surya did not confirm the reading either way up' : 'nothing read');
     return best.read ? { ...best.read, crop: null, verified: false, at: here() } : null;
   }
-  const crop = spine ? await band(best.jpeg, best.lines) : best.jpeg;
+  // Looking for a title (findSpine) that was misread: the band is cut around the lines of what
+  // the model read on this cut-out, which is the reading kept.
+  let lines = best.lines;
+  if (title && best.read) {
+    const own = best.ocr.boxes.filter((b) => b.confidence >= 0.5)
+      .map((b) => ({ ...b, score: Math.max(overlap(best.read.title, b.text), 0.8 * overlap(best.read.author, b.text)) }));
+    if (own.some((b) => b.score >= 0.4)) lines = own;
+  }
+  const crop = spine ? await band(best.jpeg, lines) : best.jpeg;
   await report('kept', { crop });
   return { ...(best.read ?? { title, author: null, isbn: null, quality: 'medium' }), crop, verified: true, at: here() };
+}
+
+// The level cut-out (one way up, as read for readCrop), cut into one band per spine along
+// Surya's lines: lines on the same rows are one spine. Each band is read by the vision model
+// and kept when Surya's lines in it say the same.
+const letterCount = (t) => (t.match(/[\p{L}\p{N}]/gu) ?? []).length;
+async function splitByLines(tries) {
+  // The way up Surya reads most surely (upside-down print comes out garbled, less sure).
+  const sure = (x) => {
+    const ls = x.ocr.boxes.filter((b) => letterCount(b.text) >= 4);
+    const n = ls.reduce((acc, b) => acc + letterCount(b.text), 0);
+    return n ? ls.reduce((acc, b) => acc + b.confidence * letterCount(b.text), 0) / n : 0;
+  };
+  const x = [...tries].sort((a, b) => sure(b) - sure(a))[0];
+  const all = x.ocr.boxes.filter((b) => b.confidence >= 0.5);
+  const strong = all.filter((b) => b.confidence >= 0.7 && letterCount(b.text) >= 4).sort((a, b) => a.bbox[1] - b.bbox[1]);
+  const groups = [];
+  for (const b of strong) {
+    const g = groups.find((gr) => gr.some((o) => Math.min(o.bbox[3], b.bbox[3]) - Math.max(o.bbox[1], b.bbox[1]) > 0.5 * Math.min(o.bbox[3] - o.bbox[1], b.bbox[3] - b.bbox[1])));
+    if (g) g.push(b); else groups.push([b]);
+  }
+  const out = [];
+  for (const [k, g] of groups.slice(0, 4).entries()) {
+    await scope(`band ${k + 1}`, async () => {
+      const text = g.map((b) => b.text).join(' ');
+      const piece = await band(x.jpeg, all.map((b) => ({ ...b, score: g.includes(b) ? 1 : 0 })));
+      const line = await generate(piece, SPINE_PROMPT, 80);
+      const read = /^NONE\b/i.test(line.trim()) ? null : parseBooks(line.trim().split('\n')[0])[0] ?? null;
+      const score = read ? Math.max(overlap(read.title, text), 0.8 * overlap(read.author, text)) : 0;
+      const ok = score >= ORIENT_OK;
+      await step('split-band', { note: 'one spine\'s band, cut along Surya\'s lines and read on its own', angle: x.angle, ocr: g.map((b) => b.text), read: read && { title: read.title, author: read.author }, score: Math.round(score * 100) / 100, verdict: ok ? 'kept' : 'dropped: the model and Surya disagree' }, { crop: piece });
+      if (ok) out.push({ ...read, crop: piece, verified: true, at: here() });
+    });
+  }
+  return out;
 }
 
 // How much of `want` shows up in `text`: the share of want's letter pairs found in it.
@@ -479,7 +583,7 @@ export function overlap(want, text) {
 // The one spine in a level cut-out: the rows of the title (and author) lines, a little
 // more above and below for the spine's own edges, cut at the strongest straight edge
 // there (where the next spine starts).
-async function band(jpeg, lines) {
+export async function band(jpeg, lines) {
   const hits = lines.filter((b) => b.score >= 0.4).sort((a, b) => b.score - a.score);
   if (!hits.length) return jpeg;
   const first = hits[0].bbox;
@@ -503,17 +607,27 @@ async function band(jpeg, lines) {
   };
   const rows = Array.from({ length: H - 1 }, (_, y) => edge(y));
   const median = [...rows].sort((a, b) => a - b)[rows.length >> 1] || 1;
-  const strongest = (from, to) => {
-    let at = -1, top = median * 2;
-    for (let y = Math.max(0, Math.round(from)); y <= Math.min(H - 2, Math.round(to)); y++) if (rows[y] > top) { top = rows[y]; at = y; }
+  // Going out from the print: the first clear edge (a local peak well above the usual row
+  // change) is where this spine ends and the next begins. The strongest edge further out was
+  // often the far side of the neighbour, which then came along in the cut. Print can reach
+  // the spine's own edge, so the search starts a little inside the text lines.
+  const nearest = (from, to) => {
+    const step = from < to ? 1 : -1;
+    const ok = (y) => y > 0 && y < H - 2 && rows[y] > median * 3 && rows[y] >= rows[y - 1] && rows[y] >= rows[y + 1];
+    for (let y = Math.round(from); step > 0 ? y <= to : y >= to; y += step) if (ok(y)) return y;
+    let at = -1, top = median * 2; // no clear edge: the strongest one, as before
+    for (let y = Math.max(0, Math.round(Math.min(from, to))); y <= Math.min(H - 2, Math.round(Math.max(from, to))); y++) if (rows[y] > top) { top = rows[y]; at = y; }
     return at;
   };
-  const up = strongest(y1 - th * 0.6, y1 - th * 0.08), down = strongest(y2 + th * 0.08, y2 + th * 0.6);
+  const up = nearest(y1 + th * 0.05, y1 - th * 0.6), down = nearest(y2 - th * 0.05, y2 + th * 0.6);
   y1 = up >= 0 ? up : y1 - th * 0.3;
   y2 = down >= 0 ? down + 1 : y2 + th * 0.3;
-  // A spine is at least half as thick again as its print.
+  // No edge found on a side: a spine is at least half as thick again as its print, so it
+  // grows there (never past an edge that was found).
   const short = th * 1.5 - (y2 - y1);
-  if (short > 0) { y1 -= short / 2; y2 += short / 2; }
+  if (short > 0 && (up < 0 || down < 0)) {
+    if (up < 0 && down < 0) { y1 -= short / 2; y2 += short / 2; } else if (up < 0) y1 -= short; else y2 += short;
+  }
   const top = Math.max(0, Math.floor(y1)), height = Math.min(H, Math.ceil(y2)) - top;
   if (height < 12) return jpeg;
   return sharp(jpeg).extract({ left: 0, top, width: W, height }).jpeg({ quality: 90 }).toBuffer();
@@ -535,7 +649,7 @@ async function readSpines(buffer) {
 
   const crops = [];
   const straight = boxes.filter((b) => Math.abs(b.tilt) < 5);
-  for (const b of straight) crops.push({ img: await cut(upright, W, H, b, Math.min(b[2] - b[0], b[3] - b[1]) * 0.06 + 6), w: b[2] - b[0], h: b[3] - b[1], from: 'straight', box: b.slice(0, 4).map(Math.round), tilt: Math.round(b.tilt * 10) / 10 });
+  for (const b of straight) crops.push({ img: await cut(upright, W, H, b, Math.min(b[2] - b[0], b[3] - b[1]) * 0.06 + 6), w: b[2] - b[0], h: b[3] - b[1], from: 'straight', box: b.slice(0, 4).map(Math.round), tilt: Math.round(b.tilt * 10) / 10, place: { tilt: 0, box: b.slice(0, 4) } });
 
   // Lean groups: tilts within 6° of each other, the biggest groups first.
   const groups = [];
@@ -566,20 +680,29 @@ async function readSpines(buffer) {
       tilt: Math.round(tilt * 10) / 10, boxes_in_group: g.length, W: W2, H: H2, area: area.map((a) => a.map(Math.round)), boxes: found.map((b) => ({ box: b.slice(0, 4).map(Math.round) })),
     }, { image: turned.data });
     for (const b of found.slice(0, MAX_SPINES)) {
-      crops.push({ img: await cut(turned.data, W2, H2, b, Math.min(b[2] - b[0], b[3] - b[1]) * 0.06 + 6), w: b[2] - b[0], h: b[3] - b[1], from: `lean group ${gi + 1}`, box: b.slice(0, 4).map(Math.round), tilt: Math.round(tilt * 10) / 10 });
+      crops.push({ img: await cut(turned.data, W2, H2, b, Math.min(b[2] - b[0], b[3] - b[1]) * 0.06 + 6), w: b[2] - b[0], h: b[3] - b[1], from: `lean group ${gi + 1}`, box: b.slice(0, 4).map(Math.round), tilt: Math.round(tilt * 10) / 10, place: { tilt, box: b.slice(0, 4) } });
     }
   }
 
   const books = [];
-  for (const [k, { img, w, h, from, box, tilt }] of crops.slice(0, MAX_SPINES * 2).entries()) {
+  for (const [k, { img, w, h, from, box, tilt, place }] of crops.slice(0, MAX_SPINES * 2).entries()) {
     const b = await scope(`cut-out ${k + 1}`, async () => {
       await step('cut-out', { from, w: Math.round(w), h: Math.round(h), box, tilt }, { image: img });
-      return readCrop(img, w, h);
+      return readCrop(img, w, h, null, { split: true });
     });
     // A reading neither way up confirmed by OCR came from a jumble or upside-down print.
-    if (b && b.verified !== false) books.push(b);
+    for (const x of [].concat(b ?? [])) if (x.verified !== false) books.push({ ...x, place });
   }
-  return books;
+  // Boxes overlap, so one spine can be read from two cut-outs: alike readings from cut-outs
+  // that overlap are one book.
+  const kept = [];
+  for (const b of books) {
+    const twin = kept.find((o) => o.place.tilt === b.place.tilt && o.place.box[0] < b.place.box[2] && b.place.box[0] < o.place.box[2]
+      && titleSimilarity(o.title, b.title) >= 0.6);
+    if (twin) { await step('same-spine', { note: 'read again from an overlapping cut-out: counted once', title: b.title, same_as: twin.title }); continue; }
+    kept.push(b);
+  }
+  return kept;
 }
 
 // The main direction of the edges in a picture, in degrees from upright, folded into
