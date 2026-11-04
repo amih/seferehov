@@ -9,7 +9,9 @@ const GOOGLE_G = `<svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="t
 export default async function loginView(root, _, query) {
   const error = ERRORS.includes(query.get('error')) && t(`login.err.${query.get('error')}`);
   if (query.get('next')) sessionStorage.setItem('seferehov:next', query.get('next'));
-  const { google } = await api('/api/auth/config').catch(() => ({ google: false }));
+  // No answer (no signal, slow server): the Google button is shown anyway; if Google sign-in
+  // is off, the server sends the reader back here with error=google_off.
+  const { google } = await api('/api/auth/config', { timeout: 4000 }).catch(() => ({ google: true }));
   root.innerHTML = `
   <section class="page narrow">
     <h1>${t('login.title')}</h1>

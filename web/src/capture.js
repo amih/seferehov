@@ -1,7 +1,7 @@
 import { esc, shrinkImage } from './ui.js';
 import { t } from './i18n.js';
 import { cameraLog } from './camlog.js';
-import { enqueue } from './queue.js';
+import { enqueue, kick, onItem, unsentItems } from './queue.js';
 import { detectFrame } from './scanner.js';
 import { align, cost, mean, R } from './motion.js';
 
@@ -46,7 +46,7 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
   let prev = null, prevAt = 0, last = null, settleUntil = 0;
   let speed = 0, moved = { x: 0, y: 0 }, lost = false, arrived = 0, steadySince = 0;
   let best = null, bestScore = 0, bestSharp = 0, spare = null, sharps = [];
-  let taken = 0, saving = Promise.resolve(), code = null, codeAt = 0, codeLook = 0;
+  let ids = [], taken = 0, saving = Promise.resolve(), code = null, codeAt = 0, codeLook = 0;
   let motion = { acc: 0, turn: 0 }, lastMotion = 0;
 
   // The phone's own movement since the last photo: summed acceleration (gravity taken
@@ -64,12 +64,12 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
     panel.hidden = false;
     panel.innerHTML = `<h2 class="shot-title">${t('capture.title')}</h2>
       <div class="shot-live burst"><video muted playsinline></video><div class="shot-flash"></div>
-        <p class="shot-hint" hidden></p><span class="burst-count">0</span>
+        <p class="shot-hint" hidden></p>
         <div class="burst-meter" data-state="hold"><span class="burst-bar"><i></i></span><b></b></div>
-        <button class="shot-x" data-capture="end" aria-label="${t('burst.stop')}">✕</button></div>
-      <p class="shot-say"><b>${t('capture.how')}</b><br><span class="muted small">${t('capture.how2')}</span></p>
+        <button class="shot-x" data-capture="end" aria-label="${t('capture.stop')}">✕</button>
+        <button class="btn primary shot-stop on-cam" data-capture="end">■ ${t('capture.stop')} · <span class="burst-count">0</span></button></div>
       <div class="burst-thumbs"></div>
-      <button class="btn primary shot-stop" data-capture="end">✓ ${t('burst.stop')}</button>
+      <p class="shot-say"><b>${t('capture.how')}</b><br><span class="muted small">${t('capture.how2')}</span></p>
       <p class="shot-done"></p>`;
     video = panel.querySelector('video');
     sid = sessionId();
@@ -88,7 +88,7 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
     }
     requestAnimationFrame(() => panel.querySelector('.shot-live')?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
     opened = Date.now();
-    prev = null; last = null; speed = 0; lost = false; arrived = 0; steadySince = 0; sharps = []; taken = 0; code = null; dropBest();
+    prev = null; last = null; speed = 0; lost = false; arrived = 0; steadySince = 0; sharps = []; taken = 0; ids = []; code = null; dropBest();
     motion = { acc: 0, turn: 0 }; lastMotion = 0;
     addEventListener('devicemotion', onMotion);
     settleUntil = Date.now() + 700; // exposure and focus settle
@@ -212,6 +212,7 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
       panel.querySelector('.burst-thumbs')?.insertAdjacentHTML('afterbegin', `<img src="${esc(URL.createObjectURL(blob))}" alt="">`);
       const id = await enqueue('/api/captures', fields, { photo: blob }, 'capture', { session: lg?.id });
       lg?.upload(id, 'capture');
+      ids.push(id);
     }).catch((err) => console.warn('photo not saved', err));
   }
 
@@ -231,12 +232,40 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
     log?.end(how === true ? 'done' : how || 'left');
     log = null;
     if (!running) return;
+    if (how === true && n) panel.innerHTML = `<p class="shot-done"><span class="spinner"></span> ${t('capture.saving')}</p>`;
     await saving;
-    if (n) await enqueue(`/api/captures/${id}/end`, { ...request(), n }, {}, 'capture-end', { keepFailed: false }).catch(() => {});
+    let end = null;
+    if (n) end = await enqueue(`/api/captures/${id}/end`, { ...request(), n }, {}, 'capture-end', { keepFailed: false }).catch(() => null);
+    kick();
     if (how === false) return;
-    panel.innerHTML = n ? `<p class="shot-done">${how === 'hidden' ? `${t('burst.closed_hidden')} ` : ''}${t('capture.sent', { n })} <a href="/queue">${t('capture.queue')}</a></p>` : '';
     panel.hidden = !n;
+    panel.innerHTML = n ? `${how === 'hidden' ? `<p class="shot-done">${t('burst.closed_hidden')}</p>` : ''}
+      <p class="shot-done shot-progress"></p><p class="shot-done">${t('capture.sent', { n })} <a href="/queue">${t('capture.queue')}</a></p>` : '';
+    if (n) follow(ids, end, panel.querySelector('.shot-progress'));
     onEnd?.(n);
+  }
+
+  // "3 of 12 sent", until all are on the server: then the phone can be put away.
+  // Photos sent "3 of 12", until all are on the server: then the phone can be put away.
+  // Some may have gone already (no event will come for them): only those still in the
+  // outbox are waited for.
+  async function follow(photos, end, el) {
+    const list = [...photos, end].filter(Boolean);
+    const left = new Set(list);
+    let why = null;
+    const draw = () => {
+      const done = photos.filter((i) => !left.has(i)).length;
+      el.innerHTML = left.size ? `<span class="spinner"></span> ${t('capture.sending', { done, n: photos.length })}${why ? ` · ${t(`out.waiting_${why}`)}` : ''}`
+        : `✓ ${t('capture.all_sent', { n: photos.length })}`;
+    };
+    for (const i of list) onItem(i, (state, info) => {
+      if (state === 'sent' || (state === 'failed' && info?.dropped)) left.delete(i);
+      why = state === 'waiting' ? info : null;
+      draw();
+    });
+    const still = new Set((await unsentItems()).map((x) => x.id));
+    for (const i of list) if (!still.has(i)) left.delete(i);
+    draw();
   }
 
   panel.addEventListener('click', (e) => { if (e.target.closest('[data-capture="end"]')) stop(); });

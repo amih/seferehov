@@ -323,6 +323,10 @@ button.big-btn { font: inherit; text-align: start; width: 100%; }
 /* Stopping: a big red button under the camera, and ✕ on the camera itself. */
 .shot-stop { display: block; width: 100%; margin: 10px 0 0; padding: 14px; font-size: 1.15rem; font-weight: 700;
   background: var(--red); border-color: var(--red); color: #fff; }
+/* Free-style camera: stopping is on the picture itself, always in view. */
+.shot-stop.on-cam { position: absolute; left: 10px; right: 10px; bottom: 10px; width: auto; margin: 0; z-index: 2; padding: 12px; }
+.shot-live:has(.on-cam) .burst-meter { bottom: 70px; }
+.shot-progress { font-weight: 700; }
 .shot-x { position: absolute; inset-inline-start: 8px; top: 8px; width: 48px; height: 48px; border: 0; border-radius: 50%;
   background: rgba(0, 0, 0, .6); color: #fff; font-size: 1.4rem; font-weight: 700; z-index: 2; }
 .shot-hint { z-index: 1; }
