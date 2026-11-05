@@ -76,6 +76,18 @@ export async function purgeSearchCache() {
   await q(`DELETE FROM web_search_cache WHERE at < now() - make_interval(days => $1)`, [KEEP_DAYS]);
 }
 
+async function ask(prompt) {
+  const res = await fetch(`${config.vision.url}/api/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: config.vision.model, prompt, stream: false, think: false, keep_alive: '3m',
+      options: { num_ctx: 8192, num_predict: 120, temperature: 0 } }),
+    signal: AbortSignal.timeout(90_000),
+  });
+  if (!res.ok) throw new Error(`model ${res.status}`);
+  return String((await res.json()).response ?? '').trim();
+}
+
 // Share of the words in `fixed` that are close to some word of `read`.
 export function wordsKept(fixed, read) {
   const have = normTitle(read).split(' ').filter(Boolean);
