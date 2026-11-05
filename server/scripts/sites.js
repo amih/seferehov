@@ -158,8 +158,14 @@ const NOISE = /facebook|twitter|instagram|linkedin|youtube|wikipedia|\.ac\.il$|\
 async function sparql(query) {
   const PREFIX = `PREFIX wd: <http://www.wikidata.org/entity/> PREFIX wdt: <http://www.wikidata.org/prop/direct/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>`;
-  const res = await fetch('https://qlever.dev/api/wikidata', { method: 'POST', body: new URLSearchParams({ query: `${PREFIX} ${query}` }),
-    headers: { Accept: 'text/tab-separated-values', 'User-Agent': UA }, signal: AbortSignal.timeout(300_000) });
+  let res;
+  // A shared public endpoint: on "too many requests" wait 1, 2, 4, 8 minutes.
+  for (const wait of [0, 60, 120, 240, 480]) {
+    if (wait) { log(`qlever busy, waiting ${wait} s`); await sleep(wait * 1000); }
+    res = await fetch('https://qlever.dev/api/wikidata', { method: 'POST', body: new URLSearchParams({ query: `${PREFIX} ${query}` }),
+      headers: { Accept: 'text/tab-separated-values', 'User-Agent': UA }, signal: AbortSignal.timeout(300_000) });
+    if (res.status !== 429 && res.status < 500) break;
+  }
   if (!res.ok) throw new Error(`qlever ${res.status}`);
   const [head, ...lines] = (await res.text()).split('\n').filter(Boolean);
   const cols = head.split('\t').map((c) => c.replace(/^\?/, ''));
@@ -169,9 +175,9 @@ PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>`;
 
 async function discover() {
   // Publishing houses (and subclasses) in Israel with an official website.
-  const rows = await sparql(`SELECT ?p (SAMPLE(?l) AS ?name) (SAMPLE(?s) AS ?site) WHERE {
-    ?p wdt:P31/wdt:P279* wd:Q2085381 . ?p wdt:P17 wd:Q801 . ?p wdt:P856 ?s .
-    OPTIONAL { ?p rdfs:label ?l FILTER(LANG(?l) = "he") } } GROUP BY ?p`);
+  const rows = await sparql(`SELECT DISTINCT ?p ?name ?site WHERE {
+    ?p wdt:P31/wdt:P279* wd:Q2085381 . ?p wdt:P17 wd:Q801 . ?p wdt:P856 ?site .
+    OPTIONAL { ?p rdfs:label ?name FILTER(LANG(?name) = "he") } }`);
   let added = 0;
   for (const r of rows) {
     let domain;
