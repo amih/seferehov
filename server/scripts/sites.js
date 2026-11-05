@@ -24,6 +24,7 @@ const PAGES_PER_VISIT = 50;   // book pages read from one site per run (method '
 const STORE_PAGES = 30;       // listing requests per site per run (100–250 books each)
 const RECRAWL_DAYS = 90;
 const MAX_BYTES = 5 * 1024 * 1024;
+const MAX_DELAY = 120;       // a site asking for a longer Crawl-delay is paused, not waited for
 
 const [mode, arg] = process.argv.slice(2);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -48,7 +49,7 @@ async function capReached() {
 // GET with the bot's name, waiting out the site's gap. Returns { status, url, type, text }.
 async function get(url, site, { accept = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.5' } = {}) {
   const key = site?.domain ?? hostOf(url);
-  const gap = Math.max(GAP, (site?.crawl_delay ?? 0) * 1000);
+  const gap = Math.max(GAP, Math.min(site?.crawl_delay ?? 0, MAX_DELAY) * 1000);
   const wait = (lastHit.get(key) ?? 0) + gap - Date.now();
   if (wait > 0) await sleep(wait);
   lastHit.set(key, Date.now());
@@ -62,8 +63,13 @@ async function get(url, site, { accept = 'text/html,application/xhtml+xml,applic
   if (res.status === 403 || res.status === 429) throw new Paused(`${res.status} on ${url}`);
   const reader = res.body?.getReader();
   const chunks = []; let size = 0;
+  // A server that stops sending mid-page must not hold the run: 45 s for the whole body.
+  const deadline = Date.now() + 45_000;
   while (reader) {
-    const { done, value } = await reader.read();
+    const left = deadline - Date.now();
+    const next = left > 0 ? await Promise.race([reader.read(), sleep(left).then(() => null)]) : null;
+    if (!next) { reader.cancel().catch(() => {}); break; }
+    const { done, value } = next;
     if (done) break;
     size += value.length; chunks.push(value);
     if (size > MAX_BYTES) { await reader.cancel(); break; }
@@ -197,6 +203,7 @@ async function check(site) {
   site.host = new URL(site.url).host;
   const robots = await robotsOf(site);
   site.crawl_delay = robots.delay;
+  if (robots.delay > MAX_DELAY) return q(`UPDATE ref_sites SET robots = 'allowed', crawl_delay = $2, status = 'paused', note = 'Crawl-delay too long to read the site', checked_at = now() WHERE id = $1`, [site.id, robots.delay]);
   const set = async (fields) => {
     const keys = Object.keys(fields);
     await q(`UPDATE ref_sites SET ${keys.map((k, i) => `${k} = $${i + 2}`).join(', ')}, checked_at = now() WHERE id = $1`, [site.id, ...keys.map((k) => fields[k])]);
