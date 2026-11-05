@@ -223,7 +223,7 @@ async function check(site) {
 }
 
 // --- reading books ------------------------------------------------------------------------------------
-const NOT_BOOK = /מארז|ערכת|ערכה|שובר|גיפט\s*קארד|כרטיס\s+מתנה|gift\s*card|מנוי|דמי\s+משלוח|תיק\s+בד|משחק|פאזל|לוח\s+שנה|גלויות|מחברת|סימניה|bundle|box\s+set|t-shirt|חולצ/i;
+const NOT_BOOK = /^(?:ספרי|כל ספרי|סדרת|טרילוגיית)\s|במבצע|מארז|ערכת|ערכה|שובר|גיפט\s*קארד|כרטיס\s+מתנה|gift\s*card|מנוי|דמי\s+משלוח|תיק\s+בד|משחק|פאזל|לוח\s+שנה|גלויות|מחברת|סימניה|bundle|box\s+set|t-shirt|חולצ/i;
 const ISBN_RE = /\b97[89][-\s]?\d{1,5}[-\s]?\d{1,7}[-\s]?\d{1,7}[-\s]?\d\b/;
 const isbnOf = (...vals) => {
   for (const v of vals) {
@@ -325,8 +325,11 @@ async function sitemapUrls(site, robots) {
   return [...urls];
 }
 
-// One book page: schema.org Book/Product, else OpenGraph + the page's own ISBN and author lines.
-export function bookFromPage(html, url) {
+// The books on one page: schema.org Book/Product as JSON-LD or microdata (a listing page may
+// hold many), else, for a page about one book (an ISBN or a single author line), its title.
+export function booksFromPage(html, url) {
+  const nameOf = (a) => (typeof a === 'string' ? a : Array.isArray(a) ? a.map(nameOf).filter(Boolean).join(', ') : a?.name ?? null);
+  const out = [];
   const items = [];
   for (const m of html.matchAll(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)) {
     try {
@@ -336,27 +339,48 @@ export function bookFromPage(html, url) {
         const types = [].concat(x['@type'] ?? []);
         if (types.some((t) => /^(Book|Product)$/.test(t))) items.push(x);
         if (x['@graph']) walk(x['@graph']);
+        if (x.itemListElement) walk([].concat(x.itemListElement).map((e) => e.item ?? e));
       };
       walk(JSON.parse(m[1].trim()));
     } catch { /* bad JSON-LD */ }
   }
-  const text = textOf(html);
-  const isbnLine = text.match(/(?:ISBN|מסת"?ב|מסת״ב)[^\d]{0,12}(97[89][\d-\s]{10,16})/i)?.[1];
-  const authorLine = text.match(/(?:^|\n)\s*(?:מחבר(?:ת)?|סופר(?:ת)?|מאת|author)\s*[:：]\s*([^\n]{3,60})/i)?.[1];
-  const nameOf = (a) => (typeof a === 'string' ? a : Array.isArray(a) ? a.map(nameOf).filter(Boolean).join(', ') : a?.name ?? null);
-  const x = items.find((i) => [].concat(i['@type']).includes('Book')) ?? items[0];
-  if (x) {
+  for (const x of items) {
     const extra = (x.additionalProperty ?? []).find?.((p) => AUTHOR_ATTR.test(p.name ?? ''))?.value;
-    return book(x.name, nameOf(x.author) ?? extra ?? authorLine ?? authorFromText(x.description),
-      isbnOf(x.isbn, x.gtin13, x.gtin, x.sku, isbnLine), url);
+    const b = book(x.name, nameOf(x.author) ?? extra ?? authorFromText(x.description), isbnOf(x.isbn, x.gtin13, x.gtin, x.sku), x.url ?? url);
+    if (b) out.push(b);
   }
-  // No structured data: only pages that say they are a book (an ISBN or an author line).
-  if (!isbnLine && !authorLine) return null;
-  const og = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1]
-    ?? html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1];
-  if (!og) return null;
-  const title = decode(og).replace(/<[^>]+>/g, '').split(/\s+[|–-]\s+(?=[^|–-]*$)/)[0];
-  return book(title, authorLine, isbnOf(isbnLine), url);
+  // Microdata: <div itemscope itemtype="http://schema.org/Book"> … itemprop="name" / "author" / "isbn".
+  const parts = html.split(/<[^>]+itemtype=["']https?:\/\/schema\.org\/(?:Book|Product)["'][^>]*>/i).slice(1);
+  const prop = (chunk, name) => {
+    const c = chunk.match(new RegExp(`itemprop=["']${name}["'][^>]*content=["']([^"']+)["']`, 'i'))?.[1];
+    if (c) return decode(c);
+    const m = chunk.match(new RegExp(`<(\\w+)[^>]*itemprop=["']${name}["'][^>]*>([\\s\\S]*?)</\\1>`, 'i'));
+    return m ? textOf(m[2]).replace(/\n/g, ' ').trim() : null;
+  };
+  for (const chunk of parts) {
+    const b = book(prop(chunk, 'name'), prop(chunk, 'author'), isbnOf(prop(chunk, 'isbn'), prop(chunk, 'gtin13')), url);
+    if (b) out.push(b);
+  }
+  if (out.length) return out;
+  // No structured data: only a page about one book.
+  const text = textOf(html);
+  const isbns = [...new Set([...text.matchAll(/(?:ISBN|מסת"?ב|מסת״ב)[^\d]{0,12}(97[89][\d-\s]{10,16})/gi)].map((m) => m[1]))];
+  const authorLines = [...text.matchAll(/(?:^|\n)\s*(?:מחבר(?:ת)?|סופר(?:ת)?|מאת|author)\s*[:：]\s*([^\n]{3,60})/gi)].map((m) => m[1]);
+  if (isbns.length > 1 || authorLines.length > 1 || (!isbns.length && !authorLines.length)) return [];
+  const site = html.match(/<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']+)["']/i)?.[1];
+  let title = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1]
+    ?? html.match(/<title>([^<]+)<\/title>/i)?.[1];
+  if (!title) return [];
+  title = decode(title);
+  // "Site name - Book title" or "Book title | Site name": drop the site's own name.
+  const segs = title.split(/\s+[|–-]\s+/);
+  if (segs.length > 1) {
+    const isSite = (x) => (site && (x.includes(decode(site)) || decode(site).includes(x)));
+    const keep = segs.filter((x) => !isSite(x));
+    title = (keep.length && keep.length < segs.length ? keep : segs.slice(0, -1)).join(' - ');
+  }
+  const b = book(title, authorLines[0], isbnOf(isbns[0]), url);
+  return b ? [b] : [];
 }
 
 async function pages(site, robots) {
@@ -376,14 +400,19 @@ async function pages(site, robots) {
     if (await capReached()) break;
     const r = await get(url, site);
     tried++;
-    const b = r.status === 200 ? bookFromPage(r.text, url) : null;
+    const bs = r.status === 200 ? booksFromPage(r.text, url) : [];
     await tx(async (db) => {
-      await db.query('DELETE FROM ref_titles WHERE site_id = $1 AND ref = $2', [site.id, url]);
-      if (b) await db.query(`INSERT INTO ref_titles(title, author, year, source, ref, title_f, author_f, site_id, isbn)
-        VALUES ($1, $2, $3, 'site', $4, heb_fold($1), heb_fold($2), $5, $6)`, [b.title, b.author, b.year, url, site.id, b.isbn]);
-      await db.query('UPDATE ref_site_pages SET fetched_at = now(), found = $2 WHERE url = $1', [url, b ? 1 : 0]);
+      await db.query('DELETE FROM ref_titles WHERE site_id = $1 AND page = $2', [site.id, url]);
+      for (const b of bs) {
+        // A book already listed on another page of the site (a listing and its own page): keep one.
+        const dup = await db.query('SELECT 1 FROM ref_titles WHERE site_id = $1 AND title = $2 AND coalesce(author, \'\') = coalesce($3, \'\')', [site.id, b.title, b.author]);
+        if (dup.rowCount) continue;
+        await db.query(`INSERT INTO ref_titles(title, author, year, source, ref, title_f, author_f, site_id, isbn, page)
+          VALUES ($1, $2, $3, 'site', $4, heb_fold($1), heb_fold($2), $5, $6, $7)`, [b.title, b.author, b.year, b.ref, site.id, b.isbn, url]);
+      }
+      await db.query('UPDATE ref_site_pages SET fetched_at = now(), found = $2 WHERE url = $1', [url, bs.length]);
     });
-    if (b) found++;
+    found += bs.length;
     // Ten book-less pages in a row at the start: the sitemap is not a book list.
     if (tried >= 10 && found === 0 && !known) return { method: 'pages', books: null, gaveUp: true };
   }

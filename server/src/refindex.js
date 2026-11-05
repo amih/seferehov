@@ -23,7 +23,8 @@ const EXPLAINED = 0.6; // share of the spine's words found in the candidate's ti
 const letters = (s) => normTitle(s).replace(/ /g, '').length;
 // The reading and its parts: "סנדר שיר • מורה מדליה" → itself, "סנדר שיר", "מורה מדליה".
 const partsOf = (s) => [...new Set([s, ...s.split(/\s+[•·|/–-]\s+|\s*:\s*/)].map((x) => x.trim()).filter((x) => letters(x) >= 3))];
-const mainTitle = (t) => t.split(/\s+[:/]\s+|\s*:\s*/)[0].trim();
+// "הרקב – טרילוגיית טבעות העורבים" → "הרקב" (the spine usually shows only the main title).
+const mainTitle = (t) => t.split(/\s+[:/–-]\s+|\s*:\s*/)[0].trim();
 
 // Share of the author's name words (3+ letters) that are on the spine, at least 80% alike:
 // names are compared more strictly than titles ("פישר" is not "שיר").
