@@ -1,6 +1,6 @@
 # Plan: book lists from authors' and small publishers' own websites
 
-Status: plan only, nothing built. Written 2026-11-05.
+Status: step 1 measured (see "Step 1 results"), nothing built. Written 2026-11-05.
 
 ## Why
 
@@ -97,6 +97,44 @@ These are guesses until step 1.1 is counted.
 | Disk | under 50 MB for 100,000 books |
 | Build time | about 3–4 days: discovery 1, permission checks 0.5, extraction 1.5, measuring 0.5 |
 | Running time | weeks to months to cover the tail at the polite pace; most of the gain comes from the first few hundred sites |
+
+## Step 1 results (2026-11-05)
+
+Wikidata (QLever, Hebrew label + official website P856):
+
+| | Entities | After dropping social networks, universities, news and government sites |
+|---|---|---|
+| Israeli / Hebrew-language writers, poets, children's writers, journalists, historians | 783 | 709 |
+| Israeli / Hebrew-language people who authored a work (P50) | 739 | 395 (mostly academics) |
+| Writers, either way | 1,277 | 944 |
+| Israeli publishers | 316 | 264 |
+
+Without the language filter, 4,529 writers with a Hebrew label have a site, but most are
+foreign authors whose books are not on Israeli shelves.
+
+20 sites sampled at random (15 writers, 5 publishers), robots.txt and home page each:
+
+- **Dead or wrong link**: 7 (404, no answer, empty page, link redirected elsewhere).
+- **Not about books**: 5 (a musician, a photographer, a linktree page, two personal sites
+  with no book list).
+- **robots.txt forbids all**: 1. (Wix sites list `Disallow: /` only for named bots
+  such as PetalBot; they allow others.)
+- **Has a usable book list**: 5–6. Example: shinar.co.il has a "הספרים שלי" page with
+  7 titles; none of the 7 is in the local index. A publisher (locusbooks.co.il, Wix)
+  lists its whole catalogue.
+- **Structured data**: none of the 20 has schema.org `Book` or `Product` data, and none
+  shows ISBNs. The book lists are plain HTML lists of titles (WordPress or Wix).
+
+What this means:
+- About a quarter to a third of the sites are usable: roughly 250 author sites and
+  70 publisher sites from Wikidata alone.
+- Expected yield: about 1,500 titles from authors (≈6 each) and about 10,000 from
+  publishers (100–300 each). The publishers are most of the value.
+- Extraction has to be text-based (the local model reading the books page), because no
+  structured data was found. The structured-data step moves to an optional fast path.
+- The titles found are new: the sampled author site's titles were all missing from the
+  index, which is the point of the long tail.
+- Search-based discovery (step 4) can wait until the Wikidata list is read and measured.
 
 ## Order of work
 
