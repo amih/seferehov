@@ -10,6 +10,15 @@ import { stepsBox, attachSteps } from '../steps.js';
 // one at a time, with a large picture. Approve, decline, or set aside for later. The last
 // decision can be undone at once, and the last two weeks' from "Recent decisions": the
 // book comes back to the front of the queue, to be fixed and approved again.
+// How sure the server is of this book (the queue shows the surest first): a coloured
+// mark, the percentage and the main reason.
+function confidenceLine(i) {
+  const c = i.confidence ?? 0;
+  const level = c >= 75 ? 'high' : c >= 45 ? 'mid' : 'low';
+  const mark = { high: '🟢', mid: '🟡', low: '🔴' }[level];
+  return `<p class="small conf conf-${level}" title="${esc(t('conf.title'))}"><span aria-hidden="true">${mark}</span> ${t(`conf.${level}`)} · ${c}% · ${esc(t(`conf.why.${i.confidence_why}`) || i.confidence_why || '')}</p>`;
+}
+
 export default async function queueView(root) {
   const me = await getMe();
   if (!me) return navigate('/login?next=/queue', { replace: true });
@@ -32,7 +41,7 @@ export default async function queueView(root) {
   }
   const next = () => items.find((i) => !skipped.has(i.id));
 
-  // While photos are still being read, look again now and then: new books join the end.
+  // While photos are still being read, look again now and then: new books take their place by confidence.
   function poll() {
     clearTimeout(timer);
     if (stopped || !counts.processing) return;
@@ -128,6 +137,7 @@ export default async function queueView(root) {
           <label>${t('field.title')} <input name="title" dir="auto" value="${esc(shownTitle)}" maxlength="300" required></label>
           <label>${t('field.author')} <input name="author" dir="auto" value="${esc(shownAuthor)}" maxlength="200"></label>
           <p class="small qline q-${i.quality}">${i.quality === 'high' ? `✓ ${t('scan.matched')}${i.year ? ` · ${i.year}` : ''}` : i.quality === 'low' ? `⚠ ${t('scan.lowq')}` : `? ${t('scan.unmatched')}`}</p>
+          ${confidenceLine(i)}
         </form>
       </div>
       ${i.back ? `<a href="${esc(i.back)}" target="_blank" class="big-pic back-pic"><img src="${esc(i.back)}" alt="${t('queue.back_cover')}"></a>` : ''}

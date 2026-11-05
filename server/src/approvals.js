@@ -21,7 +21,9 @@ const UNDO_DAYS = 14;
 const ITEM_SQL = `
   SELECT i.id, i.title, i.author, i.isbn13, i.via, i.matched, i.quality, i.frame_path, i.crop_path, i.back_path, i.decision, i.sources,
          s.id AS scan_id, s.kind, s.source, s.owner, s.friend_name, l.code, l.name AS location_name,
-         b.id AS book_id, b.title AS book_title, b.authors AS book_authors, b.cover_url, b.year
+         b.id AS book_id, b.title AS book_title, b.authors AS book_authors, b.cover_url, b.year,
+         COALESCE(i.confidence, CASE i.quality WHEN 'high' THEN 85 WHEN 'medium' THEN 40 ELSE 20 END) AS confidence,
+         COALESCE(i.confidence_why, CASE i.quality WHEN 'high' THEN 'catalogue' WHEN 'medium' THEN 'read' ELSE 'low' END) AS confidence_why
     FROM scan_items i JOIN scans s ON s.id = i.scan_id LEFT JOIN locations l ON l.id = s.location_id
     LEFT JOIN books b ON b.id = i.book_id`;
 
@@ -290,14 +292,16 @@ export default async function approvalRoutes(app) {
     return r;
   });
 
-  // Undecided books first (oldest first), then the ones set aside for later.
+  // Undecided books first, the surest first (oldest first among equals), then the ones set aside for later.
   app.get('/api/queue', { preHandler: requireUser() }, async (req) => {
     await skipMisreads(req.user.id);
     await mergeDuplicates(req.user.id);
     const items = await many(
       `${ITEM_SQL}
         WHERE s.user_id = $1 AND s.status = 'done' AND (i.decision IS NULL OR i.decision = 'later')
-        ORDER BY i.decision IS NOT NULL, CASE WHEN i.decision IS NULL THEN i.created_at ELSE i.decided_at END, i.id
+        ORDER BY i.decision IS NOT NULL,
+                 CASE WHEN i.decision IS NULL THEN -COALESCE(i.confidence, CASE i.quality WHEN 'high' THEN 85 WHEN 'medium' THEN 40 ELSE 20 END) END,
+                 CASE WHEN i.decision IS NULL THEN i.created_at ELSE i.decided_at END, i.id
         LIMIT 200`,
       [req.user.id],
     );

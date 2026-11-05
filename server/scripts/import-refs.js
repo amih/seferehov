@@ -43,8 +43,14 @@ async function replace(source, titles, authors) {
 const PREFIX = `PREFIX wd: <http://www.wikidata.org/entity/> PREFIX wdt: <http://www.wikidata.org/prop/direct/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX skos: <http://www.w3.org/2004/02/skos/core#>`;
 async function sparql(query) {
-  const res = await fetch(`https://qlever.dev/api/wikidata?${new URLSearchParams({ query: `${PREFIX} ${query}` })}`,
-    { headers: { Accept: 'text/tab-separated-values', 'User-Agent': UA }, signal: AbortSignal.timeout(600_000) });
+  let res;
+  // A shared public endpoint: on "too many requests" wait 1, 2, 4, 8 minutes.
+  for (const wait of [0, 60, 120, 240, 480]) {
+    if (wait) { console.error(`qlever busy, waiting ${wait} s`); await new Promise((r) => setTimeout(r, wait * 1000)); }
+    res = await fetch('https://qlever.dev/api/wikidata', { method: 'POST', body: new URLSearchParams({ query: `${PREFIX} ${query}` }),
+      headers: { Accept: 'text/tab-separated-values', 'User-Agent': UA }, signal: AbortSignal.timeout(600_000) });
+    if (res.status !== 429 && res.status < 500) break;
+  }
   if (!res.ok) throw new Error(`qlever ${res.status}`);
   const [head, ...lines] = (await res.text()).split('\n').filter(Boolean);
   const cols = head.split('\t').map((c) => c.replace(/^\?/, ''));
@@ -60,6 +66,7 @@ async function wikidata() {
     FILTER NOT EXISTS { ?b wdt:P31 wd:Q13442814 }
     OPTIONAL { ?b wdt:P50 ?a . ?a rdfs:label ?al FILTER(LANG(?al) = "he") }
     OPTIONAL { ?b wdt:P577 ?d } } GROUP BY ?b ?l`);
+  await new Promise((r) => setTimeout(r, 10_000));
   // People who write: in the National Library's name file, author of a work, or writer / poet / novelist.
   const people = await sparql(`SELECT ?p ?l WHERE { ?p wdt:P31 wd:Q5 .
     { ?p rdfs:label ?l } UNION { ?p skos:altLabel ?l } FILTER(LANG(?l) = "he")

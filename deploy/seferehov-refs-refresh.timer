@@ -1,0 +1,9 @@
+[Unit]
+Description=Monthly title / author index refresh (Hebrew Wikipedia dumps appear on the 1st and 20th)
+
+[Timer]
+OnCalendar=*-*-08 04:30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

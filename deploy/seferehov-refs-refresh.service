@@ -1,0 +1,12 @@
+# Copy to /etc/systemd/system/ and set User/paths (see README). Rebuilds ref_titles / ref_authors.
+[Unit]
+Description=Seferehov: refresh the local title / author index
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=APP_USER
+ExecStart=APP_DIR/deploy/refs-refresh.sh
+Nice=19
+IOSchedulingClass=idle
+CPUQuota=200%

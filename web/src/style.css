@@ -699,3 +699,9 @@ details.steps summary { cursor: pointer; font-weight: 600; }
 .step-tries { border-collapse: collapse; font-size: .85rem; margin: 4px 0; width: 100%; }
 .step-tries td, .step-tries th { border: 1px solid var(--line); padding: 3px 6px; text-align: start; }
 .step-tries tr.chosen td { background: color-mix(in srgb, var(--yellow) 30%, transparent); font-weight: 600; }
+
+/* Confidence of a book in the approval queue (views/queue.js) */
+.conf { margin: 0.2rem 0 0; }
+.conf-high { color: #2f7a3a; }
+.conf-mid { color: #8a6a00; }
+.conf-low { color: #a23b2a; }

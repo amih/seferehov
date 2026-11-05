@@ -10,6 +10,7 @@ import { lookupIsbn, lookupTitle, findOrCreateBook } from './books.js';
 import { readBooks, sharpness, BLURRY, readCover, readIsbnBarcodes, normTitle, titleSimilarity, coverAgrees, authorsAgree } from './vision.js';
 import { pickFrames } from './frames.js';
 import { webCheck, purgeSearchCache } from './websearch.js';
+import { localCheck } from './refindex.js';
 import { cropCover } from './covers.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
 import { initialStatus, awardSighting } from './moderation.js';
@@ -535,6 +536,26 @@ async function keepVideo(file) {
 
 // dry: an admin's test upload (/admin/trace): read and looked up the same way, with
 // nothing saved but the trace.
+// How sure the server is of a book from a shelf scan, 0–100, and the main reason; the
+// approval queue shows the surest first. From the evidence gathered for it:
+//   barcode + catalogue 95 · catalogue, reading confirmed by OCR 90 · catalogue 85 ·
+//   corrected (index / web / other frame) then found in a catalogue 75 · known to the
+//   local index only 65 · corrected by the web only 55 · OCR-confirmed reading 40 ·
+//   the vision model alone 25 · low-quality reading 15
+export function confidenceOf(item, book) {
+  const ev = item.evidence ?? [];
+  const corrected = ev.some((e) => e.stage === 'correct' && e.outcome === 'corrected');
+  const known = (prefix) => ev.some((e) => e.stage === 'correct' && e.source.startsWith(prefix) && ['corrected', 'confirmed'].includes(e.outcome));
+  if (book && item.via === 'barcode') return [95, 'barcode'];
+  if (book && !corrected) return item.verified ? [90, 'catalogue_ocr'] : [85, 'catalogue'];
+  if (book) return [75, 'corrected_catalogue'];
+  if (known('index:')) return [65, 'index'];
+  if (known('web')) return [55, 'web'];
+  if (item.quality === 'low') return [15, 'low'];
+  if (item.verified) return [40, 'ocr'];
+  return [25, 'read'];
+}
+
 async function processScan(scan, { dry = false } = {}) {
   if (scan.source === 'cover') return processCover(scan, { dry });
   const ctx = dry ? 'trace' : 'scan';
@@ -644,8 +665,25 @@ async function processScan(scan, { dry = false } = {}) {
         item.title = title;
       }
     }
-    // No catalogue knows the reading: the web may (a look-alike letter, the author read into the title).
+    // No catalogue knows the reading: the local index of titles and names may (Hebrew
+    // Wikipedia, Wikidata), then the web (a look-alike letter, the author read into the title).
+    let indexed = false;
     if (!book && item.via === 'vision' && item.title) {
+      const L = await localCheck(item.title, item.author).catch((err) => ({ match: null, outcome: `error: ${err.message}`, candidates: [] }));
+      const src = L.match?.source ?? L.authorSource;
+      ev.push({ stage: 'correct', source: src ? `index:${src}` : 'index', outcome: L.outcome, before: [item.title, item.author].filter(Boolean).join(' | '),
+        after: L.match ? [L.match.title, L.match.author].filter(Boolean).join(' | ') : L.author ? [item.title, L.author].join(' | ') : null,
+        detail: { ref: L.match?.ref ?? null, candidates: L.candidates } });
+      if (L.match || L.author) {
+        if (L.match) { item.title = L.match.title; indexed = true; }
+        if (L.match?.author || L.author) item.author = L.match?.author ?? L.author;
+        const r = await lookupTitle(item.title, item.author, ctx).catch(() => ({}));
+        await verify(item.title, r);
+        book = r.book ?? null;
+        lookupId = r.lookupId ?? lookupId;
+      }
+    }
+    if (!book && !indexed && item.via === 'vision' && item.title) {
       const w = await webCheck(item.title, item.author).catch((err) => ({ fixed: null, outcome: `error: ${err.message}`, tries: [] }));
       ev.push({ stage: 'correct', source: 'web', outcome: w.outcome, before: [item.title, item.author].filter(Boolean).join(' | '),
         after: w.fixed ? [w.fixed.title, w.fixed.author].filter(Boolean).join(' | ') : null, detail: { tries: w.tries } });
@@ -673,6 +711,7 @@ async function processScan(scan, { dry = false } = {}) {
     }
     const title = item.title || book?.title || (isbn && `ISBN ${isbn}`);
     const quality = book ? 'high' : item.quality === 'low' ? 'low' : 'medium';
+    [item.confidence, item.confidenceWhy] = confidenceOf(item, book);
     await drop(title ? `to the queue (${quality})` : 'dropped: no title');
     if (title) rows.push({ item, book, title, isbn, quality, lookupId });
   }
@@ -682,10 +721,10 @@ async function processScan(scan, { dry = false } = {}) {
   for (const [n, { item, book, title, isbn, quality, lookupId }] of rows.entries()) {
     const crop = item.crop ? await saveCropThumb(item.crop, scan.id, n) : null;
     const saved = await one(
-      `INSERT INTO scan_items(scan_id, title, author, isbn13, book_id, via, matched, frame_path, quality, crop_path, lookup_id, sources, trace_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
+      `INSERT INTO scan_items(scan_id, title, author, isbn13, book_id, via, matched, frame_path, quality, crop_path, lookup_id, sources, trace_at, confidence, confidence_why)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
       [scan.id, title, item.author ?? book?.authors?.[0] ?? null, book?.isbn13 ?? isbn ?? null, book?.id ?? null, item.via, !!book, item.frame, quality, crop, lookupId,
-        [item.via === 'barcode' ? 'barcode' : scan.source], item.at?.length ? item.at : null],
+        [item.via === 'barcode' ? 'barcode' : scan.source], item.at?.length ? item.at : null, item.confidence ?? null, item.confidenceWhy ?? null],
     );
     for (const e of item.evidence ?? []) {
       await q(`INSERT INTO scan_item_evidence(item_id, stage, source, outcome, before, after, detail) VALUES ($1, $2, $3, $4, $5, $6, $7)`,

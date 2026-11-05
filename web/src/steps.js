@@ -87,6 +87,12 @@ function stepHtml(s, n, files, ctx) {
         ${s.fixed ? `<p class="small">${t('steps.web_fixed')} <b dir="auto">${esc(s.fixed.title)}</b>${s.fixed.author ? ` <span class="muted" dir="auto">| ${esc(s.fixed.author)}</span>` : ''}</p>` : ''}
         <p class="small"><b>${esc(s.verdict ?? '')}</b> <span class="muted">${ms(s.ms)}</span></p>`;
       break;
+    case 'local-index':
+      body = `<p class="small">${t('steps.index_note')}</p>
+        ${s.candidates?.length ? `<table class="step-tries"><tr><th>${t('field.title')}</th><th>${t('field.author')}</th><th></th></tr>${s.candidates.map((c) => `<tr class="${c.ok ? 'chosen' : ''}"><td dir="auto">${esc(c.title)}</td><td dir="auto">${esc(c.author ?? '—')}</td><td class="muted small" dir="ltr">${esc(c.source)} · ${pct(c.ts)}${c.as != null ? ` · ${pct(c.as)}` : ''}</td></tr>`).join('')}</table>` : `<p class="muted small">${t('steps.none')}</p>`}
+        ${s.fixed ? `<p class="small">${t('steps.web_fixed')} <b dir="auto">${esc(s.fixed.title)}</b>${s.fixed.author ? ` <span class="muted" dir="auto">| ${esc(s.fixed.author)}</span>` : ''}</p>` : ''}
+        <p class="small"><b>${esc(s.verdict ?? '')}</b></p>`;
+      break;
     case 'match':
       body = `<p class="small" dir="auto">${esc(s.read ?? '')} → ${s.book ? `<b>${esc(s.book.title)}</b>${s.book.isbn13 ? ` <span class="muted">${esc(s.book.isbn13)}</span>` : ''}` : t('steps.no_catalogue')}</p><p class="small"><b>${esc(s.verdict ?? '')}</b></p>`;
       break;
