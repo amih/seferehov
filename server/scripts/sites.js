@@ -5,6 +5,7 @@
 //   node --env-file=../.env scripts/sites.js crawl [n]       read books from ready sites (daily page cap)
 //   node --env-file=../.env scripts/sites.js site <domain>   check and read one site now
 //   node --env-file=../.env scripts/sites.js estimate        count the books ready sites list (without reading them)
+//   node --env-file=../.env scripts/sites.js hold            apply the hold-back rules (see holdBack)
 //   node --env-file=../.env scripts/sites.js report
 //   node --env-file=../.env scripts/sites.js optout <domain> a site owner asked not to be read
 //
@@ -145,10 +146,12 @@ const COPY = /להעתיק|העתקה|העתקת|לשכפל|שכפול|copy|repr
 // Splits the terms into sentences and looks for a ban on robots, then on copying.
 export function judgeTerms(text) {
   const sentences = text.split(/(?<=[.;!?])\s+|\n+/).map((s) => s.trim()).filter((s) => s.length > 10);
-  const bots = sentences.find((s) => BOTS.test(s) && BAN.test(s));
-  if (bots) return { terms: 'bots_ban', note: bots.slice(0, 500) };
-  const copy = sentences.find((s) => COPY.test(s) && BAN.test(s));
-  if (copy) return { terms: 'copy_ban', note: copy.slice(0, 500) };
+  // A ban often heads a list ("אין: ... -להעתיק, לשכפל"): read each sentence with the two before it.
+  const near = (i) => sentences.slice(Math.max(0, i - 2), i + 1).join(' ');
+  const bots = sentences.findIndex((s, i) => BOTS.test(s) && BAN.test(near(i)));
+  if (bots >= 0) return { terms: 'bots_ban', note: near(bots).slice(0, 500) };
+  const copy = sentences.findIndex((s, i) => COPY.test(s) && BAN.test(near(i)));
+  if (copy >= 0) return { terms: 'copy_ban', note: near(copy).slice(0, 500) };
   return { terms: 'ok', note: null };
 }
 
@@ -510,6 +513,18 @@ async function estimate(site) {
   log(`${site.domain}: about ${n} (${how})`);
 }
 
+// Before anything is read:
+//   - a publisher with two domains gets the stricter verdict of the two;
+//   - a large site (over 500 books) whose terms page the check could not find waits for a
+//     person to read its terms ('ask'): the automatic check misses terms behind menus.
+async function holdBack() {
+  const a = await q(`UPDATE ref_sites s SET status = o.status, note = 'same publisher as ' || o.domain
+    FROM ref_sites o WHERE s.wikidata = o.wikidata AND s.id <> o.id AND s.status = 'ready' AND o.status IN ('refused', 'ask', 'opted_out')`);
+  const b = await q(`UPDATE ref_sites SET status = 'ask', note = 'large site, terms page not found automatically: check by hand'
+    WHERE status = 'ready' AND terms = 'none' AND est_books > 500`);
+  if (a.rowCount + b.rowCount) log(`held back: ${a.rowCount} as another domain of a refusing publisher, ${b.rowCount} large sites to check by hand`);
+}
+
 async function report() {
   const rows = await many(`SELECT status, count(*)::int AS sites, sum(books)::int AS books FROM ref_sites GROUP BY status ORDER BY sites DESC`);
   console.table(rows);
@@ -525,6 +540,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     else if (mode === 'crawl') {
       // Sites whose terms were never checked are checked first; then ready sites, those never read first.
       await eachSite(`SELECT * FROM ref_sites WHERE status = 'new' ORDER BY id`, check, 50);
+      await holdBack();
       await eachSite(`SELECT * FROM ref_sites WHERE status = 'ready' OR (status IN ('done', 'no_books', 'paused') AND next_crawl < now())
         ORDER BY crawled_at NULLS FIRST, id`, crawl, arg);
     } else if (mode === 'site' && arg) {
@@ -532,7 +548,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       const d = arg.replace(/^www\./, '');
       await eachSite(`SELECT * FROM ref_sites WHERE domain = '${d.replace(/'/g, "''")}' AND status = 'new'`, check, 1);
       await eachSite(`SELECT * FROM ref_sites WHERE domain = '${d.replace(/'/g, "''")}' AND status IN ('ready', 'done', 'no_books')`, crawl, 1);
-    } else if (mode === 'estimate') await eachSite(`SELECT * FROM ref_sites WHERE status = 'ready' AND est_books IS NULL ORDER BY id`, estimate, arg);
+    } else if (mode === 'hold') await holdBack();
+    else if (mode === 'estimate') await eachSite(`SELECT * FROM ref_sites WHERE status = 'ready' AND est_books IS NULL ORDER BY id`, estimate, arg);
     else if (mode === 'report') await report();
     else if (mode === 'optout' && arg) {
       const r = await q(`UPDATE ref_sites SET status = 'opted_out', note = 'owner asked' WHERE domain = $1`, [arg.replace(/^www\./, '')]);
