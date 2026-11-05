@@ -4,6 +4,7 @@
 //   node --env-file=../.env scripts/sites.js check [n]       robots.txt, terms of use and platform of new sites
 //   node --env-file=../.env scripts/sites.js crawl [n]       read books from ready sites (daily page cap)
 //   node --env-file=../.env scripts/sites.js site <domain>   check and read one site now
+//   node --env-file=../.env scripts/sites.js estimate        count the books ready sites list (without reading them)
 //   node --env-file=../.env scripts/sites.js report
 //   node --env-file=../.env scripts/sites.js optout <domain> a site owner asked not to be read
 //
@@ -478,6 +479,30 @@ async function eachSite(sql, fn, limit) {
   }
 }
 
+// How many books a ready site probably lists, without reading them: the shop's own product
+// count (one request), else the number of book-page URLs in its sitemap.
+async function estimate(site) {
+  site.host = new URL(site.url).host;
+  const robots = await robotsOf(site);
+  if (!robots.allows('/')) return;
+  site.crawl_delay = robots.delay ?? site.crawl_delay;
+  let n = null; let how = null;
+  if (site.platform === 'woocommerce') {
+    for (const path of ['/wp-json/wc/store/v1/products', '/wp-json/wc/store/products']) {
+      if (!robots.allows(path)) continue;
+      const r = await get(`https://${site.host}${path}?per_page=1`, site, { accept: 'application/json' });
+      const total = r.status === 200 ? +r.headers.get('x-wp-total') : NaN;
+      if (total >= 0) { n = total; how = 'store'; break; }
+    }
+  }
+  if (n == null) {
+    const urls = await sitemapUrls(site, robots);
+    n = urls.length; how = 'sitemap';
+  }
+  await q('UPDATE ref_sites SET est_books = $2, est_how = $3 WHERE id = $1', [site.id, n, how]);
+  log(`${site.domain}: about ${n} (${how})`);
+}
+
 async function report() {
   const rows = await many(`SELECT status, count(*)::int AS sites, sum(books)::int AS books FROM ref_sites GROUP BY status ORDER BY sites DESC`);
   console.table(rows);
@@ -500,7 +525,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       const d = arg.replace(/^www\./, '');
       await eachSite(`SELECT * FROM ref_sites WHERE domain = '${d.replace(/'/g, "''")}' AND status = 'new'`, check, 1);
       await eachSite(`SELECT * FROM ref_sites WHERE domain = '${d.replace(/'/g, "''")}' AND status IN ('ready', 'done', 'no_books')`, crawl, 1);
-    } else if (mode === 'report') await report();
+    } else if (mode === 'estimate') await eachSite(`SELECT * FROM ref_sites WHERE status = 'ready' AND est_books IS NULL ORDER BY id`, estimate, arg);
+    else if (mode === 'report') await report();
     else if (mode === 'optout' && arg) {
       const r = await q(`UPDATE ref_sites SET status = 'opted_out', note = 'owner asked' WHERE domain = $1`, [arg.replace(/^www\./, '')]);
       await q(`DELETE FROM ref_titles WHERE site_id IN (SELECT id FROM ref_sites WHERE domain = $1)`, [arg.replace(/^www\./, '')]);
