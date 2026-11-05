@@ -79,7 +79,7 @@ async function wikidata() {
 // --- Hebrew Wikipedia ----------------------------------------------------------------
 // Bibliography sections of writers' pages ("ספריו", "ביבליוגרפיה"…: bulleted lines or a
 // table whose first column is the title) and book pages with the "ספר" infobox.
-const BIB = /^(ספריו|ספריה|ספרים|ספרים שכתב|ספרים שכתבה|מספריו|מספריה|ביבליוגרפיה|רשימת ספריו|רשימת ספריה|יצירותיו|יצירותיה|כתביו|כתביה|ספרי פרוזה|ספרי שירה|ספרי ילדים|ספרי עיון|פרוזה|שירה|רומנים|ספרות ילדים|ספרי נוער|ספריו שתורגמו לעברית|ספריה שתורגמו לעברית|ספריו בעברית|ספריה בעברית|יצירות|ספריו המתורגמים לעברית|ספרים שתורגמו לעברית)\b/;
+const BIB = /^(ספריו|ספריה|ספרים|ספרים שכתב|ספרים שכתבה|מספריו|מספריה|ביבליוגרפיה|רשימת ספריו|רשימת ספריה|יצירותיו|יצירותיה|כתביו|כתביה|ספרי פרוזה|ספרי שירה|ספרי ילדים|ספרי עיון|פרוזה|שירה|רומנים|ספרות ילדים|ספרי נוער|ספריו שתורגמו לעברית|ספריה שתורגמו לעברית|ספריו בעברית|ספריה בעברית|יצירות|ספריו המתורגמים לעברית|ספרים שתורגמו לעברית)(?![\p{L}])/u;
 const WRITER_BOX = /\{\{\s*(סופר|משורר|משוררת|סופרת|מחזאי|אישיות ספרותית)\s*[|\n}]/;
 const BOOK_BOX = /\{\{\s*(ספר|ספר קומיקס)\s*\n?\s*\|/;
 const page = (t) => t.replace(/\s*\([^)]*\)\s*$/, '').trim();
@@ -140,6 +140,13 @@ function fromPage(title, text, out) {
     if (/^[*#]/.test(raw)) {
       const t = titleOf(raw);
       if (t) { out.titles.push({ title: t, author, year: yearOf(raw), ref: title }); found++; }
+    } else if (raw.trim()) {
+      // Running text about the works: titles in quotes ("הרומנים העיקריים שלה כוללים את "אדונית התבלינים", …").
+      for (const m of unwiki(raw).matchAll(/["“„]([^"“”„]{2,60})["”]/g)) {
+        const t = m[1].trim();
+        const words = t.split(/\s+/).length;
+        if (words <= 8 && /\p{L}/u.test(t)) { out.titles.push({ title: t, author, year: null, ref: title }); found++; }
+      }
     }
   }
   if (writer || found) out.authors.push({ name: author, ref: title });
@@ -190,8 +197,9 @@ async function benyehuda() {
   await replace('benyehuda', [], [...names].map(([name, ref]) => ({ name, ref })));
 }
 
-if (mode === 'wikidata') await wikidata();
+export { fromPage, titleOf };
+if (import.meta.url !== `file://${process.argv[1]}`) { /* imported (tests) */ } else if (mode === 'wikidata') await wikidata();
 else if (mode === 'hewiki') await hewiki(file);
 else if (mode === 'benyehuda') await benyehuda();
 else { console.error('usage: import-refs.js wikidata | hewiki <dump.xml.bz2> | benyehuda'); process.exit(2); }
-process.exit(0);
+if (import.meta.url === `file://${process.argv[1]}`) process.exit(0);
