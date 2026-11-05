@@ -616,25 +616,44 @@ async function processScan(scan, { dry = false } = {}) {
   let done = 0;
   const seenBooks = new Set();
   const rows = [];
+  // Which catalogue answered a lookup (lookups.source).
+  const sourceOf = async (id) => (id ? (await one('SELECT source FROM lookups WHERE id = $1', [id]).catch(() => null))?.source ?? null : null);
   for (const item of found) {
     let book = null, lookupId = null;
     const isbn = item.isbn;
-    if (isbn) ({ book = null, lookupId = null } = await lookupIsbn(isbn, ctx).catch(() => ({})));
+    const ev = (item.evidence = []);
+    const asRead = item.title ?? null;
+    ev.push({ stage: 'read', source: item.via === 'barcode' ? 'barcode' : item.verified ? 'vision+ocr' : 'vision', outcome: 'as_read',
+      after: asRead ?? isbn ?? null, detail: { author: item.author ?? null, frames: item.frames ? [...item.frames].map((x) => x + 1) : undefined, verified: item.verified ?? null, quality: item.quality ?? null } });
+    const verify = async (query, r) => ev.push({ stage: 'verify', source: (await sourceOf(r.lookupId)) ?? 'none', outcome: r.book ? 'match' : 'no_match',
+      before: query, after: r.book?.title ?? null, detail: { lookup_id: r.lookupId ?? null, book_id: r.book?.id ?? null, isbn13: r.book?.isbn13 ?? null } });
+    if (isbn) {
+      const r = await lookupIsbn(isbn, ctx).catch(() => ({}));
+      ({ book = null, lookupId = null } = r);
+      await verify(isbn, r);
+    }
     // Each spelling the frames gave, most frequent first, until a catalogue knows one.
     for (const title of (item.variants ?? []).slice(0, 3)) {
       if (book) break;
       const r = await lookupTitle(title, item.author, ctx).catch(() => ({}));
+      await verify(title, r);
       book = r.book ?? null;
       lookupId = r.lookupId ?? lookupId;
-      if (book && title !== item.title) item.title = title;
+      if (book && title !== item.title) {
+        ev.push({ stage: 'correct', source: 'frames', outcome: 'corrected', before: item.title, after: title, detail: { variants: item.variants } });
+        item.title = title;
+      }
     }
     // No catalogue knows the reading: the web may (a look-alike letter, the author read into the title).
     if (!book && item.via === 'vision' && item.title) {
-      const fixed = await webCheck(item.title, item.author).catch(() => null);
-      if (fixed) {
-        item.title = fixed.title;
-        if (fixed.author) item.author = fixed.author;
-        const r = await lookupTitle(fixed.title, fixed.author, ctx).catch(() => ({}));
+      const w = await webCheck(item.title, item.author).catch((err) => ({ fixed: null, outcome: `error: ${err.message}`, tries: [] }));
+      ev.push({ stage: 'correct', source: 'web', outcome: w.outcome, before: [item.title, item.author].filter(Boolean).join(' | '),
+        after: w.fixed ? [w.fixed.title, w.fixed.author].filter(Boolean).join(' | ') : null, detail: { tries: w.tries } });
+      if (w.fixed) {
+        item.title = w.fixed.title;
+        if (w.fixed.author) item.author = w.fixed.author;
+        const r = await lookupTitle(w.fixed.title, w.fixed.author, ctx).catch(() => ({}));
+        await verify(w.fixed.title, r);
         book = r.book ?? null;
         lookupId = r.lookupId ?? lookupId;
       }
@@ -662,12 +681,16 @@ async function processScan(scan, { dry = false } = {}) {
   rows.sort((a, b) => rank[a.quality] - rank[b.quality]); // surest first
   for (const [n, { item, book, title, isbn, quality, lookupId }] of rows.entries()) {
     const crop = item.crop ? await saveCropThumb(item.crop, scan.id, n) : null;
-    await q(
+    const saved = await one(
       `INSERT INTO scan_items(scan_id, title, author, isbn13, book_id, via, matched, frame_path, quality, crop_path, lookup_id, sources, trace_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
       [scan.id, title, item.author ?? book?.authors?.[0] ?? null, book?.isbn13 ?? isbn ?? null, book?.id ?? null, item.via, !!book, item.frame, quality, crop, lookupId,
         [item.via === 'barcode' ? 'barcode' : scan.source], item.at?.length ? item.at : null],
     );
+    for (const e of item.evidence ?? []) {
+      await q(`INSERT INTO scan_item_evidence(item_id, stage, source, outcome, before, after, detail) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [saved.id, e.stage, e.source, e.outcome, e.before ?? null, e.after ?? null, e.detail ? JSON.stringify(e.detail) : null]).catch((err) => log.warn({ err }, 'evidence'));
+    }
   }
 }
 

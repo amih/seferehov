@@ -38,7 +38,7 @@ async function searxng(query) {
   const res = await fetch(url, { signal: AbortSignal.timeout(20_000) });
   if (!res.ok) throw new Error(`search ${res.status}`);
   return ((await res.json()).results ?? []).slice(0, RESULTS)
-    .map((r) => ({ title: String(r.title ?? ''), text: String(r.content ?? '').slice(0, 300), url: r.url }));
+    .map((r) => ({ title: String(r.title ?? ''), text: String(r.content ?? '').slice(0, 300), url: r.url, engines: r.engines ?? (r.engine ? [r.engine] : []) }));
 }
 
 // Why no search can be sent now, or null.
@@ -123,9 +123,19 @@ If the results clearly name this book, answer one line: TITLE | AUTHOR, spelled 
   return { results, answer, fixed, kept, cached, verdict: 'corrected' };
 }
 
-// { title, author } as the web spells it, or null.
+// Hosts (and engines) of the results that spell the corrected title: which sites helped.
+function helpers(results, fixed) {
+  const want = normTitle(fixed.title);
+  const used = results.filter((r) => normTitle(`${r.title} ${r.text}`).includes(want));
+  const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return null; } };
+  return { sites: [...new Set(used.map((r) => host(r.url)).filter(Boolean))], engines: [...new Set(used.flatMap((r) => r.engines ?? []))] };
+}
+
+// { fixed: { title, author } | null, outcome, tries: [{ query, verdict, cached, sites, engines }] }
+//   outcome: corrected | confirmed (the web spells it as read) | unknown | held (not searched)
 export async function webCheck(title, author) {
-  if (!config.searchUrl || !title) return null;
+  const tries = [];
+  if (!config.searchUrl || !title) return { fixed: null, outcome: 'off', tries };
   const read = [title, author].filter(Boolean).join(' ');
   const book = /[א-ת]/.test(read) ? 'ספר' : 'book';
   // The whole reading first; then, when the title has parts ("author • title"), its longest part.
@@ -137,13 +147,15 @@ export async function webCheck(title, author) {
     let r;
     try { r = await tryQuery(query, title, author, read); } catch (err) { r = { results: [], verdict: err.message.startsWith('not searched') ? err.message : `not checked: ${err.message}` }; }
     await step('web-search', { query, read: { title, author: author ?? null },
-      results: (r.results ?? []).map((x) => ({ title: x.title, text: x.text.slice(0, 160), url: x.url })),
+      results: (r.results ?? []).map((x) => ({ title: x.title, text: x.text.slice(0, 160), url: x.url, engines: x.engines })),
       answer: r.answer, fixed: r.fixed, kept: r.kept, cached: r.cached, verdict: r.verdict, ms: Date.now() - t0 });
-    if (r.verdict.startsWith('not searched')) return null; // held back: no second query either
+    const used = r.fixed && r.verdict === 'corrected' ? helpers(r.results, r.fixed) : { sites: [], engines: [] };
+    tries.push({ query, verdict: r.verdict, cached: !!r.cached, ...used });
+    if (r.verdict.startsWith('not searched')) return { fixed: null, outcome: 'held', tries }; // no second query either
     if (r.verdict === 'corrected') {
       const same = normTitle(r.fixed.title) === normTitle(title) && normTitle(r.fixed.author) === normTitle(author);
-      return same ? null : r.fixed;
+      return { fixed: same ? null : r.fixed, outcome: same ? 'confirmed' : 'corrected', tries };
     }
   }
-  return null;
+  return { fixed: null, outcome: 'unknown', tries };
 }

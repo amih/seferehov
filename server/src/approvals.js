@@ -336,6 +336,12 @@ export default async function approvalRoutes(app) {
       `UPDATE scan_items SET decision = $2, decided_at = now(), outcome = $3, sighting_id = $4, my_book_id = $5 WHERE id = $1`,
       [item.id, decision, outcome, result?.sighting?.id ?? null, result?.myBookId ?? null],
     );
+    // The reader's answer, for scoring the sources that read and corrected it.
+    if (outcome) {
+      await q(`INSERT INTO scan_item_evidence(item_id, stage, source, outcome, before, after) VALUES ($1, 'reader', 'reader', $2, $3, $4)`,
+        [item.id, outcome, [item.title, item.author].filter(Boolean).join(' | '),
+          result?.book ? [result.book.title, result.book.authors?.[0]].filter(Boolean).join(' | ') : null]).catch((err) => req.log.warn({ err }, 'evidence'));
+    }
     if (outcome === 'dropped' || outcome === 'edited') {
       keepForReview(item, outcome, { title: result?.book?.title, authors: result?.book?.authors }).catch((err) => req.log.warn({ err, item: item.id }, 'keep for review'));
     }
