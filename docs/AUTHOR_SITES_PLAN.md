@@ -1,6 +1,6 @@
 # Plan: book lists from authors' and small publishers' own websites
 
-Status: step 1 measured (see "Step 1 results"), nothing built. Written 2026-11-05.
+Status: publishers built and running (step 2 and 3 for publishers; see "Publishers: first run"). Authors not started. Written 2026-11-05.
 
 ## Why
 
@@ -135,6 +135,27 @@ What this means:
 - The titles found are new: the sampled author site's titles were all missing from the
   index, which is the point of the long tail.
 - Search-based discovery (step 4) can wait until the Wikidata list is read and measured.
+
+## Publishers: first run (2026-11-05)
+
+Built: `ref_sites`, `ref_site_pages`, robots and terms checks, `/bot`, WooCommerce Store API,
+Shopify and sitemap reading (JSON-LD and microdata), daily timer. The model-based fallback
+for pages with no structured data is not built yet.
+
+| Status | Sites | Books (shop / sitemap count) |
+|---|---|---|
+| ready (allowed) | 132, of which 57 list books | ~9,100 |
+| ask (terms forbid copying, or a large site whose terms were not found) | 66 | ~62,000 |
+| not yet checked (daily page cap reached) | 18 | ~1,000 |
+| dead / paused / refused | 31 / 11 / 7 | |
+
+- The counts are upper bounds: sitemaps also list non-book products (Sial: 77 pages, 46 books).
+- About half the books are new to the index (Sial: 25 of 46).
+- Reading the ready sites takes about a week at the daily cap (store listings are 100 books a
+  request; sitemap sites are read 50 pages a day each).
+- The big ones wait for a person: Indiebook (~22,600, terms forbid copying, checked by hand
+  earlier), Bookpod (~18,400), Ben-Zvi Institute (~8,700), Keter (~3,400, terms forbid copying),
+  Koren (~2,900). Asking them by email is the way to get most of the remaining books.
 
 ## Order of work
 
