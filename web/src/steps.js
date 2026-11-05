@@ -80,6 +80,13 @@ function stepHtml(s, n, files, ctx) {
         <p class="small">OCR: <span dir="auto">${esc((s.ocr ?? []).join(' · '))}</span></p>
         <p class="small">${t('steps.model_read')}: <b dir="auto">${esc(s.read?.title ?? '—')}</b>${s.read?.author ? ` <span class="muted" dir="auto">| ${esc(s.read.author)}</span>` : ''} · ${t('steps.score', { s: pct(s.score) })} · <b>${esc(s.verdict ?? '')}</b></p>`;
       break;
+    case 'web-search':
+      body = `<p class="small">${t('steps.web_note')}</p>
+        <p class="small muted" dir="auto">${esc(s.query ?? '')}</p>
+        ${s.results?.length ? `<ol class="step-lines small">${s.results.map((r) => `<li dir="auto"><a href="${esc(r.url ?? '#')}" target="_blank" rel="noopener noreferrer">${esc(r.title)}</a> <span class="muted">${esc(r.text ?? '')}</span></li>`).join('')}</ol>` : ''}
+        ${s.fixed ? `<p class="small">${t('steps.web_fixed')} <b dir="auto">${esc(s.fixed.title)}</b>${s.fixed.author ? ` <span class="muted" dir="auto">| ${esc(s.fixed.author)}</span>` : ''}</p>` : ''}
+        <p class="small"><b>${esc(s.verdict ?? '')}</b> <span class="muted">${ms(s.ms)}</span></p>`;
+      break;
     case 'match':
       body = `<p class="small" dir="auto">${esc(s.read ?? '')} → ${s.book ? `<b>${esc(s.book.title)}</b>${s.book.isbn13 ? ` <span class="muted">${esc(s.book.isbn13)}</span>` : ''}` : t('steps.no_catalogue')}</p><p class="small"><b>${esc(s.verdict ?? '')}</b></p>`;
       break;

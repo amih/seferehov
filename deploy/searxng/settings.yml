@@ -1,0 +1,23 @@
+# Web search for the shelf reader (server/src/websearch.js): JSON answers on
+# 127.0.0.1:8895 only, no web page for people, no limiter (one caller: the server).
+# Engines: Brave gives the best Hebrew book results but pauses after bursts; Yandex is
+# steady. Bing (junk for Hebrew), Google (access denied), DuckDuckGo and Qwant (CAPTCHA)
+# are left out.
+use_default_settings:
+  engines:
+    keep_only: [brave, yandex]
+general:
+  instance_name: seferehov-search
+server:
+  secret_key: "set-from-env"
+  limiter: false
+  image_proxy: false
+search:
+  safe_search: 0
+  formats: [json]
+outgoing:
+  request_timeout: 5.0
+  max_request_timeout: 10.0
+engines:
+  - name: yandex
+    disabled: false

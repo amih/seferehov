@@ -9,6 +9,7 @@ import { requireUser } from './auth.js';
 import { lookupIsbn, lookupTitle, findOrCreateBook } from './books.js';
 import { readBooks, sharpness, BLURRY, readCover, readIsbnBarcodes, normTitle, titleSimilarity, coverAgrees, authorsAgree } from './vision.js';
 import { pickFrames } from './frames.js';
+import { webCheck } from './websearch.js';
 import { cropCover } from './covers.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
 import { initialStatus, awardSighting } from './moderation.js';
@@ -625,6 +626,17 @@ async function processScan(scan, { dry = false } = {}) {
       book = r.book ?? null;
       lookupId = r.lookupId ?? lookupId;
       if (book && title !== item.title) item.title = title;
+    }
+    // No catalogue knows the reading: the web may (a look-alike letter, the author read into the title).
+    if (!book && item.via === 'vision' && item.title) {
+      const fixed = await webCheck(item.title, item.author).catch(() => null);
+      if (fixed) {
+        item.title = fixed.title;
+        if (fixed.author) item.author = fixed.author;
+        const r = await lookupTitle(fixed.title, fixed.author, ctx).catch(() => ({}));
+        book = r.book ?? null;
+        lookupId = r.lookupId ?? lookupId;
+      }
     }
     await setProgress(scan.id, { step: 'matching', done: ++done, total: found.length });
     const drop = (reason) => step('match', { read: item.title ?? null, author: item.author ?? null, isbn: isbn ?? null, book: book && { id: book.id, title: book.title, authors: book.authors, isbn13: book.isbn13 }, verdict: reason });

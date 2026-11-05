@@ -53,6 +53,10 @@ export function itemSteps(trace, { source, title, trace_at: at0 }) {
   }
   // The catalogue lookup and the verdict for this title.
   const want = normTitle(title ?? '');
+  const web = steps.filter((s) => s.kind === 'web-search'
+    && [s.fixed?.title, s.read?.title].some((x) => x && titleSimilarity(normTitle(x), want) > 0.75));
+  // Every query made for that one reading (the whole reading, then a part of it).
+  out.push(...web.filter((s) => s.read?.title === web.at(-1)?.read?.title));
   out.push(...steps.filter((s) => s.kind === 'match' && titleSimilarity(normTitle(s.read ?? ''), want) > 0.75).slice(-1));
   out.sort((a, b) => a.i - b.i);
   return { at, guessed: !at0?.length, steps: out };
