@@ -60,20 +60,24 @@ async function sparql(query) {
 }
 
 async function wikidata() {
-  // Written works (books, novels, poetry collections, plays…) with a Hebrew title.
-  const works = await sparql(`SELECT ?b ?l (SAMPLE(?al) AS ?author) (MIN(YEAR(?d)) AS ?y) WHERE {
+  const pause = () => new Promise((r) => setTimeout(r, 10_000));
+  // Written works (books, novels, poetry collections, plays…) with a Hebrew title. Kept
+  // light (no dates, no extra filters): the shared endpoint refuses heavy queries.
+  const works = await sparql(`SELECT ?b ?l (SAMPLE(?al) AS ?author) WHERE {
     ?b wdt:P31/wdt:P279* wd:Q47461344 . ?b rdfs:label ?l FILTER(LANG(?l) = "he")
-    FILTER NOT EXISTS { ?b wdt:P31 wd:Q13442814 }
-    OPTIONAL { ?b wdt:P50 ?a . ?a rdfs:label ?al FILTER(LANG(?al) = "he") }
-    OPTIONAL { ?b wdt:P577 ?d } } GROUP BY ?b ?l`);
-  await new Promise((r) => setTimeout(r, 10_000));
-  // People who write: in the National Library's name file, author of a work, or writer / poet / novelist.
-  const people = await sparql(`SELECT ?p ?l WHERE { ?p wdt:P31 wd:Q5 .
-    { ?p rdfs:label ?l } UNION { ?p skos:altLabel ?l } FILTER(LANG(?l) = "he")
-    { ?p wdt:P8189 ?x } UNION { ?w wdt:P50 ?p } UNION { ?p wdt:P106 wd:Q36180 } UNION { ?p wdt:P106 wd:Q6625963 } UNION { ?p wdt:P106 wd:Q49757 } }`);
+    OPTIONAL { ?b wdt:P50 ?a . ?a rdfs:label ?al FILTER(LANG(?al) = "he") } } GROUP BY ?b ?l`);
+  // People who write, one light query each: in the National Library's name file, author of
+  // a work, or writer / poet / novelist. Hebrew labels and alternative spellings.
+  const people = [];
+  for (const where of ['?p wdt:P8189 ?x .', '?w wdt:P50 ?p .', '?p wdt:P106 wd:Q36180 .', '?p wdt:P106 wd:Q6625963 .', '?p wdt:P106 wd:Q49757 .']) {
+    for (const label of ['rdfs:label', 'skos:altLabel']) {
+      await pause();
+      for (const row of await sparql(`SELECT DISTINCT ?p ?l WHERE { ${where} ?p ${label} ?l FILTER(LANG(?l) = "he") }`)) people.push(row);
+    }
+  }
   await replace('wikidata',
-    works.map((w) => ({ title: w.l, author: w.author || null, year: Number(w.y) || null, ref: w.b })),
-    people.map((p) => ({ name: p.l, ref: p.p })));
+    works.filter((w) => /^Q\d+$/.test(w.b)).map((w) => ({ title: w.l, author: w.author || null, ref: w.b })),
+    people.filter((p) => /^Q\d+$/.test(p.p)).map((p) => ({ name: p.l, ref: p.p })));
 }
 
 // --- Hebrew Wikipedia ----------------------------------------------------------------
