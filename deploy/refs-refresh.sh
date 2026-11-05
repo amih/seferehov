@@ -14,3 +14,5 @@ cd "$APP_DIR/server"
 node --env-file=../.env scripts/import-refs.js benyehuda
 node --max-old-space-size=4000 --env-file=../.env scripts/import-refs.js hewiki "$DATA/hewiki.xml.bz2"
 node --env-file=../.env scripts/import-refs.js wikidata
+# Publishers' own websites: add newly listed ones (they are read by the daily seferehov-sites timer).
+node --env-file=../.env scripts/sites.js discover
