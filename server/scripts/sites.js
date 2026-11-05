@@ -3,6 +3,7 @@
 //   node --env-file=../.env scripts/sites.js discover        Israeli publishers with a website, from Wikidata
 //   node --env-file=../.env scripts/sites.js check [n]       robots.txt, terms of use and platform of new sites
 //   node --env-file=../.env scripts/sites.js crawl [n]       read books from ready sites (daily page cap)
+//   node --env-file=../.env scripts/sites.js site <domain>   check and read one site now
 //   node --env-file=../.env scripts/sites.js report
 //   node --env-file=../.env scripts/sites.js optout <domain> a site owner asked not to be read
 //
@@ -461,6 +462,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       await eachSite(`SELECT * FROM ref_sites WHERE status = 'new' ORDER BY id`, check, 50);
       await eachSite(`SELECT * FROM ref_sites WHERE status = 'ready' OR (status IN ('done', 'no_books', 'paused') AND next_crawl < now())
         ORDER BY crawled_at NULLS FIRST, id`, crawl, arg);
+    } else if (mode === 'site' && arg) {
+      // One site now, whatever its schedule (still only if allowed).
+      const d = arg.replace(/^www\./, '');
+      await eachSite(`SELECT * FROM ref_sites WHERE domain = '${d.replace(/'/g, "''")}' AND status = 'new'`, check, 1);
+      await eachSite(`SELECT * FROM ref_sites WHERE domain = '${d.replace(/'/g, "''")}' AND status IN ('ready', 'done', 'no_books')`, crawl, 1);
     } else if (mode === 'report') await report();
     else if (mode === 'optout' && arg) {
       const r = await q(`UPDATE ref_sites SET status = 'opted_out', note = 'owner asked' WHERE domain = $1`, [arg.replace(/^www\./, '')]);
