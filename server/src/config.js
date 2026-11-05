@@ -27,8 +27,6 @@ export const config = {
   // SearXNG (docker-compose service "search"): a spine misread by the OCR is looked up
   // on the web, and the spelling the web gives is kept. Empty = no web check.
   searchUrl: (env.SEARCH_URL ?? 'http://127.0.0.1:8895').replace(/\/$/, ''),
-  // Brave Search API key: when set, it is asked instead of SearXNG (steadier).
-  braveKey: env.BRAVE_API_KEY || '',
   // Surya OCR service (ocr/surya_server.py) for Hebrew cover text.
   ocrUrl: (env.OCR_URL || 'http://127.0.0.1:3872').replace(/\/$/, ''),
   // Real-ESRGAN (realesrgan-ncnn-vulkan, its models/ beside it) sharpens cover photos

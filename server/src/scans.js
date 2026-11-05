@@ -9,7 +9,7 @@ import { requireUser } from './auth.js';
 import { lookupIsbn, lookupTitle, findOrCreateBook } from './books.js';
 import { readBooks, sharpness, BLURRY, readCover, readIsbnBarcodes, normTitle, titleSimilarity, coverAgrees, authorsAgree } from './vision.js';
 import { pickFrames } from './frames.js';
-import { webCheck } from './websearch.js';
+import { webCheck, purgeSearchCache } from './websearch.js';
 import { cropCover } from './covers.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
 import { initialStatus, awardSighting } from './moderation.js';
@@ -263,6 +263,7 @@ export function startScanWorker(logger) {
   setInterval(() => {
     purgeKept().catch((err) => log.error({ err }, 'scan keep purge'));
     purgeTraces().catch((err) => log.error({ err }, 'trace purge'));
+    purgeSearchCache().catch((err) => log.error({ err }, 'search cache purge'));
   }, 6 * 3600_000).unref();
 }
 
