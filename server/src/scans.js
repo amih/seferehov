@@ -451,6 +451,20 @@ async function saveFrameThumb(buffer, scanId, i) {
   return rel;
 }
 
+// How a spine's cut-out looks: the share of blank fill (the straightening leaves white
+// wedges where the cut ran off the spine) and length / height.
+export async function cropShape(jpeg) {
+  const { data, info } = await sharp(jpeg).resize(400, 400, { fit: 'inside' }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  let blank = 0;
+  for (let i = 0; i < data.length; i += 3) if (data[i] >= 250 && data[i + 1] >= 250 && data[i + 2] >= 250) blank++;
+  const long = Math.max(info.width, info.height), short = Math.min(info.width, info.height);
+  return { blank: Math.round((100 * blank) / (data.length / 3)) / 100, ratio: Math.round((10 * long) / short) / 10 };
+}
+// 6 Nov 2026: every shelf crop over 25% blank was declined; no approved one was over 20%.
+// (Short, tall cuts holding several books were often approved: the title was still read.)
+const BAD_BLANK = 0.25;
+export const badCrop = (shape) => (shape && shape.blank >= BAD_BLANK ? 1 : 0);
+
 // The cut-out spine, so the user can compare it with what we read.
 async function saveCropThumb(jpeg, scanId, n) {
   const month = new Date().toISOString().slice(0, 7);
@@ -599,11 +613,13 @@ async function processScan(scan, { dry = false } = {}) {
       hit.author ||= item.author;
       hit.isbn ||= item.isbn;
       if (hit.quality === 'low' && item.quality && item.quality !== 'low') hit.quality = item.quality;
+      if (item.crop) hit.crops.push({ crop: item.crop, verified: item.verified, at: item.at });
       if (!hit.crop && item.crop) Object.assign(hit, { crop: item.crop, verified: item.verified, at: item.at });
       hit.at ??= item.at;
       return;
     }
-    found.push({ ...item, key, keys: new Set([key]), frames: new Set([i]), reads: new Map(item.title ? [[item.title, 1 + (item.verified ? 0.5 : 0)]] : []) });
+    found.push({ ...item, key, keys: new Set([key]), frames: new Set([i]), crops: item.crop ? [{ crop: item.crop, verified: item.verified, at: item.at }] : [],
+      reads: new Map(item.title ? [[item.title, 1 + (item.verified ? 0.5 : 0)]] : []) });
   };
   for (const [i, { buffer: buf, fromVideo, t, sharp: sharpScore }] of images.entries()) {
     if (!dry && i) await letCoversIn();
@@ -629,6 +645,14 @@ async function processScan(scan, { dry = false } = {}) {
     const ranked = [...f.reads].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length).map(([title]) => title);
     if (ranked.length) f.title = ranked[0];
     f.variants = ranked;
+  }
+  // The best cut of each spine, when several photos showed it (least blank, OCR-confirmed);
+  // a spine cut badly in every photo and found in no catalogue is given up below.
+  for (const f of found) {
+    if (!f.crops?.length) continue;
+    for (const c of f.crops) c.shape = await cropShape(c.crop).catch(() => null);
+    const ranked = [...f.crops].sort((a, b) => badCrop(a.shape) - badCrop(b.shape) || (b.verified === true) - (a.verified === true) || (a.shape?.blank ?? 1) - (b.shape?.blank ?? 1));
+    Object.assign(f, { crop: ranked[0].crop, verified: ranked[0].verified ?? f.verified, at: ranked[0].at ?? f.at, cropShape: ranked[0].shape });
   }
   await step('merge', { note: `the same spine in several frames counts once: readings merge when one contains the other or they are ${SAME_SPINE * 100}% alike (look-alike letters count less), never two from one frame`,
     found: found.map((f) => ({ title: f.title ?? null, variants: f.variants?.length > 1 ? f.variants : undefined, author: f.author ?? null, isbn: f.isbn ?? null, via: f.via, frames: [...f.frames].map((x) => x + 1), verified: f.verified, crop: !!f.crop })) });
@@ -700,6 +724,8 @@ async function processScan(scan, { dry = false } = {}) {
     const drop = (reason) => step('match', { read: item.title ?? null, author: item.author ?? null, isbn: isbn ?? null, book: book && { id: book.id, title: book.title, authors: book.authors, isbn13: book.isbn13 }, verdict: reason });
     if (book && seenBooks.has(book.id)) { await drop('dropped: same book as another item (barcode + spine)'); continue; } // the barcode and the spine of the same book
     if (book) seenBooks.add(book.id);
+    // Cut badly in every photo and known to no catalogue: given up.
+    if (!book && item.via === 'vision' && badCrop(item.cropShape)) { await drop(`dropped: the spine is cut badly in every photo (${Math.round(100 * item.cropShape.blank)}% blank) and no catalogue knows the reading`); continue; }
     // In a video every spine shows up in several frames; a title read only once
     // and found in no catalogue is most likely a misreading.
     if (!book && item.via === 'vision' && item.fromVideo && item.frames.size < 2) { await drop('dropped: read in only one video frame and no catalogue knows it'); continue; }

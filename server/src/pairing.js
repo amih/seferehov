@@ -88,6 +88,13 @@ const yes = async (images, prompt) => /^\s*YES/i.test(await generate(images, pro
 export async function sortShots(shots, { log = () => {} } = {}) {
   const info = [];
   for (const [i, s] of shots.entries()) {
+    // A second photo of the same pause (meta.extra): it shows what the one before it shows.
+    const prev = s.meta?.extra && i ? info[i - 1] : null;
+    if (prev) {
+      info.push({ i, kind: prev.kind, said: prev.said, codes: prev.codes, f: prev.f ? await features(s.buf) : null, extraOf: i - 1 });
+      log({ shot: i, kind: prev.kind, extra_of: i - 1 });
+      continue;
+    }
     const c = await classify(s.buf);
     const f = c.kind === 'front' || c.kind === 'back' ? await features(s.buf) : null;
     info.push({ i, ...c, f });
@@ -98,7 +105,8 @@ export async function sortShots(shots, { log = () => {} } = {}) {
   // The same side photographed again (a retake, or a second pass): one group per cover.
   const groups = [];
   for (const x of info.filter((x) => x.f)) {
-    let into = null;
+    let into = x.extraOf != null ? groups.find((g) => g.idx.includes(x.extraOf)) ?? null : null;
+    if (into) { into.idx.push(x.i); continue; }
     for (const g of groups) {
       if (g.kind !== x.kind || x.i - g.idx.at(-1) > WINDOW + 3) continue;
       const like = Math.max(...g.idx.map((j) => pictureLike(info[j].f.grey, x.f.grey)));
@@ -140,11 +148,13 @@ export async function sortShots(shots, { log = () => {} } = {}) {
   for (const b of books) b.codes = [...new Set([...b.back, ...b.front].flatMap((i) => info[i].codes))];
   books.sort((a, b) => Math.min(...a.front, ...a.back) - Math.min(...b.front, ...b.back));
 
-  // Shelf photos next to each other are read together (a spine seen twice counts once), 8 at most.
+  // Shelf photos next to each other are read together (a spine seen twice counts once), 8
+  // places at most (a second photo of the same pause does not count as a place).
   const shelves = [];
   let run = [];
+  const places = (r) => r.filter((j) => info[j].extraOf == null).length;
   for (const x of info) {
-    if (x.kind === 'shelf' && run.length < 8 && (!run.length || x.i - run.at(-1) <= 2)) run.push(x.i);
+    if (x.kind === 'shelf' && (places(run) < 8 || x.extraOf != null) && (!run.length || x.i - run.at(-1) <= 2)) run.push(x.i);
     else if (x.kind === 'shelf') { shelves.push(run); run = [x.i]; }
   }
   if (run.length) shelves.push(run);

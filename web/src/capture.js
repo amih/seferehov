@@ -24,13 +24,19 @@ import { align, cost, mean, R } from './motion.js';
 // fields (library code or My books, kind, position).
 const TICK_MS = 150;
 const W = 160;            // width of the grey copy; speeds are in its pixels per tick
-const STEADY = 1;         // px/tick: held steady
-const ROUGH = 2.5;        // px/tick: roughly steady
-const FAST = 6;           // px/tick: "slower"
-const NEXT = 0.4;         // moved this share of the picture since the last photo: new books
+// 6 Nov 2026, made more lax: a photo at a shorter, rougher pause and after less travel (each
+// spine is then in more photos, and the server pools their readings), and a second photo
+// of the same pause (EXTRA_MS later, if still held): the server keeps the better cut of
+// each spine and votes on the readings.
+const STEADY = 1.5;       // px/tick: held steady
+const ROUGH = 3.5;        // px/tick: roughly steady
+const FAST = 7;           // px/tick: "slower"
+const NEXT = 0.3;         // moved this share of the picture since the last photo: new books
 const CHANGED = 18;       // or the picture changed this much (a book turned over, the next book)
-const PAUSE_MS = 600;     // steady this long: photo (400 ms caught books mid-turn)
-const ROUGH_MS = 1600;
+const PAUSE_MS = 450;     // steady this long: photo (400 ms caught books mid-turn)
+const ROUGH_MS = 900;
+const EXTRA_MS = 350;     // the second photo of a pause: at least this long after the first
+const EXTRA_UNTIL = 1500; // and given up if the phone has not been held this long
 const MIN_SHARP = 8;
 const CODE_MS = 600;      // how often the live picture is looked at for a barcode
 
@@ -46,8 +52,9 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
   let prev = null, prevAt = 0, last = null, settleUntil = 0;
   let speed = 0, moved = { x: 0, y: 0 }, lost = false, arrived = 0, steadySince = 0;
   let best = null, bestScore = 0, bestSharp = 0, spare = null, sharps = [];
-  let ids = [], taken = 0, saving = Promise.resolve(), code = null, codeAt = 0, codeLook = 0;
+  let ids = [], taken = 0, places = 0, saving = Promise.resolve(), code = null, codeAt = 0, codeLook = 0;
   let motion = { acc: 0, turn: 0 }, lastMotion = 0;
+  let extra = null; // { at, until, sharp }: a second photo of this pause is wanted
 
   // The phone's own movement since the last photo: summed acceleration (gravity taken
   // out, m/s) and turning (degrees). Phones without the sensors leave both at 0.
@@ -88,7 +95,7 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
     }
     requestAnimationFrame(() => panel.querySelector('.shot-live')?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
     opened = Date.now();
-    prev = null; last = null; speed = 0; lost = false; arrived = 0; steadySince = 0; sharps = []; taken = 0; ids = []; code = null; dropBest();
+    prev = null; last = null; speed = 0; lost = false; arrived = 0; steadySince = 0; sharps = []; taken = 0; places = 0; ids = []; code = null; extra = null; dropBest();
     motion = { acc: 0, turn: 0 }; lastMotion = 0;
     addEventListener('devicemotion', onMotion);
     settleUntil = Date.now() + 700; // exposure and focus settle
@@ -147,6 +154,16 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
     if (now < settleUntil) return;
     log?.tick(v, step.edge, performance.now() - t0);
 
+    // The second photo of the pause: a sharp frame while still held there.
+    if (extra) {
+      if (now > extra.until || speed > ROUGH) extra = null;
+      else if (now >= extra.at && sharp >= 0.8 * extra.sharp) {
+        extra = null;
+        keepBest(sharp / (1 + speed), sharp, g);
+        take('extra');
+        return;
+      }
+    }
     // How far from the last photo (1 = a new view: moved along, or a new cover).
     let along = 1;
     if (last) {
@@ -190,7 +207,8 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
   function take(how) {
     const c = best, lg = log, seq = taken++, at = Date.now() - opened;
     const travel = +Math.max(Math.abs(moved.x) / small.width, Math.abs(moved.y) / (small.height || 1)).toFixed(2);
-    const meta = { how, sharp: Math.round(bestSharp), speed: +speed.toFixed(2), travel, lost,
+    if (how !== 'extra') extra = { at: Date.now() + EXTRA_MS, until: Date.now() + EXTRA_UNTIL, sharp: bestSharp };
+    const meta = { how, extra: how === 'extra', sharp: Math.round(bestSharp), speed: +speed.toFixed(2), travel, lost,
       acc: +motion.acc.toFixed(2), turn: Math.round(motion.turn), codes: code && Date.now() - codeAt < 2500 ? [code] : [] };
     const rec = lg?.photo(how, bestSharp, speed, { wait: arrived ? Date.now() - arrived : null, w: c.width, h: c.height, seq, travel, acc: meta.acc, turn: meta.turn, code: !!meta.codes.length });
     if (how === 'steady') sharps = [...sharps.slice(-9), bestSharp];
@@ -199,10 +217,13 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
     motion = { acc: 0, turn: 0 };
     best = null; bestScore = 0; bestSharp = 0;
     spare = null; // c is handed over
-    const flash = panel.querySelector('.shot-flash');
-    flash.classList.remove('on'); void flash.offsetWidth; flash.classList.add('on');
-    navigator.vibrate?.(30);
-    panel.querySelector('.burst-count').textContent = taken;
+    if (how !== 'extra') { // the second photo of a pause is taken quietly
+      const flash = panel.querySelector('.shot-flash');
+      flash.classList.remove('on'); void flash.offsetWidth; flash.classList.add('on');
+      navigator.vibrate?.(30);
+    }
+    if (how !== 'extra') places++;
+    panel.querySelector('.burst-count').textContent = places; // second photos of a pause are not counted
     show('next', 0, null);
     const fields = { ...request(), session: sid, seq, at, meta: JSON.stringify(meta) };
     saving = saving.then(async () => {
