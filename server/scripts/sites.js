@@ -585,10 +585,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       await eachSite(`SELECT * FROM ref_sites WHERE status = 'ready' OR (status IN ('done', 'no_books', 'paused') AND next_crawl < now())
         ORDER BY crawled_at NULLS FIRST, id`, crawl, arg);
     } else if (mode === 'site' && arg) {
-      // One site now, whatever its schedule (still only if allowed).
+      // One site now, whatever its schedule or the daily cap (still only if allowed; at most 50 pages).
       const d = arg.replace(/^www\./, '');
       await eachSite(`SELECT * FROM ref_sites WHERE domain = '${d.replace(/'/g, "''")}' AND status = 'new'`, check, 1);
-      await eachSite(`SELECT * FROM ref_sites WHERE domain = '${d.replace(/'/g, "''")}' AND status IN ('ready', 'done', 'no_books')`, crawl, 1);
+      await eachSite(`SELECT * FROM ref_sites WHERE domain = '${d.replace(/'/g, "''")}' AND status IN ('ready', 'done', 'no_books')`, crawl, 1, { ignoreCap: true });
     } else if (mode === 'hold') await holdBack();
     else if (mode === 'estimate') await eachSite(`SELECT * FROM ref_sites WHERE status = 'ready' AND est_books IS NULL ORDER BY id`, estimate, arg);
     else if (mode === 'report') await report();
