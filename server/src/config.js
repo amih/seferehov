@@ -11,8 +11,6 @@ export const config = {
   webDist: resolve(env.WEB_DIST || '../web/dist'),
   adminEmails: (env.ADMIN_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   minClientBuild: Number(env.MIN_CLIENT_BUILD || 0),
-  // National Library of Israel search API key (free: https://api2.nli.org.il). Optional.
-  nliApiKey: env.NLI_API_KEY || '',
   // Google Books API key (free, 1000 lookups/day). Optional but the keyless quota runs out.
   googleBooksKey: env.GOOGLE_BOOKS_API_KEY || '',
   trustThreshold: Number(env.TRUST_THRESHOLD || 5),

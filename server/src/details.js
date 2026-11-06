@@ -12,6 +12,7 @@ import { config } from './config.js';
 import { one, q } from './db.js';
 import { normTitle } from './vision.js';
 import { normalizeDanacode } from './util.js';
+import { nliRecords, marcFields } from './books.js';
 
 const UA = 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Mobile Safari/537.36 Seferehov/0.1 (+https://seferehov.com)';
 const REFRESH_DAYS = 30;
@@ -28,14 +29,6 @@ async function get(url, as = 'json', tries = [0]) {
   return null;
 }
 
-// api.nli.org.il answers 502 to bursts: one call at a time, spaced, with retries.
-let nliChain = Promise.resolve();
-function nli(url, as) {
-  const job = nliChain.then(() => get(url, as, [0, 3000, 8000]));
-  nliChain = job.then(() => sleep(1500), () => sleep(1500));
-  return job;
-}
-
 const decode = (s) => s.replace(/&quot;/g, '"').replace(/&apos;|&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 // Source notes at the end of a blurb: "--back cover", "-- מהכריכה האחורית".
 const tidy = (v) => (v ? decode(String(v)).replace(/\s*\r?\n?\s*-{2,}\s*[^\n]{0,60}$/, '').trim() || null : null);
@@ -47,30 +40,18 @@ function isbn10(isbn13) {
   return b + (c === 10 ? 'X' : c);
 }
 
-const DC = 'http://purl.org/dc/elements/1.1/';
-function marcFields(xml, tag) {
-  const re = new RegExp(`tag="${tag}"[^>]*>([\\s\\S]*?)</(?:\\w+:)?datafield>`, 'g');
-  return [...xml.matchAll(re)].map((m) => [...m[1].matchAll(/code="(\w)">([^<]*)</g)].map(([, c, v]) => [c, decode(v)]));
-}
 async function iiifImage(repId) {
   const man = await get(`https://nli.alma.exlibrisgroup.com/view/iiif/presentation/972NNL_INST/${repId}/manifest`);
   const svc = man?.items?.[0]?.items?.[0]?.items?.[0]?.body?.service?.[0]?.id;
   return svc ? `${svc}/full/1200,/0/default.jpg` : null;
 }
 
-// National Library of Israel: search by ISBN (older records hold only the ISBN-10), check
+// National Library of Israel (catalogue SRU, MARC): search by ISBN (older records hold only the ISBN-10), check
 // the record really lists it (MARC 020), blurb from 520, front/back photos from AVD.
 async function fromNli(book) {
-  if (!process.env.NLI_API_KEY || !book.isbn13) return null;
+  if (!book.isbn13) return null;
   for (const q of [book.isbn13, isbn10(book.isbn13)].filter(Boolean)) {
-    const hits = await nli(`https://api.nli.org.il/openlibrary/search?api_key=${encodeURIComponent(process.env.NLI_API_KEY)}`
-      + `&query=${encodeURIComponent(`any,contains,${q}`)}&output_format=json&limit=5`);
-    const ids = (Array.isArray(hits) ? hits : [])
-      .filter((it) => (it[DC + 'type'] ?? []).some((v) => v['@value'] === 'book'))
-      .map((it) => it[DC + 'recordid']?.[0]?.['@value']).filter(Boolean);
-    for (const rid of ids) {
-      const xml = await get(`https://iiif.nli.org.il/IIIFv21/marc/bib/${rid}`, 'text');
-      if (!xml) continue;
+    for (const xml of await nliRecords(`alma.isbn=${q}`, 5)) {
       if (!marcFields(xml, '020').flat().some(([, v]) => v.replace(/[^\dX]/gi, '') === q)) continue;
       const blurb = marcFields(xml, '520').map((f) => f.filter(([c]) => c === 'a').map(([, v]) => v).join(' ')).join('\n\n');
       let front = null, back = null;

@@ -119,21 +119,22 @@ async function fromGoogleBooks(isbn) {
   };
 }
 
-// National Library of Israel (legal deposit for every book published in Israel).
-// Needs a free key from https://api2.nli.org.il (NLI_API_KEY); skipped without one.
-const DC = 'http://purl.org/dc/elements/1.1/';
-const dc = (item, k) => (item[DC + k] ?? []).map((v) => v['@value']).filter(Boolean);
+// National Library of Israel (legal deposit for every book published in Israel), through the
+// catalogue's public SRU interface (Alma, MARC XML; no key). The older api.nli.org.il search
+// went behind a browser check in November 2026. MARC gives names in Hebrew: fields marked
+// $9 heb are used, and romanized ones ("Menaḥem Miśgav") only when a record has no Hebrew.
+const SRU = 'https://nli.alma.exlibrisgroup.com/view/sru/972NNL_INST';
 
-// The API answers 502 to bursts: space calls out and retry a couple of times.
+// Bursts get refused: space calls out and retry a couple of times.
 let nliChain = Promise.resolve();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function nliFetch(url) {
   const job = nliChain.then(async () => {
     for (const wait of [0, 2000, 6000]) {
       if (wait) await sleep(wait);
-      const res = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(10_000) }).catch(() => null);
+      const res = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(15_000) }).catch(() => null);
       noteResponse(res);
-      if (res?.ok) return res.json();
+      if (res?.ok) return res.text();
       if (res && res.status < 500 && res.status !== 429) return null;
     }
     return null;
@@ -142,46 +143,70 @@ function nliFetch(url) {
   return job;
 }
 
-// "עוז, עמוס, 1939-2018 מחבר$$Q…" → "עמוס עוז"
+const xmlDecode = (v) => v.replace(/&quot;/g, '"').replace(/&apos;|&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+// [[code, value], …] for each field with this tag.
+export function marcFields(xml, tag) {
+  const re = new RegExp(`tag="${tag}"[^>]*>([\\s\\S]*?)</(?:\\w+:)?datafield>`, 'g');
+  return [...xml.matchAll(re)].map((m) => [...m[1].matchAll(/code="(\w)">([^<]*)</g)].map(([, c, v]) => [c, xmlDecode(v)]));
+}
+const sub = (f, code) => f.find(([c]) => c === code)?.[1] ?? null;
+const control = (xml, tag) => xml.match(new RegExp(`<controlfield tag="${tag}">([^<]*)<`))?.[1] ?? '';
+
+// MARC XML records for a CQL query ("alma.isbn=…", "alma.title=\"…\"").
+export async function nliRecords(cql, max = 10) {
+  const xml = await nliFetch(`${SRU}?version=1.2&operation=searchRetrieve&recordSchema=marcxml&maximumRecords=${max}&query=${encodeURIComponent(cql)}`);
+  if (!xml) return [];
+  return [...xml.matchAll(/<record xmlns="http:\/\/www\.loc\.gov\/MARC21\/slim">([\s\S]*?)<\/record>/g)].map((m) => m[1]);
+}
+
+// "עוז, עמוס, 1939-2018" → "עמוס עוז"
 function nliAuthor(a) {
-  const name = a.replace(/\$\$.*$/, '').replace(/[,.]?\s*\d{4}-(\d{4})?\.?/, '')
+  const name = a.replace(/[,.]?\s*\d{4}-(\d{4})?\.?/, '').replace(/\s*\([^)]*\)\s*/g, ' ')
     .replace(/\s+(מחבר|מחברת|author|editor|עורך|עורכת)\.?\s*$/i, '').replace(/[.,\s]+$/, '').trim();
   const [last, first, ...rest] = name.split(/,\s*/);
   return first && !rest.length ? `${first} ${last}` : name;
 }
+const NOT_AUTHOR = /עורך|עורכת|עריכה|מתרגם|מתרגמת|תרגום|מאייר|מאיירת|איור|צלם|editor|translator|illustrator|photographer/i;
 
-async function nliSearch(query) {
-  if (!config.nliApiKey) {
-    if (callCtx.getStore()) callCtx.getStore().skipped = true; // not configured: nothing to record
-    return [];
-  }
-  const url = `https://api.nli.org.il/openlibrary/search?api_key=${encodeURIComponent(config.nliApiKey)}`
-    + `&query=${encodeURIComponent(query)}&material_type=books&output_format=json&limit=10`;
-  const data = await nliFetch(url);
-  // material_type is not enforced: drop photos, recordings, videos, theses.
-  return (Array.isArray(data) ? data : []).filter((item) => dc(item, 'type').includes('book')).map((item) => {
-    const isbn = dc(item, 'identifier').map((x) => normalizeIsbn(x.replace(/\(.*\)/, ''))).find(Boolean) ?? null;
-    // "Title : subtitle / Author ; translator." → title "Title : subtitle", bare "Title"
-    const title = dc(item, 'title')[0]?.split(' / ')[0].replace(/[\s.:/]+$/, '');
-    return {
-      title,
-      bare: title?.split(' : ')[0],
-      authors: dc(item, 'creator').map(nliAuthor).filter(Boolean),
-      publisher: dc(item, 'publisher')[0] ?? null,
-      year: Number(String(dc(item, 'date')[0] ?? dc(item, 'non_standard_date')[0] ?? '').match(/\d{4}/)?.[0]) || null,
-      language: dc(item, 'language')[0] ?? null,
-      cover_url: dc(item, 'thumbnail')[0] ?? null,
-      isbn,
-      source: 'nli',
-      source_ids: { nli: dc(item, 'recordid')[0] ?? item['@id'] },
-    };
-  }).filter((b) => b.title);
+// One MARC record → a book, or null for things that are not books.
+export function bookFromMarc(xml) {
+  const leader = xml.match(/<leader>([^<]*)</)?.[1] ?? '';
+  if (!/^.{6}[at][am]/.test(leader)) return null; // language material, monograph
+  const t = marcFields(xml, '245')[0];
+  if (!t) return null;
+  const clean = (v) => (v ?? '').replace(/[\s/:;,.=]+$/, '').trim();
+  const bare = clean(sub(t, 'a'));
+  const title = [bare, clean(sub(t, 'b'))].filter(Boolean).join(' : ');
+  const people = [...marcFields(xml, '100'), ...marcFields(xml, '700')].filter((f) => sub(f, 'a') && !NOT_AUTHOR.test(sub(f, 'e') ?? ''));
+  const heb = people.filter((f) => sub(f, '9') === 'heb' || /[א-ת]/.test(sub(f, 'a')));
+  const authors = [...new Set((heb.length ? heb : people).map((f) => nliAuthor(sub(f, 'a'))).filter(Boolean))];
+  const pub = marcFields(xml, '264')[0] ?? marcFields(xml, '260')[0];
+  const f008 = control(xml, '008');
+  const year = Number(String(pub && sub(pub, 'c') || '').match(/\d{4}/)?.[0] || f008.slice(7, 11).match(/^\d{4}$/)?.[0]) || null;
+  const isbns = marcFields(xml, '020').map((f) => normalizeIsbn(String(sub(f, 'a') ?? '').replace(/\(.*\)/, ''))).filter(Boolean);
+  return {
+    title,
+    bare,
+    authors,
+    publisher: pub ? clean(sub(pub, 'b')).replace(/^\[|\]$/g, '') || null : null,
+    year,
+    language: sub(marcFields(xml, '041')[0] ?? [], 'a') ?? (f008.slice(35, 38).trim() || null),
+    cover_url: null,
+    isbn: isbns[0] ?? null,
+    isbns,
+    source: 'nli',
+    source_ids: { nli: control(xml, '001') },
+  };
+}
+
+async function nliSearch(cql) {
+  return (await nliRecords(cql)).map(bookFromMarc).filter(Boolean);
 }
 
 async function fromNli(isbn) {
-  const hit = (await nliSearch(`any,contains,${isbn}`)).find((b) => !b.isbn || b.isbn === isbn);
+  const hit = (await nliSearch(`alma.isbn=${isbn}`)).find((b) => !b.isbns.length || b.isbns.includes(isbn));
   if (!hit) return null;
-  const { isbn: _, ...meta } = hit;
+  const { isbn: _, isbns: __, ...meta } = hit;
   return meta;
 }
 
@@ -334,7 +359,7 @@ async function searchTitle(title, author, verify) {
   // Hebrew titles: the National Library has nearly every Israeli book.
   if (isHebrew(title)) {
     try {
-      for (const b of await track('nli', () => nliSearch(`title,contains,${title}`)) ?? []) candidates.push({ ...b, via: 'nli' });
+      for (const b of await track('nli', () => nliSearch(`alma.title="${title.replace(/["\\]/g, ' ')}"`)) ?? []) candidates.push({ ...b, via: 'nli' });
     } catch { /* fall through to Google Books */ }
   }
   const q = [`intitle:${title}`, author && `inauthor:${author}`].filter(Boolean).join(' ');
