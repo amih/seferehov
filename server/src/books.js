@@ -176,7 +176,8 @@ export function bookFromMarc(xml) {
   if (!t) return null;
   const clean = (v) => (v ?? '').replace(/[\s/:;,.=]+$/, '').trim();
   const bare = clean(sub(t, 'a'));
-  const title = [bare, clean(sub(t, 'b'))].filter(Boolean).join(' : ');
+  // "[איך לבחור מזון…]": brackets mark words the cataloguer supplied.
+  const title = [bare, clean(sub(t, 'b')).replace(/[[\]]/g, '').trim()].filter(Boolean).join(' : ');
   // Authors: the main entry (100), and added names (700) marked as authors or named in the
   // first part of the credit line ("מנחם משגב, שרגא וקסלר ; עריכה: …"); translators, editors
   // and illustrators come after the ";" and often have no role code.
