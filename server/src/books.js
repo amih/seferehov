@@ -270,9 +270,6 @@ export async function lookupIsbn(raw, context = 'isbn_lookup') {
   });
 }
 
-// Hebrew books from Library of Congress style records (Open Library) carry romanized names
-// ("Menaḥem Miśgav"). The National Library's record of the same book (by ISBN, else by the
-// exact title and year) gives them in Hebrew; failing that, the marks are dropped ("Menahem Misgav").
 const plainLatin = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[ʻʼʾʿ]/g, '');
 // Consonant outline of a name in either script, to tell whether a Hebrew name is the same
 // person as a romanized one: "Ḳisner" and "קיסנר" both give "ksnr"; "Kwik" and "קוויק" do not.
@@ -292,26 +289,6 @@ const samePerson = (romanized, hebrew) => {
   if (same(outline(romanized), outline(hebrew), 3)) return true;
   const words = (n) => n.split(/[\s,-]+/).map(outline).filter((o) => o.length >= 3);
   return words(romanized).some((x) => words(hebrew).some((y) => same(x, y, 3)));
-};
-
-// Hebrew books from Library of Congress style records (Open Library) carry romanized names
-// ("Menaḥem Miśgav"). The National Library's record of the same book (by ISBN, else by the
-// exact title and year) gives them in Hebrew; failing that, the marks are dropped ("Menahem Misgav").
-const plainLatin = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[ʻʼʾʿ]/g, '');
-// Consonant outline of a name in either script, to tell whether a Hebrew name is the same
-// person as a romanized one: "Ḳisner" and "קיסנר" both give "ksnr"; "Kwik" and "קוויק" do not.
-const HEB_SKEL = { ב: 'b', ג: 'g', ד: 'd', ז: 'z', ט: 't', כ: 'k', ך: 'k', ל: 'l', מ: 'm', ם: 'm', נ: 'n', ן: 'n', ס: 's', פ: 'p', ף: 'p', צ: 's', ץ: 's', ק: 'k', ר: 'r', ש: 's', ת: 't' };
-function skeleton(name) {
-  if (isHebrew(name)) return [...name].map((c) => HEB_SKEL[c] ?? '').join('');
-  return name.toLowerCase().replace(/ṿ/g, '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/kh|ch|ck|c|q/g, 'k').replace(/sh|ts|tz|x/g, 's').replace(/ph|f/g, 'p').replace(/[vw]/g, 'b').replace(/j/g, 'g')
-    .replace(/[^bdgklmnprstz]/g, '');
-}
-const outline = (name) => skeleton(name).replace(/(.)\1+/g, '$1'); // "Reilly" = "ריילי"
-const surname = (a) => (a.includes(',') ? a.split(',')[0] : a.trim().split(/\s+/).pop()) ?? '';
-const samePerson = (romanized, hebrew) => {
-  const a = outline(surname(romanized)); const b = outline(surname(hebrew));
-  return a.length >= 2 && a === b;
 };
 
 // Hebrew books from Library of Congress style records (Open Library) carry romanized names
