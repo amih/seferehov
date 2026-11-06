@@ -2,7 +2,7 @@
 // (ref_titles, source 'site'), politely and only where allowed. See docs/AUTHOR_SITES_PLAN.md.
 //   node --env-file=../.env scripts/sites.js discover        Israeli publishers with a website, from Wikidata
 //   node --env-file=../.env scripts/sites.js check [n]       robots.txt, terms of use and platform of new sites
-//   node --env-file=../.env scripts/sites.js recheck [n]     terms again (every terms page) for sites already allowed
+//   node --env-file=../.env scripts/sites.js recheck [n|domain]  terms again (every terms page) for sites already allowed, or one site
 //   node --env-file=../.env scripts/sites.js crawl [n]       read books from ready sites (daily page cap)
 //   node --env-file=../.env scripts/sites.js site <domain>   check and read one site now
 //   node --env-file=../.env scripts/sites.js estimate        count the books ready sites list (without reading them)
@@ -143,6 +143,9 @@ const TERMS_LINK = /תקנון|תנאי(?:\s+ה)?שימוש|terms|takanon|תנא
 const BAN = /אין\s|אסור|חל\s+איסור|מתחייב(?:ת|ים)?\s+(?:שלא|לא|להימנע)|להימנע\s+מ|שלא\s+ל|לא\s+(?:לעשות|י(?:עשה|שתמש|עתיק|פיץ))|אינ(?:ו|ך|כם|ה)\s+רשאי|לא\s+(?:י|ת)?(?:הא|ה)?(?:יה\s+)?(?:רשאי|מותר|ניתן)|ללא\s+(?:קבלת\s+)?(?:אישור|הסכמ|רשות)|מבלי\s+(?:לקבל\s+)?(?:אישור|הסכמ|רשות)|prohibit|forbid|may\s+not|must\s+not|not\s+(?:permitted|allowed)|without\s+(?:the\s+)?(?:prior\s+)?(?:written\s+)?(?:consent|permission)/i;
 const BOTS = /רובוט|זחלן|זחלנ|סורק|סריק(?:ה|ת)\s+(?:אוטומטית|ממוחשבת)|כריית|כריה|crawl|scrap|spider|robot|\bbots?\b|data\s*mining|אמצעי(?:ם)?\s+אוטומטי|באופן\s+אוטומטי|תוכנ(?:ה|ות)\s+(?:אוטומטי|לאיסוף)|איסוף\s+(?:מידע|נתונים)\s+(?:אוטומטי|ממוחשב)/i;
 const COPY = /להעתיק|העתקה|העתקת|לשכפל|שכפול|copy|reproduc|להפיץ|הפצה/i;
+// Sentences that use those words about something else: the consumer-law rule that opened
+// recordings and books cannot be returned, and bans on spreading viruses or spam.
+const NOT_COPY = /הניתנים\s+להקלטה|לשעתוק|ביטול\s+(?:עסקה|רכישה)|לבטל\s+רכישה|וירוס|תוכנ(?:ה|ות)\s+זדוני|קוד\s+(?:מחשב\s+)?זדוני|דואר\s+זבל|spam|malware|virus/i;
 
 // Splits the terms into sentences and looks for a ban on robots, then on copying.
 export function judgeTerms(text) {
@@ -151,7 +154,7 @@ export function judgeTerms(text) {
   const near = (i) => sentences.slice(Math.max(0, i - 2), i + 1).join(' ');
   const bots = sentences.findIndex((s, i) => BOTS.test(s) && BAN.test(near(i)));
   if (bots >= 0) return { terms: 'bots_ban', note: near(bots).slice(0, 500) };
-  const copy = sentences.findIndex((s, i) => COPY.test(s) && BAN.test(near(i)));
+  const copy = sentences.findIndex((s, i) => COPY.test(s) && !NOT_COPY.test(s) && BAN.test(near(i)));
   if (copy >= 0) return { terms: 'copy_ban', note: near(copy).slice(0, 500) };
   return { terms: 'ok', note: null };
 }
@@ -589,7 +592,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     } else if (mode === 'hold') await holdBack();
     else if (mode === 'estimate') await eachSite(`SELECT * FROM ref_sites WHERE status = 'ready' AND est_books IS NULL ORDER BY id`, estimate, arg);
     else if (mode === 'report') await report();
-    else if (mode === 'recheck') await eachSite(`SELECT * FROM ref_sites WHERE status IN ('ready', 'done', 'no_books', 'paused') ORDER BY id`, recheck, arg, { ignoreCap: true });
+    else if (mode === 'recheck' && arg && !/^\d+$/.test(arg)) {
+      // One site, whatever its status: back to 'ready' first, then judged again.
+      const d = arg.replace(/^www\./, '');
+      await q(`UPDATE ref_sites SET status = 'ready' WHERE domain = $1 AND status IN ('ask', 'refused')`, [d]);
+      await eachSite(`SELECT * FROM ref_sites WHERE domain = '${d.replace(/'/g, "''")}'`, recheck, 1, { ignoreCap: true });
+    } else if (mode === 'recheck') await eachSite(`SELECT * FROM ref_sites WHERE status IN ('ready', 'done', 'no_books', 'paused') ORDER BY id`, recheck, arg, { ignoreCap: true });
     else if (mode === 'optout' && arg) {
       const r = await q(`UPDATE ref_sites SET status = 'opted_out', note = 'owner asked' WHERE domain = $1`, [arg.replace(/^www\./, '')]);
       await q(`DELETE FROM ref_titles WHERE site_id IN (SELECT id FROM ref_sites WHERE domain = $1)`, [arg.replace(/^www\./, '')]);
