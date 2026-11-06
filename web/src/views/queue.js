@@ -135,7 +135,6 @@ export default async function queueView(root) {
         ${i.cover_url && big !== i.cover_url ? `<img class="cover" src="${esc(i.cover_url)}" alt="">` : ''}
         <form class="form" id="f">
           <label>${t('field.title')} <input name="title" dir="auto" value="${esc(shownTitle)}" maxlength="300" required></label>
-          <button type="button" class="btn small swap" id="swap" title="${t('queue.swap')}">⇅ ${t('queue.swap')}</button>
           <label>${t('field.author')} <input name="author" dir="auto" value="${esc(shownAuthor)}" maxlength="200"></label>
           <p class="small qline q-${i.quality}">${i.quality === 'high' ? `✓ ${t('scan.matched')}${i.year ? ` · ${i.year}` : ''}` : i.quality === 'low' ? `⚠ ${t('scan.lowq')}` : `? ${t('scan.unmatched')}`}</p>
           ${confidenceLine(i)}
@@ -157,11 +156,6 @@ export default async function queueView(root) {
     attachSteps(root);
 
     const form = root.querySelector('#f');
-    // The spine was read the wrong way round (a third of the corrections on 6 Nov 2026).
-    root.querySelector('#swap').onclick = () => {
-      [form.title.value, form.author.value] = [form.author.value, form.title.value];
-      if (!form.title.value.trim()) form.title.focus();
-    };
     root.querySelector('.decide').onclick = async (e) => {
       const b = e.target.closest('[data-d]');
       if (!b || Date.now() < readyAt) return;

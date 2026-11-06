@@ -89,7 +89,7 @@ It runs at https://seferehov.com. Hebrew is the default (right to left); English
 
 ## The approval queue
 
-- Every book found, from any photo or barcode, waits in one queue per reader (`/queue`), one book at a time with a big picture: approve, later, or wrong. The title and author can be fixed before approving; "⇅ Swap title and author" swaps the two fields (title and author read the wrong way round were 8 of the 13 corrections up to 6 Nov 2026).
+- Every book found, from any photo or barcode, waits in one queue per reader (`/queue`), one book at a time with a big picture: approve, later, or wrong. The title and author can be fixed before approving.
 - Poor shelf reads stay out of the queue: no catalogue knows them, and the read is low quality, title and author are the same words, no word of a Hebrew title is a word, or it is a misread of a book the catalogue found in the same scan. Nothing is deleted: a button at the end of the queue brings them back. Covers are never left out.
 - A spine cut badly in every photo it is in (25% or more of the cut-out is blank fill: the cut ran off the spine) and known to no catalogue is given up. On 6 Nov 2026 every such crop had been declined and no approved crop was over 20% blank. When a spine is in several photos, the cut-out with the least blank (then OCR-confirmed) is the one shown.
 - Duplicates from several photos are merged, also when title and author are compared word by word in any order with a misread letter or two ("ברק חמדני אבבק | אבק" = "ברק חמדני אבק": one spine found twice in a photo). Decisions can be undone for 14 days.
