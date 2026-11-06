@@ -292,26 +292,54 @@ const samePerson = (romanized, hebrew) => {
 };
 
 // Hebrew books from Library of Congress style records (Open Library) carry romanized names
-// ("Menaḥem Miśgav"). The National Library's record of the same book gives them in Hebrew:
-// found by ISBN, or by the exact title when one of its authors is the same person (same
-// consonants). Failing that, the marks are dropped ("Menahem Misgav").
-export async function hebrewAuthors(b) {
-  const authors = b.authors ?? [];
-  if (!isHebrew(b.title) || !authors.length || authors.every(isHebrew)) return authors;
-  let rec = null;
+// ("Menaḥem Miśgav") and often a romanized subtitle ("מה לאכול: ekh li-veḥor mazon…").
+// The National Library's record of the same book gives them in Hebrew: found by ISBN, or by
+// the exact title when one of its authors is the same person (same consonants).
+const mainOf = (t) => t.split(/\s+[:/]\s+|\s*:\s*/)[0].trim();
+// "מה לאכול: ekh li-veḥor…" → true: a Hebrew title whose subtitle is written in Latin letters.
+export const romanizedTail = (t) => {
+  const i = t.search(/\s*[:/]\s/);
+  if (i < 0 || !isHebrew(t.slice(0, i))) return false;
+  const tail = t.slice(i).replace(/^[\s:/]+/, '');
+  return /[a-z]{2}/i.test(tail) && !/[\u0590-\u05FF]/.test(tail);
+};
+async function nliTwin(b, authors) {
   try {
-    if (b.isbn13) rec = (await nliSearch(`alma.isbn=${b.isbn13}`)).find((r) => r.authors.some(isHebrew));
-    if (!rec) {
-      const bare = b.title.split(/\s+[:/]\s+|\s*:\s*/)[0];
-      rec = (await nliSearch(`alma.title="${bare.replace(/["\\]/g, ' ')}"`)).find((r) => normTitle(r.bare) === normTitle(bare)
-        && r.authors.some(isHebrew) && authors.some((a) => r.authors.some((h) => samePerson(a, h))));
+    if (b.isbn13) {
+      const r = (await nliSearch(`alma.isbn=${b.isbn13}`)).find((x) => isHebrew(x.title));
+      if (r) return r;
     }
-  } catch { /* the catalogue is a nicety here */ }
-  return rec ? rec.authors : authors.map((a) => (isHebrew(a) ? a : plainLatin(a)));
+    if (!authors.length) return null;
+    const bare = mainOf(b.title);
+    return (await nliSearch(`alma.title="${bare.replace(/["\\]/g, ' ')}"`)).find((r) => normTitle(r.bare) === normTitle(bare)
+      && r.authors.some(isHebrew) && authors.some((a) => r.authors.some((h) => samePerson(a, h)))) ?? null;
+  } catch { return null; } // the catalogue is a nicety here
+}
+// { title, authors } in Hebrew where the National Library has them. A romanized subtitle
+// is replaced by the library's Hebrew one, or dropped (the main title alone).
+export async function hebrewTitleAuthors(b) {
+  const authors = b.authors ?? [];
+  if (!isHebrew(b.title)) return { title: b.title, authors };
+  const romanTitle = romanizedTail(b.title);
+  const romanAuthors = authors.length > 0 && !authors.every(isHebrew);
+  if (!romanTitle && !romanAuthors) return { title: b.title, authors };
+  const rec = await nliTwin(b, authors);
+  let title = b.title;
+  if (romanTitle) {
+    const full = rec && rec.title.replace(/\s+:\s+/, ': ');
+    title = full && !/[a-z]{2}/i.test(full) && normTitle(mainOf(full)) === normTitle(mainOf(b.title)) ? full : mainOf(b.title);
+  }
+  return {
+    title,
+    authors: !romanAuthors ? authors : rec?.authors.some(isHebrew) ? rec.authors : authors.map((a) => (isHebrew(a) ? a : plainLatin(a))),
+  };
+}
+export async function hebrewAuthors(b) {
+  return (await hebrewTitleAuthors(b)).authors;
 }
 
 export async function upsertBook(b) {
-  b = { ...b, authors: await hebrewAuthors(b) };
+  b = { ...b, ...(await hebrewTitleAuthors(b)) };
   if (b.danacode && !b.isbn13) {
     const known = await one('SELECT * FROM books WHERE danacode = $1', [b.danacode]);
     if (known) return known;
