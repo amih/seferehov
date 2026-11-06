@@ -484,8 +484,9 @@ function rankBest(candidates, title, author, verify, veto = author) {
     // Prefer records in the script we read (the Hebrew edition over translations).
     if (isHebrew(title) !== isHebrew(c.title)) score *= 0.9;
     if (author && c.authors.length) score = score * 0.75 + 0.25 * Math.max(...c.authors.map((a) => authorCloseness(author, a)));
-    // A record naming no author loses a tie to one naming the author we read.
-    else if (author) score *= 0.95;
+    // A record naming no author loses a tie to one naming the author we read, and needs
+    // nearly the whole title ("MR NICE 2" by Howard Marks is not "Mr. Nice Spy").
+    else if (author) { if (score < 0.85) continue; score *= 0.95; }
     if (score > bestScore) { best = c; bestScore = score; }
   }
   return { best, score: bestScore };

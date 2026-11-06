@@ -19,8 +19,8 @@ let changed = 0;
 for (const i of items) {
   // What was read off the spine (the item's author may be the catalogue's).
   let title = i.read?.after || i.title;
-  let author = i.read ? (i.read.detail?.author ?? null) : (i.book_id ? null : i.author);
-  if (!i.read && i.book_id && i.author && !(i.book_authors ?? []).includes(i.author)) author = i.author;
+  // Items from before the reading was recorded: their author is the best there is.
+  let author = i.read ? (i.read.detail?.author ?? null) : i.author;
   const ev = [];
   const sw = await swapIfReversed(title, author).catch(() => null);
   if (sw) {
