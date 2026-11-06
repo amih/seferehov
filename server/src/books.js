@@ -177,7 +177,13 @@ export function bookFromMarc(xml) {
   const clean = (v) => (v ?? '').replace(/[\s/:;,.=]+$/, '').trim();
   const bare = clean(sub(t, 'a'));
   const title = [bare, clean(sub(t, 'b'))].filter(Boolean).join(' : ');
-  const people = [...marcFields(xml, '100'), ...marcFields(xml, '700')].filter((f) => sub(f, 'a') && !NOT_AUTHOR.test(sub(f, 'e') ?? ''));
+  // Authors: the main entry (100), and added names (700) marked as authors or named in the
+  // first part of the credit line ("מנחם משגב, שרגא וקסלר ; עריכה: …"); translators, editors
+  // and illustrators come after the ";" and often have no role code.
+  const credit = normTitle(String(sub(t, 'c') ?? '').split(/\s;\s|;/)[0]);
+  const named = (f) => { const n = normTitle(nliAuthor(sub(f, 'a'))); return n && credit.includes(n); };
+  const people = [...marcFields(xml, '100'), ...marcFields(xml, '700').filter((f) => /מחבר|author/i.test(sub(f, 'e') ?? '') || (!sub(f, 'e') && named(f)))]
+    .filter((f) => sub(f, 'a') && !NOT_AUTHOR.test(sub(f, 'e') ?? ''));
   const heb = people.filter((f) => sub(f, '9') === 'heb' || /[א-ת]/.test(sub(f, 'a')));
   const authors = [...new Set((heb.length ? heb : people).map((f) => nliAuthor(sub(f, 'a'))).filter(Boolean))];
   const pub = marcFields(xml, '264')[0] ?? marcFields(xml, '260')[0];
@@ -268,6 +274,26 @@ export async function lookupIsbn(raw, context = 'isbn_lookup') {
 // ("Menaḥem Miśgav"). The National Library's record of the same book (by ISBN, else by the
 // exact title and year) gives them in Hebrew; failing that, the marks are dropped ("Menahem Misgav").
 const plainLatin = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[ʻʼʾʿ]/g, '');
+// Consonant outline of a name in either script, to tell whether a Hebrew name is the same
+// person as a romanized one: "Ḳisner" and "קיסנר" both give "ksnr"; "Kwik" and "קוויק" do not.
+const HEB_SKEL = { ב: 'b', ג: 'g', ד: 'd', ז: 'z', ט: 't', כ: 'k', ך: 'k', ל: 'l', מ: 'm', ם: 'm', נ: 'n', ן: 'n', ס: 's', פ: 'p', ף: 'p', צ: 's', ץ: 's', ק: 'k', ר: 'r', ש: 's', ת: 't' };
+function skeleton(name) {
+  if (isHebrew(name)) return [...name].map((c) => HEB_SKEL[c] ?? '').join('');
+  return name.toLowerCase().replace(/ṿ/g, '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/kh|ch|ck|c|q/g, 'k').replace(/sh|ts|tz|x/g, 's').replace(/ph|f/g, 'p').replace(/[vw]/g, 'b').replace(/j/g, 'g')
+    .replace(/[^bdgklmnprstz]/g, '');
+}
+const outline = (name) => skeleton(name).replace(/(.)\1+/g, '$1'); // "Reilly" = "ריילי"
+const surname = (a) => (a.includes(',') ? a.split(',')[0] : a.trim().split(/\s+/).pop()) ?? '';
+const samePerson = (romanized, hebrew) => {
+  const a = outline(surname(romanized)); const b = outline(surname(hebrew));
+  return a.length >= 2 && a === b;
+};
+
+// Hebrew books from Library of Congress style records (Open Library) carry romanized names
+// ("Menaḥem Miśgav"). The National Library's record of the same book gives them in Hebrew:
+// found by ISBN, or by the exact title when one of its authors is the same person (same
+// consonants). Failing that, the marks are dropped ("Menahem Misgav").
 export async function hebrewAuthors(b) {
   const authors = b.authors ?? [];
   if (!isHebrew(b.title) || !authors.length || authors.every(isHebrew)) return authors;
@@ -277,7 +303,7 @@ export async function hebrewAuthors(b) {
     if (!rec) {
       const bare = b.title.split(/\s+[:/]\s+|\s*:\s*/)[0];
       rec = (await nliSearch(`alma.title="${bare.replace(/["\\]/g, ' ')}"`)).find((r) => normTitle(r.bare) === normTitle(bare)
-        && r.authors.some(isHebrew) && (!b.year || !r.year || Math.abs(r.year - b.year) <= 1));
+        && r.authors.some(isHebrew) && authors.some((a) => r.authors.some((h) => samePerson(a, h))));
     }
   } catch { /* the catalogue is a nicety here */ }
   return rec ? rec.authors : authors.map((a) => (isHebrew(a) ? a : plainLatin(a)));
