@@ -157,6 +157,19 @@ for pages with no structured data is not built yet.
   earlier), Bookpod (~18,400), Ben-Zvi Institute (~8,700), Keter (~3,400, terms forbid copying),
   Koren (~2,900). Asking them by email is the way to get most of the remaining books.
 
+### Recheck with every terms page (2026-11-06)
+
+The first check read only one terms page per site. Bookpod showed the risk: it was judged on its
+authors' terms, while its site terms forbid robots and building a database. All allowed sites
+were checked again with every terms page they link to:
+
+- prag.co.il and kinbooks.co.il forbid robots → refused (prag's 135 books removed).
+- shalempress.co.il and amutayam.org.il forbid copying → ask (104 books removed).
+- Two false positives (consumer-law "opened products cannot be returned", "spreading viruses")
+  were fixed in the judging and those sites went back to ready.
+- Afterwards: 20 ready, 32 done, 92 with no books, 70 ask, 9 refused, 11 paused, 31 dead;
+  5,899 site titles in the index.
+
 ## Order of work
 
 1. Count Wikidata P856 for Hebrew-labelled authors and publishers, and read 20 of those sites by hand
