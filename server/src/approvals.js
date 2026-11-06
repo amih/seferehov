@@ -229,6 +229,16 @@ export async function skipMisreads(userId) {
   for (const scanId of new Set(skip.map((i) => i.scan_id))) await closeIfDone(scanId);
 }
 
+// Title and author together, word by word, in any order: every word of the shorter reading
+// has a close word (a misread letter or two) in the other, at least two words, 6+ letters.
+// "ברק חמדני אבבק | אבק" = "ברק חמדני אבק" (one spine found twice in a photo, 5 Nov 2026).
+export function sameReading(a, b) {
+  const bag = (x) => [...new Set(normTitle([x.title, x.author].filter(Boolean).join(' ')).split(' ').filter((w) => w.length >= 2))];
+  let [s, l] = [bag(a), bag(b)].sort((x, y) => x.length - y.length);
+  if (s.length < 2 || s.join('').length < 6) return false;
+  return s.every((w) => l.some((v) => v === w || (Math.min(v.length, w.length) >= 3 && titleSimilarity(v, w) >= 0.75)));
+}
+
 export async function mergeDuplicates(userId) {
   const open = await many(
     `SELECT i.*, s.location_id, b.title AS book_title FROM scan_items i JOIN scans s ON s.id = i.scan_id
@@ -239,7 +249,8 @@ export async function mergeDuplicates(userId) {
   );
   const same = (a, b) => a.location_id === b.location_id && (
     (a.book_id && a.book_id === b.book_id) || (a.isbn13 && a.isbn13 === b.isbn13) || (a.danacode && a.danacode === b.danacode)
-    || [a.title, a.book_title].some((x) => [b.title, b.book_title].some((y) => near(normTitle(x), normTitle(y)))));
+    || [a.title, a.book_title].some((x) => [b.title, b.book_title].some((y) => near(normTitle(x), normTitle(y))))
+    || sameReading(a, b));
   const groups = [];
   for (const item of open) {
     const g = groups.find((gr) => gr.some((o) => same(o, item)));

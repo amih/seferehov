@@ -10,7 +10,7 @@ import { lookupIsbn, lookupTitle, findOrCreateBook } from './books.js';
 import { readBooks, sharpness, BLURRY, readCover, readIsbnBarcodes, normTitle, titleSimilarity, coverAgrees, authorsAgree } from './vision.js';
 import { pickFrames } from './frames.js';
 import { webCheck, purgeSearchCache } from './websearch.js';
-import { localCheck } from './refindex.js';
+import { localCheck, swapIfReversed } from './refindex.js';
 import { cropCover } from './covers.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
 import { initialStatus, awardSighting } from './moderation.js';
@@ -670,6 +670,16 @@ async function processScan(scan, { dry = false } = {}) {
     const asRead = item.title ?? null;
     ev.push({ stage: 'read', source: item.via === 'barcode' ? 'barcode' : item.verified ? 'vision+ocr' : 'vision', outcome: 'as_read',
       after: asRead ?? isbn ?? null, detail: { author: item.author ?? null, frames: item.frames ? [...item.frames].map((x) => x + 1) : undefined, verified: item.verified ?? null, quality: item.quality ?? null } });
+    if (item.via === 'vision') {
+      const sw = await swapIfReversed(item.title, item.author).catch(() => null);
+      if (sw) {
+        ev.push({ stage: 'correct', source: 'swap', outcome: 'corrected', before: [item.title, item.author].join(' | '), after: [sw.title, sw.author].join(' | '),
+          detail: { name: sw.name, name_score: sw.nameScore, author_score: sw.authorScore } });
+        await step('swap', { note: 'title and author read the wrong way round: the title is a known author\'s name and the author is not', before: { title: item.title, author: item.author }, after: { title: sw.title, author: sw.author }, name: sw.name });
+        item.title = sw.title; item.author = sw.author;
+        if (item.variants?.length) item.variants = [sw.title];
+      }
+    }
     const verify = async (query, r) => ev.push({ stage: 'verify', source: (await sourceOf(r.lookupId)) ?? 'none', outcome: r.book ? 'match' : 'no_match',
       before: query, after: r.book?.title ?? null, detail: { lookup_id: r.lookupId ?? null, book_id: r.book?.id ?? null, isbn13: r.book?.isbn13 ?? null } });
     if (isbn) {

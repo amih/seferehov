@@ -50,9 +50,24 @@ async function candidates(queries) {
 export async function knownAuthor(name) {
   if (!name || letters(name) < 4) return null;
   const rows = await many(
-    `SELECT DISTINCT ON (name) name, source, ref FROM ref_authors WHERE name_f % heb_fold($1) ORDER BY name, similarity(name_f, heb_fold($1)) DESC LIMIT 20`, [name]);
+    // The 20 closest names (before 6 Nov 2026 the first 20 alphabetically: the right one was often cut off).
+    `SELECT name, source, ref FROM (SELECT DISTINCT ON (name) name, source, ref, similarity(name_f, heb_fold($1)) AS s
+       FROM ref_authors WHERE name_f % heb_fold($1) ORDER BY name, s DESC) x ORDER BY s DESC LIMIT 20`, [name]);
   const best = rows.map((r) => ({ ...r, s: titleSimilarity(r.name, name) })).sort((a, b) => b.s - a.s)[0];
   return best && best.s >= 0.75 ? best : null;
+}
+
+// Title and author read the wrong way round (8 of the 13 corrections readers made up to
+// 6 Nov 2026): the "title" is a known author's name (85%+ alike) and the "author" is not.
+// Both being names ("אברם שפירא" / "אברהם שפירא") is left alone.
+const NAME_SURE = 0.85;
+export async function swapIfReversed(title, author) {
+  if (!title || !author) return null;
+  const t = await knownAuthor(title);
+  if (!t || t.s < NAME_SURE) return null;
+  const a = await knownAuthor(author);
+  if (a && a.s >= NAME_SURE) return null;
+  return { title: author, author: title, name: t.name, nameScore: +t.s.toFixed(2), authorScore: a ? +a.s.toFixed(2) : null };
 }
 
 // { match: { title, author, source, ref, score } | null, author: corrected author | null, outcome, candidates }
