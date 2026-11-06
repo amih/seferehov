@@ -1,19 +1,18 @@
-// Books saved from the National Library with romanized author names ("Menaḥem Miśgav"):
-// re-read their catalogue record and keep the Hebrew names (MARC fields marked $9 heb).
+// Hebrew books saved with romanized author names ("Menaḥem Miśgav", from Open Library):
+// take the names from the National Library's record of the book (see hebrewAuthors).
 //   node --env-file=../.env scripts/nli-hebrew-names.js
 import { many, q, pool } from '../src/db.js';
-import { nliRecords, bookFromMarc } from '../src/books.js';
+import { hebrewAuthors } from '../src/books.js';
 
-const ROMAN = /[ḥśṿḳṭẓʻʼāēīōūḤŚṾḲṬẒ]/;
-const rows = await many(`SELECT id, title, authors, source_ids->>'nli' AS mms FROM books
-  WHERE source_ids ? 'nli' AND array_to_string(authors, ' ') ~ '[ḥśṿḳṭẓʻʼāēīōūḤŚṾḲṬẒ]'`);
-let fixed = 0;
+const rows = await many(`SELECT id, title, authors, isbn13, year FROM books
+  WHERE title ~ '[א-ת]' AND cardinality(authors) > 0 AND NOT (array_to_string(authors, ' ') ~ '^[^a-zA-Zḥśṿḳṭẓʻʼ]*$')`);
+let heb = 0;
 for (const r of rows) {
-  const b = (await nliRecords(`alma.mms_id=${r.mms}`, 1)).map(bookFromMarc)[0];
-  if (!b?.authors.length || b.authors.some((a) => ROMAN.test(a))) { console.log(`${r.id} ${r.title}: no Hebrew names in the record`); continue; }
-  await q('UPDATE books SET authors = $2 WHERE id = $1', [r.id, b.authors]);
-  console.log(`${r.id} ${r.title}: ${r.authors.join('; ')} → ${b.authors.join('; ')}`);
-  fixed++;
+  const authors = await hebrewAuthors(r);
+  if (authors.join('\t') === r.authors.join('\t')) continue;
+  await q('UPDATE books SET authors = $2 WHERE id = $1', [r.id, authors]);
+  if (authors.some((a) => /[א-ת]/.test(a))) heb++;
+  console.log(`${r.id} ${r.title}: ${r.authors.join('; ')} → ${authors.join('; ')}`);
 }
-console.log(`${fixed} of ${rows.length} books now have Hebrew author names`);
+console.log(`${rows.length} books checked, ${heb} now with Hebrew names`);
 await pool.end();

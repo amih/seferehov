@@ -264,7 +264,27 @@ export async function lookupIsbn(raw, context = 'isbn_lookup') {
   });
 }
 
+// Hebrew books from Library of Congress style records (Open Library) carry romanized names
+// ("Menaḥem Miśgav"). The National Library's record of the same book (by ISBN, else by the
+// exact title and year) gives them in Hebrew; failing that, the marks are dropped ("Menahem Misgav").
+const plainLatin = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[ʻʼʾʿ]/g, '');
+export async function hebrewAuthors(b) {
+  const authors = b.authors ?? [];
+  if (!isHebrew(b.title) || !authors.length || authors.every(isHebrew)) return authors;
+  let rec = null;
+  try {
+    if (b.isbn13) rec = (await nliSearch(`alma.isbn=${b.isbn13}`)).find((r) => r.authors.some(isHebrew));
+    if (!rec) {
+      const bare = b.title.split(/\s+[:/]\s+|\s*:\s*/)[0];
+      rec = (await nliSearch(`alma.title="${bare.replace(/["\\]/g, ' ')}"`)).find((r) => normTitle(r.bare) === normTitle(bare)
+        && r.authors.some(isHebrew) && (!b.year || !r.year || Math.abs(r.year - b.year) <= 1));
+    }
+  } catch { /* the catalogue is a nicety here */ }
+  return rec ? rec.authors : authors.map((a) => (isHebrew(a) ? a : plainLatin(a)));
+}
+
 export async function upsertBook(b) {
+  b = { ...b, authors: await hebrewAuthors(b) };
   if (b.danacode && !b.isbn13) {
     const known = await one('SELECT * FROM books WHERE danacode = $1', [b.danacode]);
     if (known) return known;
