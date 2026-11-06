@@ -2,6 +2,7 @@
 // (ref_titles, source 'site'), politely and only where allowed. See docs/AUTHOR_SITES_PLAN.md.
 //   node --env-file=../.env scripts/sites.js discover        Israeli publishers with a website, from Wikidata
 //   node --env-file=../.env scripts/sites.js check [n]       robots.txt, terms of use and platform of new sites
+//   node --env-file=../.env scripts/sites.js recheck [n]     terms again (every terms page) for sites already allowed
 //   node --env-file=../.env scripts/sites.js crawl [n]       read books from ready sites (daily page cap)
 //   node --env-file=../.env scripts/sites.js site <domain>   check and read one site now
 //   node --env-file=../.env scripts/sites.js estimate        count the books ready sites list (without reading them)
@@ -201,6 +202,52 @@ async function discover() {
   log(`discover: ${rows.length} publishers with a website in Wikidata, ${added} new sites`);
 }
 
+// Every terms page the home page links to (a shop often has two: site terms and, say, terms
+// for authors or sellers), up to 5. Each is judged and the strictest verdict wins.
+const STRICT = { none: 0, ok: 1, copy_ban: 2, bots_ban: 3 };
+async function termsOf(home, site, robots) {
+  const urls = [...new Set(links(home.text, home.url)
+    .filter((l) => TERMS_LINK.test(l.text) || TERMS_LINK.test(decodeURIComponent(l.url)))
+    .filter((l) => hostOf(l.url) === hostOf(home.url))
+    .map((l) => l.url.replace(/#.*$/, '')))].slice(0, 5);
+  let best = { terms: 'none', note: null, url: urls[0] ?? null };
+  for (const url of urls) {
+    if (!robots.allows(new URL(url).pathname)) { if (best.terms === 'none') best.note = 'terms page closed to robots'; continue; }
+    const page = await get(url, site);
+    if (page.status !== 200) continue;
+    const t = judgeTerms(textOf(page.text));
+    if (STRICT[t.terms] > STRICT[best.terms]) best = { ...t, url };
+    if (best.terms === 'bots_ban') break;
+  }
+  return best;
+}
+
+// Sites already allowed are checked again with every terms page. A site that now turns out to
+// forbid robots or copying is set aside and the books read from it are removed. A few pages per
+// site, so it is not held to the daily cap (the per-site gap still applies).
+async function recheck(site) {
+  site.host = new URL(site.url).host;
+  const robots = await robotsOf(site);
+  if (!robots.allows('/')) {
+    await q(`UPDATE ref_sites SET robots = 'refused', status = 'refused', note = 'robots.txt forbids the home page (recheck)', checked_at = now() WHERE id = $1`, [site.id]);
+    await q('DELETE FROM ref_titles WHERE site_id = $1', [site.id]);
+    return log(`${site.domain}: robots.txt now refuses`);
+  }
+  const home = await get(site.url, site);
+  if (home.status < 200 || home.status >= 400) return log(`${site.domain}: home ${home.status || home.error}, left as is`);
+  const terms = await termsOf(home, site, robots);
+  if (terms.terms === 'bots_ban' || terms.terms === 'copy_ban') {
+    const status = terms.terms === 'bots_ban' ? 'refused' : 'ask';
+    await q(`UPDATE ref_sites SET terms = $2, terms_note = $3, terms_url = $4, status = $5, note = 'recheck: terms forbid it', checked_at = now() WHERE id = $1`,
+      [site.id, terms.terms, terms.note, terms.url, status]);
+    const d = await q('DELETE FROM ref_titles WHERE site_id = $1', [site.id]);
+    log(`${site.domain}: ${terms.terms} → ${status}, ${d.rowCount} books removed (${terms.url})`);
+  } else {
+    await q('UPDATE ref_sites SET terms = $2, terms_url = $3, checked_at = now() WHERE id = $1', [site.id, terms.terms, terms.url]);
+    log(`${site.domain}: still ${terms.terms}`);
+  }
+}
+
 // --- check: robots, terms, platform ------------------------------------------------------------------
 async function check(site) {
   site.host = new URL(site.url).host;
@@ -217,18 +264,9 @@ async function check(site) {
   // The site may have moved to another domain.
   const finalHost = new URL(home.url).host;
   const platform = platformOf(home.text, home.headers);
-  const termsLink = links(home.text, home.url).filter((l) => TERMS_LINK.test(l.text) || TERMS_LINK.test(decodeURIComponent(l.url)))
-    .filter((l) => hostOf(l.url) === hostOf(home.url)).sort((a, b) => /תקנון|שימוש|terms/i.test(b.text) - /תקנון|שימוש|terms/i.test(a.text))[0];
-  let terms = { terms: 'none', note: null };
-  if (termsLink) {
-    if (!robots.allows(new URL(termsLink.url).pathname)) terms = { terms: 'none', note: 'terms page closed to robots' };
-    else {
-      const page = await get(termsLink.url, site);
-      if (page.status === 200) terms = judgeTerms(textOf(page.text));
-    }
-  }
+  const terms = await termsOf(home, site, robots);
   const status = terms.terms === 'bots_ban' ? 'refused' : terms.terms === 'copy_ban' ? 'ask' : 'ready';
-  await set({ robots: robots.found ? 'allowed' : 'none', crawl_delay: robots.delay, platform, terms_url: termsLink?.url ?? null,
+  await set({ robots: robots.found ? 'allowed' : 'none', crawl_delay: robots.delay, platform, terms_url: terms.url,
     terms: terms.terms, terms_note: terms.note, status, note: finalHost !== site.host ? `moved to ${finalHost}` : null });
   log(`${site.domain}: ${platform}, terms ${terms.terms} → ${status}`);
 }
@@ -476,10 +514,10 @@ async function crawl(site) {
   log(`${site.domain}: no book list found`);
 }
 
-async function eachSite(sql, fn, limit) {
+async function eachSite(sql, fn, limit, { ignoreCap = false } = {}) {
   const sites = await many(`${sql} LIMIT ${Math.max(1, +limit || 1000)}`);
   for (const site of sites) {
-    if (await capReached()) { log(`daily cap of ${DAY_CAP} pages reached`); break; }
+    if (!ignoreCap && await capReached()) { log(`daily cap of ${DAY_CAP} pages reached`); break; }
     try { await fn(site); } catch (e) {
       if (e instanceof Paused) {
         await q(`UPDATE ref_sites SET status = 'paused', note = $2, next_crawl = now() + interval '30 days' WHERE id = $1`, [site.id, e.message]);
@@ -551,6 +589,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     } else if (mode === 'hold') await holdBack();
     else if (mode === 'estimate') await eachSite(`SELECT * FROM ref_sites WHERE status = 'ready' AND est_books IS NULL ORDER BY id`, estimate, arg);
     else if (mode === 'report') await report();
+    else if (mode === 'recheck') await eachSite(`SELECT * FROM ref_sites WHERE status IN ('ready', 'done', 'no_books', 'paused') ORDER BY id`, recheck, arg, { ignoreCap: true });
     else if (mode === 'optout' && arg) {
       const r = await q(`UPDATE ref_sites SET status = 'opted_out', note = 'owner asked' WHERE domain = $1`, [arg.replace(/^www\./, '')]);
       await q(`DELETE FROM ref_titles WHERE site_id IN (SELECT id FROM ref_sites WHERE domain = $1)`, [arg.replace(/^www\./, '')]);
