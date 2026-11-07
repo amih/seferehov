@@ -24,6 +24,8 @@ import { promisify } from 'node:util';
 
 // Raw uploads (may carry GPS in EXIF) live outside the public uploads folder and
 // are deleted once read. Only re-encoded thumbnails go to uploads/.
+// Words of praise and sales figures printed on covers, read as titles by the vision model.
+export const BLURB = /\b(international|national|world(wide)?|global|times|#\s?1)\s+best[\s-]?sell(er|ing)|\b(copies sold|million copies|new york times best|now a major (motion picture|film)|winner of the)\b|רב[\s-]?מכר (עולמי|בינלאומי)|עותקים נמכרו/i;
 export const MEDIA_DIR = resolve(process.env.SCAN_DIR || join(config.uploadDir, '..', 'scan-media'));
 // Re-encoded copies (no EXIF/GPS) of what was read and of the photos and video as sent
 // (orig-N), kept a while so a better reader can go over them again (scripts/rescan.js).
@@ -670,6 +672,12 @@ async function processScan(scan, { dry = false } = {}) {
     const asRead = item.title ?? null;
     ev.push({ stage: 'read', source: item.via === 'barcode' ? 'barcode' : item.verified ? 'vision+ocr' : 'vision', outcome: 'as_read',
       after: asRead ?? isbn ?? null, detail: { author: item.author ?? null, frames: item.frames ? [...item.frames].map((x) => x + 1) : undefined, verified: item.verified ?? null, quality: item.quality ?? null } });
+    // Cover blurbs read as titles ("INTERNATIONAL BEST SELLER", "OVER 10,000,000 COPIES SOLD").
+    if (item.via === 'vision' && !isbn && BLURB.test(item.title ?? '')) {
+      await setProgress(scan.id, { step: 'matching', done: ++done, total: found.length });
+      await step('match', { read: item.title, author: item.author ?? null, verdict: 'dropped: a cover blurb, not a title' });
+      continue;
+    }
     if (item.via === 'vision') {
       const sw = await swapIfReversed(item.title, item.author).catch(() => null);
       if (sw) {

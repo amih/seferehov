@@ -312,8 +312,18 @@ async function nliTwin(b, authors) {
     }
     if (!authors.length) return null;
     const bare = mainOf(b.title);
-    return (await nliSearch(`alma.title="${bare.replace(/["\\]/g, ' ')}"`)).find((r) => normTitle(r.bare) === normTitle(bare)
-      && r.authors.some(isHebrew) && authors.some((a) => r.authors.some((h) => samePerson(a, h)))) ?? null;
+    // "הר אדוני (מונטדידיו)" is "הר אדוני".
+    const plain = (t) => normTitle(mainOf(t).replace(/\([^)]*\)/g, ' '));
+    const fits = (r) => plain(r.bare) === plain(bare) && r.authors.some(isHebrew) && authors.some((a) => r.authors.some((h) => samePerson(a, h)));
+    const q = `alma.title="${bare.replace(/["\\]/g, ' ')}"`;
+    // A short title ("הלב") has hundreds of records: narrow it by the author's surname,
+    // which the library's name records also hold in Latin letters.
+    const surname = plainLatin(authors.find((a) => !isHebrew(a)) ?? '').split(/\s+/).filter((w) => w.length >= 3).pop();
+    if (surname) {
+      const r = (await nliSearch(`${q} and alma.creator="${surname.replace(/["\\]/g, ' ')}"`)).find(fits);
+      if (r) return r;
+    }
+    return (await nliSearch(q)).find(fits) ?? null;
   } catch { return null; } // the catalogue is a nicety here
 }
 // { title, authors } in Hebrew where the National Library has them. A romanized subtitle
@@ -332,7 +342,9 @@ export async function hebrewTitleAuthors(b) {
   }
   return {
     title,
-    authors: !romanAuthors ? authors : rec?.authors.some(isHebrew) ? rec.authors : authors.map((a) => (isHebrew(a) ? a : plainLatin(a))),
+    // Failing the library: the Hebrew name read off the spine, when it is the same person.
+    authors: !romanAuthors ? authors : rec?.authors.some(isHebrew) ? rec.authors
+      : authors.map((a) => (isHebrew(a) ? a : b.spineAuthor && isHebrew(b.spineAuthor) && samePerson(a, b.spineAuthor) ? b.spineAuthor : plainLatin(a))),
   };
 }
 export async function hebrewAuthors(b) {
@@ -433,7 +445,7 @@ async function searchTitle(title, author, verify, veto = author) {
     candidates.push({ ...fromLocal(r), bare: r.title, isbn: r.isbn13, alt: r.tnorm, via: 'local_ol' });
   }
   const local = pickBest(candidates, title, author, verify, veto);
-  if (local) return { book: await saveCandidate(local, title), source: local.via, score: local.score };
+  if (local) return { book: await saveCandidate(local, title, veto), source: local.via, score: local.score };
   // Hebrew titles: the National Library has nearly every Israeli book.
   if (isHebrew(title)) {
     try {
@@ -463,7 +475,7 @@ async function searchTitle(title, author, verify, veto = author) {
   }
   const best = pickBest(candidates, title, author, verify, veto);
   // On a miss, keep the closest score anyway: it helps tune the 0.7 threshold.
-  return best ? { book: await saveCandidate(best, title), source: best.via, score: best.score }
+  return best ? { book: await saveCandidate(best, title, veto), source: best.via, score: best.score }
     : { book: null, score: rankBest(candidates, title, author, verify, veto).score || null };
 }
 
@@ -506,8 +518,10 @@ function rankBest(candidates, title, author, verify, veto = author) {
     const chars = Math.max(charSimilarity(title, c.title), charSimilarity(title, c.bare));
     // Alternative titles hold the Hebrew of romanized records; a read title found inside
     // them counts only as far as it covers the record's main title (a word or two read
-    // off a spine is inside many long titles).
-    const alt = c.alt && !isHebrew(c.title) ? containment(title, c.alt) * Math.min(1, words(title).size / (words(mainTitle(c.bare)).size || 1)) : 0;
+    // off a spine is inside many long titles). Only for Hebrew read: a Latin reading found in
+    // them is just a subtitle or a blurb ("LEE CHILD" in "Bloomsbury Murder: 'A-grade crime
+    // fiction' Lee Child", 7 Nov 2026).
+    const alt = c.alt && isHebrew(title) && !isHebrew(c.title) ? containment(title, c.alt) * Math.min(1, words(title).size / (words(mainTitle(c.bare)).size || 1)) : 0;
     let score = Math.max(similarity(title, c.title), similarity(title, c.bare), similarity(title, mainTitle(c.bare)), alt,
       chars >= 0.9 ? chars * 0.8 : 0);
     // Prefer records in the script we read (the Hebrew edition over translations).
@@ -521,7 +535,7 @@ function rankBest(candidates, title, author, verify, veto = author) {
   return { best, score: bestScore };
 }
 
-async function saveCandidate(c, readTitle) {
+async function saveCandidate(c, readTitle, readAuthor = null) {
   // Library of Congress style records give Hebrew books romanized titles; when the
   // Hebrew we read matches the record's alternative titles, show the Hebrew.
   if (readTitle && isHebrew(readTitle) && !isHebrew(c.title) && c.alt && containment(readTitle, c.alt) >= 0.8) {
@@ -533,5 +547,5 @@ async function saveCandidate(c, readTitle) {
     if (existing) return existing;
   }
   const { bare, isbn, alt, via, score, ...meta } = c;
-  return findOrCreateBook({ ...meta, isbn13 });
+  return findOrCreateBook({ ...meta, isbn13, spineAuthor: readAuthor });
 }

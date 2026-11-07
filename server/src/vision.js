@@ -465,6 +465,22 @@ async function findSpine(upright, W, H, title) {
   return ok ? { crop: read.crop, at: here(), read, center } : null;
 }
 
+// Tesseract's words on a level strip (sparse text). Unlike Surya and the vision model it
+// reads upside-down print badly, so it tells which way up a strip is when the other two
+// read it both ways (Latin-script spines run bottom to top, Hebrew ones top to bottom).
+export async function tesseractWords(jpeg) {
+  const { execFile } = await import('node:child_process');
+  const { width: w, height: h } = await sharp(jpeg).metadata();
+  const k = Math.max(1, Math.min(160 / h, 2400 / w));
+  const png = await sharp(jpeg).resize(Math.round(w * k), Math.round(h * k)).extend({ top: 20, bottom: 20, left: 20, right: 20, background: '#ffffff' }).grayscale().png().toBuffer();
+  return new Promise((resolve, reject) => {
+    const p = execFile('tesseract', ['-', '-', '-l', 'eng+heb', '--psm', '11'], { timeout: 60_000, maxBuffer: 1 << 20 },
+      (err, out) => (err ? reject(err) : resolve(out.replace(/\s+/g, ' ').trim())));
+    p.stdin.end(png);
+  });
+}
+const UPRIGHT_MARGIN = 0.2;
+
 // One cut-out from a shelf photo: which way up it is, what it says, and a tight
 // picture of just that one book. The vision model reads it both ways up, Surya OCR
 // reads it both ways up, and the way where the two agree is the right one: each of
@@ -502,10 +518,31 @@ export async function readCrop(img, w, h, title = null, { split = false } = {}) 
   // Surya reads upside-down print too, so with a title to look for (findSpine) its lines can
   // match both ways up equally; the way the vision model read something wins a tie (or near tie).
   const rank = (x) => x.score + (x.read ? 0.15 : 0);
-  const best = tries.sort((a, b) => rank(b) - rank(a))[0];
+  let best = tries.sort((a, b) => rank(b) - rank(a))[0];
+  // Both ways up confirmed (Latin print is read upside down as well as upright; on 7 Nov 2026
+  // four English and Spanish spines were kept upside down): Tesseract decides.
+  const other = tries.find((x) => x !== best);
+  let upright = null;
+  if (other.score >= ORIENT_OK && best.score - other.score < UPRIGHT_MARGIN) {
+    const want = best.read ?? other.read ?? (title ? { title, author: null } : null);
+    if (want) {
+      const texts = await Promise.all([best, other].map((x) => tesseractWords(x.jpeg).catch(() => '')));
+      const fit = texts.map((t) => Math.max(overlap(want.title, t), 0.8 * overlap(want.author, t)));
+      upright = { angles: [best.angle, other.angle], tesseract: texts, fit: fit.map((f) => Math.round(f * 100) / 100) };
+      if (fit[1] - fit[0] >= UPRIGHT_MARGIN) {
+        // Turned over, the reading stays the one Tesseract confirmed (the model may have read
+        // a neighbour the other way up); Surya's lines are matched to it again.
+        upright.turned = true;
+        best = other;
+        if (want.quality) best.read = want; // a reading, not just the title looked for
+        best.lines = best.ocr.boxes.filter((b) => b.confidence >= 0.5).map((b) => ({ ...b, score: Math.max(overlap(want.title, b.text), 0.8 * overlap(want.author, b.text)) }));
+        best.score = Math.max(0, ...best.lines.map((b) => b.score));
+      }
+    }
+  }
   const report = (verdict, images = {}) => step('crop-read', {
     note: `vision model and Surya read it ${spine ? 'turned both ways (270° and 90°)' : 'upright and upside down'}; kept the way where Surya's lines match the model's title (score ≥ ${ORIENT_OK})`,
-    looking_for: title, verdict, angle: best.angle, score: Math.round(best.score * 100) / 100,
+    looking_for: title, verdict, angle: best.angle, score: Math.round(best.score * 100) / 100, upright,
     tries: order.map((x) => ({ angle: x.angle, read: x.read ? { title: x.read.title, author: x.read.author, quality: x.read.quality } : null, score: Math.round(x.score * 100) / 100,
       lines: x.lines.map((b) => ({ text: b.text, confidence: Math.round(b.confidence * 100) / 100, score: Math.round(b.score * 100) / 100 })) })),
   }, images);
@@ -540,7 +577,8 @@ export async function readCrop(img, w, h, title = null, { split = false } = {}) 
     if (own.some((b) => b.score >= 0.4)) lines = own;
   }
   let crop = best.jpeg, cutInfo = null;
-  if (spine) ({ crop, info: cutInfo } = await spineCut(best.jpeg, lines));
+  // A book lying flat shows its spine as a long level strip: cut and straightened the same way.
+  if (spine || w >= 2.5 * h) ({ crop, info: cutInfo } = await spineCut(best.jpeg, lines));
   if (cutInfo) await step('spine-cut', { note: 'this spine turned level for its own lean; its edges found as straight lines at any angle; the neighbour beyond them painted grey', ...cutInfo }, { image: best.jpeg, crop });
   await report('kept', { crop });
   return { ...(best.read ?? { title, author: null, isbn: null, quality: 'medium' }), crop, verified: true, at: here() };
