@@ -285,6 +285,8 @@ const outline = (name) => skeleton(name).replace(/(.)\1+/g, '$1'); // "Reilly" =
 // Same person when the whole names, or one word of each (3+ consonants: "Baumel-Schwartz" /
 // "באומל"), have the same outline; ב/v/ו are ambiguous, so outlines are also compared without b.
 const variants = (o) => [o, o.replace(/b/g, '')];
+// The whole name, not one word of it ("Baruch" and "ברכה" share consonants).
+const wholeSamePerson = (romanized, hebrew) => variants(outline(romanized)).some((v) => v.length >= 4 && variants(outline(hebrew)).includes(v));
 const samePerson = (romanized, hebrew) => {
   const same = (x, y, min) => variants(x).some((v) => v.length >= min && variants(y).includes(v));
   if (same(outline(romanized), outline(hebrew), 3)) return true;
@@ -344,7 +346,7 @@ export async function hebrewTitleAuthors(b) {
     title,
     // Failing the library: the Hebrew name read off the spine, when it is the same person.
     authors: !romanAuthors ? authors : rec?.authors.some(isHebrew) ? rec.authors
-      : authors.map((a) => (isHebrew(a) ? a : b.spineAuthor && isHebrew(b.spineAuthor) && samePerson(a, b.spineAuthor) ? b.spineAuthor : plainLatin(a))),
+      : authors.map((a) => (isHebrew(a) ? a : b.spineAuthor && isHebrew(b.spineAuthor) && wholeSamePerson(a, b.spineAuthor) ? b.spineAuthor : plainLatin(a))),
   };
 }
 export async function hebrewAuthors(b) {
