@@ -405,13 +405,19 @@ const LOCATE_PROMPT = (title) => `Locate the book spine or cover with the title 
 // The outline of one named book on a photo, located by the vision model (no reading back):
 // for spines scanned before outlines were kept (scripts/spots.js). { poly } or null.
 export async function locateSpine(buffer, title) {
-  const small = await sharp(buffer).rotate().resize(1280, 1280, { fit: 'inside' }).jpeg({ quality: 88 }).toBuffer();
+  const { data: upright, info: { width: W, height: H } } = await sharp(buffer).rotate().toBuffer({ resolveWithObject: true });
+  const small = await sharp(upright).resize(1280, 1280, { fit: 'inside' }).jpeg({ quality: 88 }).toBuffer();
   const m = (await generate(small, LOCATE_PROMPT(title), 200)).match(/\[\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\]/);
   if (!m) return null;
-  const [x1, y1, x2, y2] = m.slice(1, 5).map((v) => Math.min(1, Math.max(0, Number(v) / 1000)));
-  if (x2 - x1 < 0.005 || y2 - y1 < 0.005 || (x2 - x1) * (y2 - y1) > 0.5) return null;
-  const r = (v) => Math.round(v * 1000) / 1000;
-  return { poly: [[r(x1), r(y1)], [r(x2), r(y1)], [r(x2), r(y2)], [r(x1), r(y2)]], how: 'located' };
+  const box = m.slice(1, 5).map((v, k) => Math.min(1, Math.max(0, Number(v) / 1000)) * (k % 2 ? H : W));
+  if (box[2] - box[0] < 8 || box[3] - box[1] < 8 || (box[2] - box[0]) * (box[3] - box[1]) > 0.5 * W * H) return null;
+  // The model's box often takes in the thin spines beside this one: narrowed to the band
+  // where OCR finds its title (as when reading). Unconfirmed: the box as located.
+  const pad = Math.min(box[2] - box[0], box[3] - box[1]) * 0.06 + 6;
+  const read = await readCrop(await cut(upright, W, H, box, pad), box[2] - box[0], box[3] - box[1], title).catch(() => null);
+  const one = Array.isArray(read) ? null : read;
+  const sure = !!one?.verified && !!one.across;
+  return { ...spotOf({ tilt: 0, box: sure ? narrowed(box, cutArea(W, H, box, pad), one.across) : box }, W, H), how: sure ? 'located' : 'located-rough' };
 }
 
 // Same book? Most words of the shorter title appear in the other one.
@@ -499,7 +505,8 @@ async function findSpine(upright, W, H, title) {
   const ok = !!read && (read.verified || (read.verified === null && sameTitle(read.title, title)));
   await step('find-spine', { note: 'a book only the whole-image read found: located by title, cut out, read back', title, tilt: Math.round(tilt * 10) / 10, verdict: ok ? 'cut-out kept' : 'no cut-out' }, { image: piece });
   const center = [(located[0] + located[2]) / 2, (located[1] + located[3]) / 2];
-  return ok ? { crop: read.crop, at: here(), read, center, spot: spotOf({ tilt: Math.abs(tilt) >= 5 ? tilt : 0, box }, W, H) } : null;
+  const area = cutArea(w, h, box, Math.min(box[2] - box[0], box[3] - box[1]) * 0.06 + 6);
+  return ok ? { crop: read.crop, at: here(), read, center, spot: spotOf({ tilt: Math.abs(tilt) >= 5 ? tilt : 0, box: narrowed(box, area, read.across) }, W, H) } : null;
 }
 
 // Tesseract's words on a level strip (sparse text). Unlike Surya and the vision model it
@@ -618,8 +625,43 @@ export async function readCrop(img, w, h, title = null, { split = false } = {}) 
   if (spine || w >= 2.5 * h) ({ crop, info: cutInfo } = await spineCut(best.jpeg, lines));
   if (cutInfo) await step('spine-cut', { note: 'this spine turned level for its own lean; its edges found as straight lines at any angle; the neighbour beyond them painted grey', ...cutInfo }, { image: best.jpeg, crop });
   await report('kept', { crop });
-  return { ...(best.read ?? { title, author: null, isbn: null, quality: 'medium' }), crop, verified: true, at: here() };
+  return { ...(best.read ?? { title, author: null, isbn: null, quality: 'medium' }), crop, verified: true, at: here(), across: await acrossOf(best, lines) };
 }
+
+// Which band of the cut-out is this book's spine: the lines of its title and author (as
+// read level) span it, plus a third of their thickness each side for the cover's edges.
+// A cut-out box often holds two or three thin spines; the band marks the one read.
+// { axis: 'x' | 'y', range: [a, b] } as fractions of the cut-out (x for a standing spine,
+// y for a book lying flat), or null.
+async function acrossOf(best, lines) {
+  const hits = (lines ?? []).filter((b) => b.score >= 0.4);
+  if (!hits.length) return null;
+  const { height: Hj } = await sharp(best.jpeg).metadata();
+  let y1 = Math.min(...hits.map((b) => b.bbox[1])), y2 = Math.max(...hits.map((b) => b.bbox[3]));
+  const pad = (y2 - y1) / 3;
+  [y1, y2] = [Math.max(0, y1 - pad) / Hj, Math.min(Hj, y2 + pad) / Hj];
+  const r = (v) => Math.round(v * 1000) / 1000;
+  // The level picture was turned by best.angle (clockwise): its rows are, in the cut-out,
+  // columns (90: left to right, 270: right to left) or rows (0, or 180: bottom to top).
+  if (best.angle === 90) return { axis: 'x', range: [r(y1), r(y2)] };
+  if (best.angle === 270) return { axis: 'x', range: [r(1 - y2), r(1 - y1)] };
+  if (best.angle === 0) return { axis: 'y', range: [r(y1), r(y2)] };
+  return { axis: 'y', range: [r(1 - y2), r(1 - y1)] };
+}
+
+// The spine's box narrowed to its band (see acrossOf). cut: where the cut-out was taken from
+// the picture ({ left, top, width, height }).
+export function narrowed(box, cut, across) {
+  if (!across) return box;
+  const [a, b] = across.range;
+  return across.axis === 'x'
+    ? [Math.max(box[0], cut.left + a * cut.width), box[1], Math.min(box[2], cut.left + b * cut.width), box[3]]
+    : [box[0], Math.max(box[1], cut.top + a * cut.height), box[2], Math.min(box[3], cut.top + b * cut.height)];
+}
+const cutArea = (W, H, [x1, y1, x2, y2], pad) => {
+  const left = Math.max(0, Math.floor(x1 - pad)), top = Math.max(0, Math.floor(y1 - pad));
+  return { left, top, width: Math.min(W - left, Math.ceil(x2 - x1 + 2 * pad)), height: Math.min(H - top, Math.ceil(y2 - y1 + 2 * pad)) };
+};
 
 // The level cut-out (one way up, as read for readCrop), cut into one band per spine along
 // Surya's lines: lines on the same rows are one spine. Each band is read by the vision model
@@ -858,7 +900,8 @@ async function readSpines(buffer) {
 
   const crops = [];
   const straight = boxes.filter((b) => Math.abs(b.tilt) < 5);
-  for (const b of straight) crops.push({ img: await cut(upright, W, H, b, Math.min(b[2] - b[0], b[3] - b[1]) * 0.06 + 6), w: b[2] - b[0], h: b[3] - b[1], from: 'straight', box: b.slice(0, 4).map(Math.round), tilt: Math.round(b.tilt * 10) / 10, place: { tilt: 0, box: b.slice(0, 4) } });
+  const padOf = (b) => Math.min(b[2] - b[0], b[3] - b[1]) * 0.06 + 6;
+  for (const b of straight) crops.push({ img: await cut(upright, W, H, b, padOf(b)), w: b[2] - b[0], h: b[3] - b[1], from: 'straight', box: b.slice(0, 4).map(Math.round), tilt: Math.round(b.tilt * 10) / 10, place: { tilt: 0, box: b.slice(0, 4) }, area: cutArea(W, H, b, padOf(b)) });
 
   // Lean groups: tilts within 6° of each other, the biggest groups first.
   const groups = [];
@@ -889,18 +932,19 @@ async function readSpines(buffer) {
       tilt: Math.round(tilt * 10) / 10, boxes_in_group: g.length, W: W2, H: H2, area: area.map((a) => a.map(Math.round)), boxes: found.map((b) => ({ box: b.slice(0, 4).map(Math.round) })),
     }, { image: turned.data });
     for (const b of found.slice(0, MAX_SPINES)) {
-      crops.push({ img: await cut(turned.data, W2, H2, b, Math.min(b[2] - b[0], b[3] - b[1]) * 0.06 + 6), w: b[2] - b[0], h: b[3] - b[1], from: `lean group ${gi + 1}`, box: b.slice(0, 4).map(Math.round), tilt: Math.round(tilt * 10) / 10, place: { tilt, box: b.slice(0, 4) } });
+      crops.push({ img: await cut(turned.data, W2, H2, b, padOf(b)), w: b[2] - b[0], h: b[3] - b[1], from: `lean group ${gi + 1}`, box: b.slice(0, 4).map(Math.round), tilt: Math.round(tilt * 10) / 10, place: { tilt, box: b.slice(0, 4) }, area: cutArea(W2, H2, b, padOf(b)) });
     }
   }
 
   const books = [];
-  for (const [k, { img, w, h, from, box, tilt, place }] of crops.slice(0, MAX_SPINES * 2).entries()) {
+  for (const [k, { img, w, h, from, box, tilt, place, area }] of crops.slice(0, MAX_SPINES * 2).entries()) {
     const b = await scope(`cut-out ${k + 1}`, async () => {
       await step('cut-out', { from, w: Math.round(w), h: Math.round(h), box, tilt }, { image: img });
       return readCrop(img, w, h, null, { split: true });
     });
     // A reading neither way up confirmed by OCR came from a jumble or upside-down print.
-    for (const x of [].concat(b ?? [])) if (x.verified !== false) books.push({ ...x, place, spot: spotOf(place, W, H) });
+    // The outline kept is the spine's own band of the cut-out (split bands have none: the box).
+    for (const x of [].concat(b ?? [])) if (x.verified !== false) books.push({ ...x, place, spot: spotOf({ tilt: place.tilt, box: narrowed(place.box, area, x.across) }, W, H) });
   }
   // Boxes overlap, so one spine can be read from two cut-outs: alike readings from cut-outs
   // that overlap are one book.
