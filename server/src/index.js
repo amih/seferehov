@@ -30,6 +30,7 @@ import clientErrorRoutes from './clienterrors.js';
 import cameraLogRoutes from './camlog.js';
 import captureRoutes, { startCaptureWorker } from './capture.js';
 import { uploadReceipts } from './receipts.js';
+import whereRoutes from './where.js';
 
 const app = Fastify({ logger: true, trustProxy: '127.0.0.1', bodyLimit: 1024 * 1024 });
 
@@ -65,6 +66,7 @@ await app.register(editRoutes);
 await app.register(scanRoutes);
 await app.register(approvalRoutes);
 await app.register(myBookRoutes);
+await app.register(whereRoutes);
 await app.register(offerRoutes);
 await app.register(duplicateRoutes);
 await app.register(botPage);

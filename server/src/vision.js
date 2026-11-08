@@ -68,7 +68,7 @@ export async function readBooks(buffer, { spines = true } = {}) {
         if (found?.twin) { gone.add(b); continue; }
         if (found) {
           const r = found.read;
-          Object.assign(b, { crop: found.crop, at: found.at, verified: true });
+          Object.assign(b, { crop: found.crop, at: found.at, verified: true, spot: found.spot });
           if (r?.title) Object.assign(b, { title: r.title, author: r.author || b.author, quality: r.quality ?? b.quality });
         }
       } catch { /* no cut-out */ }
@@ -385,7 +385,35 @@ export function rotatePoint([x, y], W, H, deg) {
   return [W2 / 2 + dx * c - dy * s, H2 / 2 + dx * s + dy * c];
 }
 
+// Inverse of rotatePoint: where a point of the turned picture was in the W×H original.
+export function unrotatePoint([x, y], W, H, deg) {
+  const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+  const W2 = W * Math.abs(c) + H * Math.abs(s), H2 = W * Math.abs(s) + H * Math.abs(c);
+  const dx = x - W2 / 2, dy = y - H2 / 2;
+  return [W / 2 + dx * c + dy * s, H / 2 - dx * s + dy * c];
+}
+// Where a spine is on its photo, to show it again later ("where is this book?"): the four
+// corners of its box (cut in the photo turned by -tilt) in the upright photo, as fractions
+// of its width and height.
+export function spotOf({ tilt, box }, W, H) {
+  const corners = [[box[0], box[1]], [box[2], box[1]], [box[2], box[3]], [box[0], box[3]]];
+  const pts = tilt ? corners.map((p) => unrotatePoint(p, W, H, -tilt)) : corners;
+  return { poly: pts.map(([x, y]) => [Math.round(Math.min(1, Math.max(0, x / W)) * 1000) / 1000, Math.round(Math.min(1, Math.max(0, y / H)) * 1000) / 1000]) };
+}
+
 const LOCATE_PROMPT = (title) => `Locate the book spine or cover with the title "${title.replace(/"/g, '')}" in this image. Output JSON: [{"bbox_2d":[x1,y1,x2,y2]}]`;
+// The outline of one named book on a photo, located by the vision model (no reading back):
+// for spines scanned before outlines were kept (scripts/spots.js). { poly } or null.
+export async function locateSpine(buffer, title) {
+  const small = await sharp(buffer).rotate().resize(1280, 1280, { fit: 'inside' }).jpeg({ quality: 88 }).toBuffer();
+  const m = (await generate(small, LOCATE_PROMPT(title), 200)).match(/\[\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\]/);
+  if (!m) return null;
+  const [x1, y1, x2, y2] = m.slice(1, 5).map((v) => Math.min(1, Math.max(0, Number(v) / 1000)));
+  if (x2 - x1 < 0.005 || y2 - y1 < 0.005 || (x2 - x1) * (y2 - y1) > 0.5) return null;
+  const r = (v) => Math.round(v * 1000) / 1000;
+  return { poly: [[r(x1), r(y1)], [r(x2), r(y1)], [r(x2), r(y2)], [r(x1), r(y2)]], how: 'located' };
+}
+
 // Same book? Most words of the shorter title appear in the other one.
 export function sameTitle(a, b) {
   const [x, y] = [normTitle(a).split(' '), normTitle(b).split(' ')].map((w) => w.filter(Boolean));
@@ -471,7 +499,7 @@ async function findSpine(upright, W, H, title) {
   const ok = !!read && (read.verified || (read.verified === null && sameTitle(read.title, title)));
   await step('find-spine', { note: 'a book only the whole-image read found: located by title, cut out, read back', title, tilt: Math.round(tilt * 10) / 10, verdict: ok ? 'cut-out kept' : 'no cut-out' }, { image: piece });
   const center = [(located[0] + located[2]) / 2, (located[1] + located[3]) / 2];
-  return ok ? { crop: read.crop, at: here(), read, center } : null;
+  return ok ? { crop: read.crop, at: here(), read, center, spot: spotOf({ tilt: Math.abs(tilt) >= 5 ? tilt : 0, box }, W, H) } : null;
 }
 
 // Tesseract's words on a level strip (sparse text). Unlike Surya and the vision model it
@@ -872,7 +900,7 @@ async function readSpines(buffer) {
       return readCrop(img, w, h, null, { split: true });
     });
     // A reading neither way up confirmed by OCR came from a jumble or upside-down print.
-    for (const x of [].concat(b ?? [])) if (x.verified !== false) books.push({ ...x, place });
+    for (const x of [].concat(b ?? [])) if (x.verified !== false) books.push({ ...x, place, spot: spotOf(place, W, H) });
   }
   // Boxes overlap, so one spine can be read from two cut-outs: alike readings from cut-outs
   // that overlap are one book.
@@ -1004,7 +1032,8 @@ export function mergeBooks(books) {
     else if (b.title.length > dup.title.length && b.quality !== 'low') dup.title = b.title;
     dup.author ||= b.author;
     dup.isbn ||= b.isbn;
-    if (!dup.crop && b.crop) Object.assign(dup, { crop: b.crop, verified: b.verified, at: b.at });
+    if (!dup.crop && b.crop) Object.assign(dup, { crop: b.crop, verified: b.verified, at: b.at, spot: b.spot });
+    dup.spot ??= b.spot;
   }
   return out.slice(0, MAX_LINES);
 }

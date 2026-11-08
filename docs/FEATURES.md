@@ -117,6 +117,13 @@ It runs at https://seferehov.com. Hebrew is the default (right to left); English
 - Books of friends, or borrowed from friends, can be kept apart from the reader's own.
 - With more than 5 books, the list can be filtered by words, genre and language, and sorted by when added, title, author or year.
 
+### Where is it? (from 8 Nov 2026)
+
+- Every spine read off a shelf photo keeps its outline on that photo (`scan_items.spot`: four corners as fractions of the photo, worked back from the straightened cut-out). The queue's photo is the one the outline is on.
+- A book's page shows **Where it is**: each shelf photo it was seen in, darkened except for its spine (outlined in yellow), the books to its left and right in the photo (or above and below, for a pile of books lying flat), and when.
+- Your own home scans: shown only to you. You can give a scan a place name ("living room, left bookcase"); every book from that photo shows it. A street library's photos: shown to anyone once the books were approved, with the library's name.
+- Spines scanned before 8 Nov 2026 were located afterwards by the vision model, by title (`scripts/spots.js`; a box, not the exact lean).
+
 ## Books for sale or to give away
 
 - Any book in My books can be offered: free or for sale (price in ₪), its condition, the town and a note.

@@ -705,3 +705,13 @@ details.steps summary { cursor: pointer; font-weight: 600; }
 .conf-high { color: #2f7a3a; }
 .conf-mid { color: #8a6a00; }
 .conf-low { color: #a23b2a; }
+
+/* Where is it: the shelf photo with the spine outlined */
+.where { margin: 0 0 18px; }
+.where-place { margin: 4px 0; }
+.where-photo { position: relative; line-height: 0; border-radius: 8px; overflow: hidden; }
+.where-photo img { width: 100%; height: auto; display: block; }
+.where-photo svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.where-photo path.dim { fill: rgba(0, 0, 0, .5); }
+.where-photo polygon.me { fill: none; stroke: #ffd600; vector-effect: non-scaling-stroke; stroke-width: 3px; }
+.where-label input { flex: 1; min-width: 0; }

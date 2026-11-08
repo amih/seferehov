@@ -657,6 +657,8 @@ export async function processScan(scan, { dry = false } = {}) {
   const SAME_SPINE = 0.8;
   const found = [];
   const add = (key, item, i) => {
+    // Where the spine is: its outline on this frame (see spotOf).
+    const spot = item.spot?.poly && item.frame !== undefined ? { frame: item.frame, poly: item.spot.poly } : null;
     const contains = (a, b) => a === b || (Math.min(a.length, b.length) >= 6 && (a.includes(b) || b.includes(a)));
     const score = (f) => {
       if (f.keys.has(key)) return 2;
@@ -671,12 +673,13 @@ export async function processScan(scan, { dry = false } = {}) {
       hit.author ||= item.author;
       hit.isbn ||= item.isbn;
       if (hit.quality === 'low' && item.quality && item.quality !== 'low') hit.quality = item.quality;
-      if (item.crop) hit.crops.push({ crop: item.crop, verified: item.verified, at: item.at });
+      if (item.crop) hit.crops.push({ crop: item.crop, verified: item.verified, at: item.at, spot });
       if (!hit.crop && item.crop) Object.assign(hit, { crop: item.crop, verified: item.verified, at: item.at });
+      hit.spot ??= spot;
       hit.at ??= item.at;
       return;
     }
-    found.push({ ...item, key, keys: new Set([key]), frames: new Set([i]), crops: item.crop ? [{ crop: item.crop, verified: item.verified, at: item.at }] : [],
+    found.push({ ...item, spot, key, keys: new Set([key]), frames: new Set([i]), crops: item.crop ? [{ crop: item.crop, verified: item.verified, at: item.at, spot }] : [],
       reads: new Map(item.title ? [[item.title, 1 + (item.verified ? 0.5 : 0)]] : []) });
   };
   for (const [i, { buffer: buf, fromVideo, t, sharp: sharpScore }] of images.entries()) {
@@ -710,7 +713,7 @@ export async function processScan(scan, { dry = false } = {}) {
     if (!f.crops?.length) continue;
     for (const c of f.crops) c.shape = await cropShape(c.crop).catch(() => null);
     const ranked = [...f.crops].sort((a, b) => badCrop(a.shape) - badCrop(b.shape) || (b.verified === true) - (a.verified === true) || (a.shape?.blank ?? 1) - (b.shape?.blank ?? 1));
-    Object.assign(f, { crop: ranked[0].crop, verified: ranked[0].verified ?? f.verified, at: ranked[0].at ?? f.at, cropShape: ranked[0].shape });
+    Object.assign(f, { crop: ranked[0].crop, verified: ranked[0].verified ?? f.verified, at: ranked[0].at ?? f.at, cropShape: ranked[0].shape, spot: ranked[0].spot ?? f.spot });
   }
   await step('merge', { note: `the same spine in several frames counts once: readings merge when one contains the other or they are ${SAME_SPINE * 100}% alike (look-alike letters count less), never two from one frame`,
     found: found.map((f) => ({ title: f.title ?? null, variants: f.variants?.length > 1 ? f.variants : undefined, author: f.author ?? null, isbn: f.isbn ?? null, via: f.via, frames: [...f.frames].map((x) => x + 1), verified: f.verified, crop: !!f.crop })) });
@@ -821,10 +824,12 @@ export async function processScan(scan, { dry = false } = {}) {
   for (const [n, { item, book, title, isbn, quality, lookupId }] of rows.entries()) {
     const crop = item.crop ? await saveCropThumb(item.crop, scan.id, n) : null;
     const saved = await one(
-      `INSERT INTO scan_items(scan_id, title, author, isbn13, book_id, via, matched, frame_path, quality, crop_path, lookup_id, sources, trace_at, confidence, confidence_why)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
-      [scan.id, title, item.author ?? book?.authors?.[0] ?? null, book?.isbn13 ?? isbn ?? null, book?.id ?? null, item.via, !!book, item.frame, quality, crop, lookupId,
-        [item.via === 'barcode' ? 'barcode' : scan.source], item.at?.length ? item.at : null, item.confidence ?? null, item.confidenceWhy ?? null],
+      `INSERT INTO scan_items(scan_id, title, author, isbn13, book_id, via, matched, frame_path, quality, crop_path, lookup_id, sources, trace_at, confidence, confidence_why, spot)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
+      // The frame shown is the one the spine's outline is on.
+      [scan.id, title, item.author ?? book?.authors?.[0] ?? null, book?.isbn13 ?? isbn ?? null, book?.id ?? null, item.via, !!book, item.spot?.frame ?? item.frame, quality, crop, lookupId,
+        [item.via === 'barcode' ? 'barcode' : scan.source], item.at?.length ? item.at : null, item.confidence ?? null, item.confidenceWhy ?? null,
+        item.spot ? JSON.stringify({ poly: item.spot.poly }) : null],
     );
     for (const e of item.evidence ?? []) {
       await q(`INSERT INTO scan_item_evidence(item_id, stage, source, outcome, before, after, detail) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
