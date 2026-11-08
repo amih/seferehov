@@ -4,7 +4,7 @@
 //   node --env-file=../.env scripts/rematch.js          → what would change
 //   node --env-file=../.env scripts/rematch.js --apply  → change it
 import { many, q, pool } from '../src/db.js';
-import { lookupTitle } from '../src/books.js';
+import { lookupTitle, otherAuthor } from '../src/books.js';
 import { swapIfReversed, localCheck } from '../src/refindex.js';
 
 const apply = process.argv.includes('--apply');
@@ -43,11 +43,21 @@ for (const i of items) {
         detail: { rematch: true, book_id: r.book?.id ?? null, was_book_id: i.book_id ?? null } });
     }
   }
-  const book = r.book ?? null;
-  const same = (book?.id ?? null) === (i.book_id ?? null) && !sw;
+  let book = r.book ?? null;
+  // Safeguards (8 Nov 2026): a match the scan found (often after a web correction this
+  // script does not repeat) is not given up for nothing, nor for a record that lacks the
+  // author read when the old one has him.
+  const old = i.book_id ? { id: i.book_id, title: i.book_title, authors: i.book_authors ?? [] } : null;
+  const hasAuthor = (b) => b && author && b.authors?.length && !otherAuthor(author, b);
+  let kept = null;
+  if (old && !book) kept = 'no new match';
+  else if (old && book && book.id !== old.id && hasAuthor(old) && !hasAuthor(book)) kept = 'the new match lacks the author read';
+  if (kept) { book = { ...old, isbn13: i.isbn13 }; ev.push({ stage: 'verify', source: 'rematch', outcome: 'match', before: title, after: old.title, detail: { rematch: true, kept_old: kept, book_id: old.id } }); }
+  // An old match kept: the item stays as it is (its title may be a correction this script did not repeat).
+  const same = !!kept || ((book?.id ?? null) === (i.book_id ?? null) && !sw);
   const was = i.book_id ? `${i.book_title} / ${(i.book_authors ?? []).join(', ') || '-'}` : '(no book)';
   const now = book ? `${book.title} / ${(book.authors ?? []).join(', ') || '-'}` : '(no book)';
-  console.log(`${same ? '  ' : '* '}${i.id} read "${title}" / ${author ?? '-'}${sw ? ' (swapped)' : ''}\n      was ${was}\n      now ${now}`);
+  console.log(`${same ? '  ' : '* '}${i.id} read "${title}" / ${author ?? '-'}${sw ? ' (swapped)' : ''}\n      was ${was}\n      now ${now}${kept ? ` (kept: ${kept})` : ''}`);
   if (same) continue;
   changed++;
   if (!apply) continue;
