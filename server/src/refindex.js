@@ -63,6 +63,9 @@ export async function knownAuthor(name) {
 const NAME_SURE = 0.85;
 export async function swapIfReversed(title, author) {
   if (!title || !author) return null;
+  // A name has two words (of 2+ letters) at least: one-word titles ("דילמה", "היום", "ל שנה")
+  // are also names in the index (7 such false swaps up to 8 Nov 2026).
+  if (normTitle(title).split(' ').filter((w) => w.length >= 2).length < 2) return null;
   const t = await knownAuthor(title);
   if (!t || t.s < NAME_SURE) return null;
   const a = await knownAuthor(author);
