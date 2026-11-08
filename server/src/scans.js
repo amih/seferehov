@@ -6,11 +6,13 @@ import sharp from 'sharp';
 import { config } from './config.js';
 import { one, many, q, tx } from './db.js';
 import { requireUser } from './auth.js';
-import { lookupIsbn, lookupTitle, findOrCreateBook, nliTitlesBy } from './books.js';
+import { lookupIsbn, lookupTitle, findOrCreateBook } from './books.js';
 import { readBooks, sharpness, BLURRY, readCover, readCoverText, readIsbnBarcodes, normTitle, titleSimilarity, coverAgrees, authorsAgree } from './vision.js';
 import { pickFrames } from './frames.js';
-import { webCheck, purgeSearchCache, blurbSearch, authorTitles, wordsKept } from './websearch.js';
-import { localCheck, swapIfReversed, knownAuthor, titlesBy } from './refindex.js';
+import { webCheck, purgeSearchCache, blurbSearch } from './websearch.js';
+import { localCheck, swapIfReversed } from './refindex.js';
+import { titleByAuthor } from './coverfix.js';
+import { enqueueWeb } from './webqueue.js';
 import { cropCover } from './covers.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
 import { initialStatus, awardSighting } from './moderation.js';
@@ -476,44 +478,6 @@ async function saveCropThumb(jpeg, scanId, n) {
   return rel;
 }
 
-// Among an author's books, the one whose title is printed on the cover: every word of its main
-// title close to a word read there (look-alike letters count as close); a one-word title must be
-// nearly the same as a word read. The surest wins; two different titles as sure: none.
-export function titleOnCover(candidates, coverText) {
-  const words = normTitle(coverText).split(' ').filter((w) => w.length >= 2);
-  const scored = [];
-  for (const c of candidates) {
-    const main = String(c.title).split(/\s+[:/–-]\s+|\s*:\s*/)[0].trim();
-    const mw = normTitle(main).split(' ').filter(Boolean);
-    if (!mw.length || normTitle(main).replace(/ /g, '').length < 3) continue;
-    const score = mw.length === 1 ? Math.max(0, ...words.map((w) => titleSimilarity(w, mw[0]))) : wordsKept(main, coverText);
-    if (score >= (mw.length === 1 ? 0.8 : 0.75)) scored.push({ ...c, title: main, score, n: mw.length });
-  }
-  scored.sort((a, b) => b.score - a.score || b.n - a.n);
-  const [top, next] = scored;
-  if (!top) return null;
-  if (next && normTitle(next.title) !== normTitle(top.title) && next.score === top.score && next.n === top.n) return null;
-  return top;
-}
-async function titleByAuthor(author, coverText) {
-  const known = await knownAuthor(author).catch(() => null);
-  const name = known?.name ?? author;
-  const seen = new Set();
-  const uniq = (list) => list.filter((c) => { const k = normTitle(c.title); if (seen.has(k)) return false; seen.add(k); return true; });
-  let cands = uniq([...await titlesBy(name).catch(() => []), ...(/[א-ת]/.test(name) ? await nliTitlesBy(name).catch(() => []) : [])]);
-  let pick = titleOnCover(cands, coverText);
-  let verdict = pick ? 'found offline' : 'no offline title fits';
-  if (!pick) {
-    const web = await authorTitles(name);
-    const more = uniq(web.titles);
-    cands = cands.concat(more);
-    pick = titleOnCover(more, coverText);
-    verdict = pick ? 'found on the web' : `none fits (web: ${web.verdict})`;
-  }
-  await step('author-first', { note: "the author's books held against the cover's text", read: author, name, candidates: cands.length, pick, verdict });
-  return { pick: pick && { title: pick.title, author: pick.author ?? name, source: pick.source }, name, count: cands.length, verdict };
-}
-
 // One book's covers: read, looked up (the scanned code first, then the barcode or ISBN
 // read from the covers, then the title), and one queue item with both pictures.
 async function processCover(scan, { dry = false } = {}) {
@@ -571,6 +535,7 @@ async function processCover(scan, { dry = false } = {}) {
   const ev = [{ stage: 'read', source: 'vision+ocr', outcome: 'as_read', after: read.title ?? null, detail: { author: read.author ?? null, codes: read.codes ?? [], quality: read.quality } }];
   if (book) ev.push({ stage: 'verify', source: 'catalogue', outcome: 'match', before: read.title ?? null, after: book.title, detail: { book_id: book.id } });
   let readTitle = read.title, readAuthor = read.author, fixedBy = null;
+  const heldSteps = []; let blurbHeld = null; // searches the engines could not take now: queued
   const authorOnly = (c) => authorsAgree(c.authors, [readAuthor, ...names]);
   const lookFor = async (t, a, how) => {
     const r = await lookupTitle(t, a, dry ? 'trace' : 'scan', authorOnly).catch(() => ({}));
@@ -598,6 +563,7 @@ async function processCover(scan, { dry = false } = {}) {
     const w = await webCheck(readTitle, readAuthor).catch((err) => ({ fixed: null, outcome: `error: ${err.message}`, tries: [] }));
     ev.push({ stage: 'correct', source: 'web', outcome: w.outcome, before: [readTitle, readAuthor].filter(Boolean).join(' | '),
       after: w.fixed ? [w.fixed.title, w.fixed.author].filter(Boolean).join(' | ') : null, detail: { tries: w.tries } });
+    if (w.outcome === 'held') heldSteps.push('web');
     if (w.fixed) {
       [readTitle, readAuthor, fixedBy] = [w.fixed.title, w.fixed.author ?? readAuthor, 'web'];
       await lookFor(readTitle, readAuthor, 'web');
@@ -608,7 +574,8 @@ async function processCover(scan, { dry = false } = {}) {
   // against the cover's text, and the one whose title is printed there is taken.
   if (!book && !fixedBy && readAuthor && !backOnly) {
     const A = await titleByAuthor(readAuthor, printed).catch((err) => ({ pick: null, verdict: `error: ${err.message}` }));
-    ev.push({ stage: 'correct', source: A.pick ? `author:${A.pick.source}` : 'author', outcome: A.pick ? 'corrected' : 'unknown', before: [readTitle, readAuthor].filter(Boolean).join(' | '),
+    if (A.held) heldSteps.push('author');
+    ev.push({ stage: 'correct', source: A.pick ? `author:${A.pick.source}` : 'author', outcome: A.pick ? 'corrected' : A.held ? 'held' : 'unknown', before: [readTitle, readAuthor].filter(Boolean).join(' | '),
       after: A.pick ? [A.pick.title, A.pick.author].join(' | ') : null, detail: { name: A.name ?? null, candidates: A.count ?? 0, verdict: A.verdict } });
     if (A.pick) {
       [readTitle, readAuthor, fixedBy] = [A.pick.title, A.pick.author, 'author'];
@@ -622,6 +589,7 @@ async function processCover(scan, { dry = false } = {}) {
     const blurb = (back && !backOnly ? read.backText : null) ?? (backOnly || sentence ? read.frontText ?? read.text : null)
       ?? (back ? await scope('back-ocr', () => readCoverText(back)).then((x) => x.text).catch(() => null) : null);
     const B = await blurbSearch(blurb).catch((err) => ({ found: null, outcome: `error: ${err.message}`, tries: [] }));
+    if (B.outcome === 'held') { heldSteps.push('blurb'); blurbHeld = blurb; }
     ev.push({ stage: 'correct', source: 'blurb', outcome: B.outcome, before: readTitle ?? null, after: B.found ? [B.found.title, B.found.author].filter(Boolean).join(' | ') : null, detail: { tries: B.tries } });
     if (B.found) {
       [readTitle, readAuthor, fixedBy] = [B.found.title, B.found.author ?? readAuthor, 'blurb'];
@@ -646,6 +614,10 @@ async function processCover(scan, { dry = false } = {}) {
   for (const e of ev) {
     await q(`INSERT INTO scan_item_evidence(item_id, stage, source, outcome, before, after, detail) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [item.id, e.stage, e.source, e.outcome, e.before ?? null, e.after ?? null, JSON.stringify(e.detail ?? {})]).catch(() => {});
+  }
+  if (!book && heldSteps.length) {
+    await enqueueWeb(item.id, 'cover', heldSteps, { title: read.title, author: read.author, text: printed.slice(0, 4000), blurb: blurbHeld?.slice(0, 4000) ?? null })
+      .catch((err) => log.warn({ err }, 'web queue'));
   }
 }
 
@@ -887,6 +859,10 @@ export async function processScan(scan, { dry = false } = {}) {
     for (const e of item.evidence ?? []) {
       await q(`INSERT INTO scan_item_evidence(item_id, stage, source, outcome, before, after, detail) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [saved.id, e.stage, e.source, e.outcome, e.before ?? null, e.after ?? null, e.detail ? JSON.stringify(e.detail) : null]).catch((err) => log.warn({ err }, 'evidence'));
+    }
+    // The web check could not be searched now: it waits in the web queue.
+    if (!book && item.via === 'vision' && (item.evidence ?? []).some((e) => e.source === 'web' && e.outcome === 'held')) {
+      await enqueueWeb(saved.id, 'spine', ['web'], { title: item.title, author: item.author ?? null }).catch((err) => log.warn({ err }, 'web queue'));
     }
   }
 }

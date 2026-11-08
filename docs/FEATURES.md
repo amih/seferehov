@@ -103,6 +103,12 @@ Of the first 40 covers, 16 needed editing and 6 were declined. Covers now go thr
 5. **The blurb**: a sentence of the back cover (or a 7+ word "title", a back photographed alone) searched word for word; pages quoting it name the book.
 Every step is recorded as evidence and gives the item a confidence for the queue. Re-reading the 20 covers readers had fixed or declined: 15 came out right with no edit (2 more were stopped only by the search engines' pause). Searching a Danacode on the web finds nothing and is not used. `scripts/cover-test.js [scan…]` re-reads saved covers without saving.
 
+### Web searches: engines in turn, and a queue (8 Nov 2026)
+
+- Each web search asks one engine, in turn: Brave, Yandex, Yahoo (Mwmbl, a small open index, when the others rest). Each engine has its own limit (15 an hour, 100 a day; Mwmbl 10 and 60) and rests 30 minutes when it refuses (a CAPTCHA, "too many requests", or nothing at all).
+- A web check that cannot be searched when a scan is read (every engine resting or used up) is queued (`web_jobs`) and run later, one at a time: every 3 minutes by day, every minute at night (00:00–07:00 Israel time). A result updates the item still waiting in the queue (title, author, the catalogue's book, confidence) with its evidence; a check still held is tried again half an hour later, up to 6 times. Items decided meanwhile are left alone.
+- Searching from readers' phones was considered and dropped: browsers cannot read search engines' result pages (no CORS), and spreading searches over phones to get past engines' limits would go against their terms.
+
 ## The approval queue
 
 - Every book found, from any photo or barcode, waits in one queue per reader (`/queue`), one book at a time with a big picture: approve, later, or wrong. The title and author can be fixed before approving.

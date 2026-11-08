@@ -1,11 +1,15 @@
 # Web search for the shelf reader (server/src/websearch.js): JSON answers on
 # 127.0.0.1:8895 only, no web page for people, no limiter (one caller: the server).
-# Engines: Brave gives the best Hebrew book results but pauses after bursts; Yandex is
-# steady. Bing (junk for Hebrew), Google (access denied), DuckDuckGo and Qwant (CAPTCHA)
-# are left out.
+# Engines (each search asks one, in turn: server/src/websearch.js): Brave gives the best
+# Hebrew book results but pauses after bursts; Yandex is steady; Yahoo finds titles (not
+# exact sentences); Mwmbl is a small open index, asked when the others rest. Tested
+# 8 Nov 2026 and left out: Bing (junk for Hebrew), Google (access denied), DuckDuckGo,
+# Qwant and GMX (CAPTCHA), most others (errors); Google CSE works well but reads Google's
+# embeddable search box, which is not meant for this. Mojeek, Startpage and Marginalia are
+# not in this SearXNG.
 use_default_settings:
   engines:
-    keep_only: [brave, yandex]
+    keep_only: [brave, yandex, yahoo, mwmbl]
 general:
   instance_name: seferehov-search
 server:
@@ -20,4 +24,8 @@ outgoing:
   max_request_timeout: 10.0
 engines:
   - name: yandex
+    disabled: false
+  - name: yahoo
+    disabled: false
+  - name: mwmbl
     disabled: false

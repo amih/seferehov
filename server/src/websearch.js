@@ -16,58 +16,87 @@ const RESULTS = 8;
 const WORD_NEAR = 0.6; // a corrected word must be this alike to some word read on the spine
 const WORDS_KEPT = 0.75; // …for this share of the corrected words
 
-// Playing nice with the free engines behind SearXNG (Brave pauses us after a burst):
+// Playing nice with the free engines behind SearXNG. Each search goes to ONE engine, taken in
+// turn (Brave, Yandex, Yahoo; Mwmbl when they are all resting), so each sees a share:
 //   - one search at a time, at least GAP_MS apart (plus a random 0–5 s);
-//   - at most PER_HOUR searches an hour and PER_DAY a day; past that, readings stay as read;
-//   - when the engines answer nothing (a sign they are holding us back), no searches for
-//     COOL_MS;
+//   - per engine at most PER_HOUR searches an hour and PER_DAY a day;
+//   - an engine that answers nothing, a CAPTCHA or "too many requests" rests for COOL_MS;
 //   - the same query is answered from web_search_cache for 30 days.
+// A check that cannot be searched now is queued and run later, slowly (webqueue.js).
 const GAP_MS = 10_000;
-const PER_HOUR = 40;
-const PER_DAY = 300;
-const COOL_MS = 10 * 60_000;
+const ENGINES = [
+  { name: 'brave', perHour: 15, perDay: 100 },
+  { name: 'yandex', perHour: 15, perDay: 100 },
+  { name: 'yahoo', perHour: 15, perDay: 100 },
+  { name: 'mwmbl', perHour: 10, perDay: 60, last: true }, // a small open index: when the others rest
+];
+const COOL_MS = 30 * 60_000;
 const KEEP_DAYS = 30;
-
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
-const sent = []; // times of searches sent, the last 24 hours
+const use = new Map(ENGINES.map((e) => [e.name, { sent: [], coolUntil: 0 }]));
 let chain = Promise.resolve();
 let last = 0;
-let coolUntil = 0;
+let turn = 0;
 
-async function searxng(query) {
-  const url = `${config.searchUrl}/search?${new URLSearchParams({ q: query, format: 'json' })}`;
+// The engines that may be asked now, in turn order.
+function ready() {
+  const now = Date.now();
+  const ok = ENGINES.filter((e) => {
+    const u = use.get(e.name);
+    while (u.sent.length && u.sent[0] < now - 86_400_000) u.sent.shift();
+    return now >= u.coolUntil && u.sent.filter((t) => t > now - 3_600_000).length < e.perHour && u.sent.length < e.perDay;
+  });
+  const main = ok.filter((e) => !e.last);
+  const order = main.length ? [...main.slice(turn % main.length), ...main.slice(0, turn % main.length)] : ok;
+  return order;
+}
+// Why no search can be sent now, or null.
+export function held() {
+  if (!config.searchUrl) return 'search is off';
+  return ready().length ? null : 'every engine is resting or used up for now';
+}
+// Searches left today (all engines), for the queue's pace.
+export function searchesLeft() {
+  return ENGINES.reduce((a, e) => a + Math.max(0, e.perDay - use.get(e.name).sent.length), 0);
+}
+
+async function searxng(query, engine) {
+  const url = `${config.searchUrl}/search?${new URLSearchParams({ q: query, format: 'json', engines: engine })}`;
   const res = await fetch(url, { signal: AbortSignal.timeout(20_000) });
   if (!res.ok) throw new Error(`search ${res.status}`);
-  return ((await res.json()).results ?? []).slice(0, RESULTS)
+  const data = await res.json();
+  const results = (data.results ?? []).filter((r) => (r.engines ?? [r.engine]).includes(engine)).slice(0, RESULTS)
     .map((r) => ({ title: String(r.title ?? ''), text: String(r.content ?? '').slice(0, 300), url: r.url, engines: r.engines ?? (r.engine ? [r.engine] : []) }));
+  const refused = (data.unresponsive_engines ?? []).find(([name]) => name === engine)?.[1] ?? null;
+  return { results, refused };
 }
 
-// Why no search can be sent now, or null.
-function held() {
-  const now = Date.now();
-  while (sent.length && sent[0] < now - 86_400_000) sent.shift();
-  if (now < coolUntil) return `the search engines asked for a pause (until ${new Date(coolUntil).toISOString().slice(11, 16)} UTC)`;
-  if (sent.filter((t) => t > now - 3_600_000).length >= PER_HOUR) return `${PER_HOUR} searches this hour`;
-  if (sent.length >= PER_DAY) return `${PER_DAY} searches today`;
-  return null;
-}
-
-// { results, cached } or throws "not searched: …".
+// { results, cached, engine } or throws "not searched: …". An engine that refuses is rested
+// and the next one asked (up to 2 engines a query).
 async function search(query) {
   const key = query.replace(/\s+/g, ' ').trim();
   const hit = await one(`SELECT results FROM web_search_cache WHERE query = $1 AND at > now() - make_interval(days => $2)`, [key, KEEP_DAYS]).catch(() => null);
   if (hit) return { results: hit.results, cached: true };
   const job = chain.then(async () => {
-    const why = held();
-    if (why) throw new Error(`not searched: ${why}`);
-    const wait = last + GAP_MS + Math.random() * 5000 - Date.now();
-    if (wait > 0) await pause(wait);
-    last = Date.now();
-    sent.push(last);
-    const results = await searxng(key);
-    if (!results.length) coolUntil = Date.now() + COOL_MS;
-    else await q(`INSERT INTO web_search_cache(query, results) VALUES ($1, $2) ON CONFLICT (query) DO UPDATE SET results = $2, at = now()`, [key, JSON.stringify(results)]).catch(() => {});
-    return { results, cached: false };
+    for (let tries = 0; tries < 2; tries++) {
+      const why = held();
+      if (why) throw new Error(`not searched: ${why}`);
+      const engine = ready()[0];
+      turn++;
+      const wait = last + GAP_MS + Math.random() * 5000 - Date.now();
+      if (wait > 0) await pause(wait);
+      last = Date.now();
+      const u = use.get(engine.name);
+      u.sent.push(last);
+      const { results, refused } = await searxng(key, engine.name).catch((err) => ({ results: [], refused: err.message }));
+      // Nothing at all from a big engine is a sign it is holding us back; a quoted sentence may
+      // simply not be anywhere, so only a refusal rests the engine then.
+      if (refused || (!results.length && !key.startsWith('"'))) u.coolUntil = Date.now() + COOL_MS;
+      if (refused) continue;
+      if (results.length) await q(`INSERT INTO web_search_cache(query, results) VALUES ($1, $2) ON CONFLICT (query) DO UPDATE SET results = $2, at = now()`, [key, JSON.stringify(results)]).catch(() => {});
+      return { results, cached: false, engine: engine.name };
+    }
+    throw new Error('not searched: the engines refused');
   });
   chain = job.catch(() => {});
   return job;

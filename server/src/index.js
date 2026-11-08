@@ -31,6 +31,7 @@ import cameraLogRoutes from './camlog.js';
 import captureRoutes, { startCaptureWorker } from './capture.js';
 import { uploadReceipts } from './receipts.js';
 import whereRoutes from './where.js';
+import { startWebQueue } from './webqueue.js';
 
 const app = Fastify({ logger: true, trustProxy: '127.0.0.1', bodyLimit: 1024 * 1024 });
 
@@ -109,6 +110,7 @@ app.setNotFoundHandler(async (req, reply) => {
 await app.listen({ port: config.port, host: config.host });
 startScanWorker(app.log);
 startCaptureWorker(app.log);
+startWebQueue(app.log);
 startAdminNotifier(app.log);
 startWatchNotifier(app.log);
 startOcrWorker(app.log);
