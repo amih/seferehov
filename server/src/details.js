@@ -3,8 +3,8 @@
 // time someone opens the book, cached on the books row, looked up again after a month.
 //
 // Hebrew books: the National Library (by ISBN; the only source with back covers, for
-// books it photographed), then Simania (by title and author). Others: Open Library,
-// then Amazon for the front cover. Cover pictures are copied to our own uploads.
+// books it photographed), then Open Library. Others: Open Library, then Amazon for the
+// front cover. Cover pictures are copied to our own uploads.
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import sharp from 'sharp';
@@ -69,18 +69,8 @@ async function fromNli(book) {
   return null;
 }
 
-// Simania: no ISBN search, so title + author, and only when its title matches ours.
-async function fromSimania(book) {
-  const title = book.title.split(/[:/]/)[0].trim();
-  const d = await get(`https://simania.co.il/api/search?query=${encodeURIComponent(`${title} ${book.authors?.[0] ?? ''}`.trim())}&page=1`);
-  const want = normTitle(title);
-  const b = (d?.data?.books ?? []).find((x) => {
-    const got = normTitle(x.NAME);
-    return got && want && (got === want || (Math.min(got.length, want.length) >= 4 && (got.includes(want) || want.includes(got))));
-  });
-  if (!b) return null;
-  return { source: 'simania', front_url: Number(b.hasImage) ? b.COVER : null, back_url: null, description: tidy(b.DESCRIPTION) };
-}
+// Simania is not used: its terms (section 5.2) forbid bots and copying without written permission
+// (found on 5 Nov 2026, removed 8 Nov 2026).
 
 const text = (d) => tidy(typeof d === 'string' ? d : d?.value);
 async function fromOpenLibrary(book) {
@@ -122,7 +112,7 @@ async function keep(url, bookId, side) {
 }
 
 async function lookUp(book) {
-  const sources = isHebrew(book) ? [fromNli, fromSimania, fromOpenLibrary] : [fromOpenLibrary, fromAmazon, fromSimania];
+  const sources = isHebrew(book) ? [fromNli, fromOpenLibrary] : [fromOpenLibrary, fromAmazon];
   const found = { front_url: null, back_url: null, description: null, sources: [] };
   for (const src of sources) {
     let r = null;
