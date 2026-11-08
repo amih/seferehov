@@ -644,6 +644,9 @@ export function confidenceOf(item, book) {
   const corrected = ev.some((e) => e.stage === 'correct' && e.outcome === 'corrected');
   const known = (prefix) => ev.some((e) => e.stage === 'correct' && e.source.startsWith(prefix) && ['corrected', 'confirmed'].includes(e.outcome));
   if (book && item.via === 'barcode') return [95, 'barcode'];
+  // Read only from the whole shelf, no cut-out of its own spine: the reading cannot be seen to
+  // match, and such matches went wrong ("The Millionaire Next Door", "3rd Degree", Nov 2026).
+  if (book && item.via === 'vision' && !item.crop) return [45, 'catalogue_whole'];
   if (book && !corrected) return item.verified ? [90, 'catalogue_ocr'] : [85, 'catalogue'];
   if (book) return [75, 'corrected_catalogue'];
   if (known('index:')) return [65, 'index'];

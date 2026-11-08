@@ -109,6 +109,11 @@ Every step is recorded as evidence and gives the item a confidence for the queue
 - A web check that cannot be searched when a scan is read (every engine resting or used up) is queued (`web_jobs`) and run later, one at a time: every 3 minutes by day, every minute at night (00:00–07:00 Israel time). A result updates the item still waiting in the queue (title, author, the catalogue's book, confidence) with its evidence; a check still held is tried again half an hour later, up to 6 times. Items decided meanwhile are left alone.
 - Searching from readers' phones was considered and dropped: browsers cannot read search engines' result pages (no CORS), and spreading searches over phones to get past engines' limits would go against their terms.
 
+### Printed books only, and whole-shelf readings marked unsure (8 Nov 2026)
+
+- A catalogue record of an audiobook or an ebook (publisher "… Audio", Audible, Blackstone; "(Unabridged)", "Kindle edition", EPUB, "ספר קולי", "ספר דיגיטלי") is never matched to a book on a shelf. "The Millionaire Next Door" had been matched to the Simon & Schuster Audio record.
+- A book read only from the whole-shelf photo, with no cut-out of its own spine, gets confidence 45 ("found in a catalogue, but read only from the whole shelf") even when a catalogue knows it, so it is shown among the unsure ones. Such matches ("The Millionaire Next Door", "3rd Degree") were declined.
+
 ## The approval queue
 
 - Every book found, from any photo or barcode, waits in one queue per reader (`/queue`), one book at a time with a big picture: approve, later, or wrong. The title and author can be fixed before approving.

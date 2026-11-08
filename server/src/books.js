@@ -546,10 +546,17 @@ export function otherAuthor(read, c) {
   return Math.max(similarity(read, c.title ?? ''), charSimilarity(read, c.title ?? '')) < 0.5;
 }
 
+// Records of an audiobook or an ebook are not the printed book on the shelf ("The
+// Millionaire Next Door" was matched to Simon & Schuster Audio, Nov 2026).
+const NOT_PRINT_PUBLISHER = /\baudio\b|audible|audiobook|blackstone|brilliance|recorded books|tantor|naxos/i;
+const NOT_PRINT_TITLE = /\((?:audio ?book|unabridged|abridged|audio cd|mp3 cd|kindle edition|ebook|e-book)\)|\b(?:audiobook|kindle edition|epub)\b|ספר (?:קולי|שמע|דיגיטלי|אלקטרוני)|קובץ PDF/i;
+export const notPrint = (c) => NOT_PRINT_PUBLISHER.test(c.publisher ?? '') || NOT_PRINT_TITLE.test(c.title ?? '');
+
 function rankBest(candidates, title, author, verify, veto = author) {
   let best = null, bestScore = 0;
   for (const c of candidates) {
     if (verify && !verify(c)) continue;
+    if (notPrint(c)) continue;
     if (otherAuthor(veto, c)) continue;
     const chars = Math.max(charSimilarity(title, c.title), charSimilarity(title, c.bare));
     // Alternative titles hold the Hebrew of romanized records; a read title found inside
