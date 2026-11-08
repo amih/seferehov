@@ -136,7 +136,7 @@ export async function readCover(front, back = null, extras = { front: [], back: 
   if (!book || reads.some((b) => isHebrew(b.title + b.author))) {
     const ocr = await suryaRead(front).catch(() => null);
     const lines = (ocr?.boxes ?? []).filter((b) => b.confidence >= 0.5 && /\p{L}{2}/u.test(b.text))
-      .map((b) => ({ text: b.text.replace(/\s+/g, ' ').trim(), h: Math.round(b.bbox[3] - b.bbox[1]) }));
+      .map((b) => ({ text: b.text.replace(/\s+/g, ' ').trim(), h: Math.round(b.bbox[3] - b.bbox[1]), bbox: b.bbox }));
     // More frames of the cover: read too, and they vote.
     const others = [];
     for (const x of extras.front) {
@@ -150,8 +150,11 @@ export async function readCover(front, back = null, extras = { front: [], back: 
       await step('frames-vote', { note: 'the OCR lines of each frame of the cover, compared', frames: others.length + 1, before: lines.map((l) => l.text), after: voted.map((l) => l.text) });
       lines.splice(0, lines.length, ...voted);
     }
+    // The biggest lines (the title, the author) read again, close up (after the frames voted).
+    if (lines.length) await rereadBigLines(front, lines).catch(() => null);
     if (lines.length) {
-      text = [...new Set([...lines.map((l) => l.text), ...variants])].join('\n'); // what any frame read counts as printed
+      // What any frame read counts as printed (and the big lines as first read, too).
+      text = [...new Set([...lines.map((l) => l.text), ...lines.map((l) => l.was).filter(Boolean), ...variants])].join('\n');
       // The model picks the title and author among the OCR lines: OCR spelling, model layout.
       [pick] = parseBooks((await generate(await prepare(front, 0), PICK_PROMPT(lines.slice(0, 40)), 160)).trim().split('\n')[0]);
       const known = [...lines.map((l) => l.text), pick?.title, pick?.author].filter(Boolean);
@@ -181,6 +184,51 @@ export async function readCover(front, back = null, extras = { front: [], back: 
   await step('cover-read', { title: book?.title ?? null, author: book?.author ?? null, quality: book?.quality ?? 'low', model: model && { title: model.title, author: model.author }, pick: pick && { title: pick.title, author: pick.author }, alternatives, barcodes: codes.slice(0, fromBarcodes), codes: unique, unchecked });
   return { title: book?.title ?? null, author: book?.author ?? null, quality: book?.quality ?? 'low', isbn: unique[0] ?? null, codes: unique, unchecked,
     alternatives, text: [text, backText].filter(Boolean).join('\n'), frontText: text || null, backText: backText || null };
+}
+
+// The title and author are the biggest print on a cover, and the lines OCR misreads most
+// (stylised display fonts). The 3 biggest lines are cut out, enlarged so a letter is ~60 px
+// tall, and read again by Surya and Tesseract; the three readings vote (alike readings
+// count together), and among the most voted the one with more words hspell knows wins.
+const BIG_LINES = 3;
+export async function rereadBigLines(front, lines) {
+  const page = await sharp(front).rotate().resize(2400, 2400, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 92 }).toBuffer();
+  const { width: W, height: H } = await sharp(page).metadata();
+  const big = [...lines].filter((l) => l.bbox && normTitle(l.text).replace(/ /g, '').length >= 3).sort((a, b) => b.h - a.h).slice(0, BIG_LINES);
+  const changes = [];
+  for (const l of big) {
+    const [x1, y1, x2, y2] = l.bbox;
+    const pad = (y2 - y1) * 0.25;
+    const left = Math.max(0, Math.floor(x1 - pad)), top = Math.max(0, Math.floor(y1 - pad));
+    const width = Math.min(W - left, Math.ceil(x2 - x1 + 2 * pad)), height = Math.min(H - top, Math.ceil(y2 - y1 + 2 * pad));
+    if (width < 8 || height < 8) continue;
+    const k = Math.min(3, Math.max(1, 90 / height));
+    const piece = await sharp(page).extract({ left, top, width, height }).resize(Math.round(width * k), Math.round(height * k)).sharpen().jpeg({ quality: 92 }).toBuffer();
+    const [s1, t1] = await Promise.all([
+      suryaRead(piece).then((r) => (r.boxes ?? []).filter((b) => b.confidence >= 0.5).map((b) => b.text).join(' ').replace(/\s+/g, ' ').trim()).catch(() => ''),
+      tesseractLine(piece).catch(() => ''),
+    ]);
+    const reads = [l.text, s1, t1].filter((x) => normTitle(x).length >= 2);
+    let win = l.text, top2 = -1;
+    for (const r of reads) {
+      const votes = reads.filter((o) => titleSimilarity(o, r) >= 0.8).length;
+      const score = votes * 10 + await knownWords(r, 3);
+      if (score > top2) [win, top2] = [r, score];
+    }
+    changes.push({ line: l.text, surya: s1, tesseract: t1, kept: win });
+    if (win !== l.text) { l.was = l.text; l.text = win; }
+  }
+  await step('big-lines', { note: 'the biggest lines cut out, enlarged and read again by Surya and Tesseract; the readings vote', lines: changes });
+  return lines;
+}
+async function tesseractLine(jpeg) {
+  const { execFile } = await import('node:child_process');
+  const png = await sharp(jpeg).grayscale().png().toBuffer();
+  return new Promise((resolve, reject) => {
+    const p = execFile('tesseract', ['-', '-', '-l', 'heb+eng', '--psm', '7'], { timeout: 30_000, maxBuffer: 1 << 20 },
+      (err, out) => (err ? reject(err) : resolve(out.replace(/\s+/g, ' ').trim())));
+    p.stdin.end(png);
+  });
 }
 
 // Each field the model read is swapped for the OCR line it resembles (or for single OCR

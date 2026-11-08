@@ -220,3 +220,19 @@ If the results clearly name the book this sentence is from, answer one line: TIT
   }
   return { found: null, outcome: tries.length ? 'unknown' : 'no phrase', tries };
 }
+
+// Titles the web names for one author: the parts of the results' titles ("שם הספר – שם
+// הסופר | הוצאה") and quoted names in their snippets. One search (the same throttle).
+export async function authorTitles(name) {
+  if (!config.searchUrl || !name) return { titles: [], verdict: 'off' };
+  const query = `"${name}" ${/[א-ת]/.test(name) ? 'ספר' : 'book'}`;
+  let results = [], verdict = 'searched', cached = false;
+  try { ({ results, cached } = await search(query)); } catch (err) { verdict = err.message; }
+  const titles = new Set();
+  for (const r of results) {
+    for (const part of r.title.split(/\s+[|–—-]\s+|\s*[|:·/]\s*|\s+by\s+/i)) if (part.trim().length >= 3) titles.add(part.trim());
+    for (const m of r.text.matchAll(/[«"“”״]([^«»"“”״]{3,60})[»"“”״]/g)) titles.add(m[1].trim());
+  }
+  await step('author-search', { query, cached, verdict, titles: [...titles].slice(0, 40) });
+  return { titles: [...titles].map((title) => ({ title, author: name, source: 'web' })), verdict };
+}

@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { one, many, q } from './db.js';
 import { normalizeIsbn, normalizeDanacode } from './util.js';
-import { normTitle } from './vision.js';
+import { normTitle, titleSimilarity } from './vision.js';
 import { config } from './config.js';
 
 const UA = 'Seferehov/0.1 (https://seferehov.com)';
@@ -210,6 +210,26 @@ async function nliSearch(cql) {
   return (await nliRecords(cql)).map(bookFromMarc).filter(Boolean);
 }
 
+// Publishers' own sites (scripts/sites.js) list some books with their ISBN that no open
+// catalogue has yet: title, author, the publisher's name and the page.
+async function fromSiteIndex(isbn) {
+  const r = await one(`SELECT t.title, t.author, t.year, t.page, t.ref, s.name AS publisher, s.domain FROM ref_titles t LEFT JOIN ref_sites s ON s.id = t.site_id
+     WHERE t.source = 'site' AND t.isbn = $1 ORDER BY length(t.title) LIMIT 1`, [isbn]);
+  if (!r) return null;
+  // "… – קובץ PDF להורדה", "… – ספר דיגיטלי EPUB": the shop's edition, not the book's title.
+  const title = r.title.replace(/[,–-]\s*(קובץ PDF.*|ספר דיגיטלי.*|ספר אלקטרוני.*|e-?book.*)$/i, '').trim();
+  return { title, authors: r.author ? [r.author] : [], publisher: r.publisher ?? r.domain ?? null, year: r.year ?? null, language: null, cover_url: null,
+    source: 'site', source_ids: { site: r.page ?? r.ref ?? r.domain } };
+}
+
+// The titles of one author: the National Library's records by the name (Hebrew names), for
+// a cover whose author was read well and title badly.
+export async function nliTitlesBy(name) {
+  const recs = (await nliRecords(`alma.creator="${String(name).replace(/["\\]/g, ' ')}"`, 40).catch(() => [])).map(bookFromMarc).filter(Boolean);
+  return recs.filter((r) => r.authors.some((a) => samePersonAny(a, name))).map((r) => ({ title: r.bare || r.title, author: r.authors[0], source: 'nli' }));
+}
+const samePersonAny = (a, b) => (isHebrew(a) === isHebrew(b) ? titleSimilarity(a, b) >= 0.75 : isHebrew(a) ? samePerson(b, a) : samePerson(a, b));
+
 async function fromNli(isbn) {
   const hit = (await nliSearch(`alma.isbn=${isbn}`)).find((b) => !b.isbns.length || b.isbns.includes(isbn));
   if (!hit) return null;
@@ -260,9 +280,9 @@ export async function lookupIsbn(raw, context = 'isbn_lookup') {
     const existing = await one('SELECT * FROM books WHERE isbn13 = $1', [isbn]);
     if (existing) return { book: existing, source: 'cache' };
 
-    const local = ['local_ol', fromLocalIsbn], nli = ['nli', fromNli];
+    const local = ['local_ol', fromLocalIsbn], nli = ['nli', fromNli], site = ['site_index', fromSiteIndex];
     const gb = ['googlebooks', fromGoogleBooks], ol = ['openlibrary', fromOpenLibrary];
-    for (const [name, src] of israeli ? [local, nli, gb, ol] : [local, ol, gb, nli]) {
+    for (const [name, src] of israeli ? [local, nli, site, gb, ol] : [local, ol, gb, nli, site]) {
       let meta = null;
       try { meta = await track(name, () => src(isbn)); } catch { /* next source */ }
       if (meta) return { book: await upsertBook({ ...meta, isbn13: isbn }), source: name };

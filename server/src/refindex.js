@@ -117,3 +117,12 @@ export async function localCheck(title, author) {
     source: match?.source ?? fixedAuthor?.source ?? null, verdict: outcome });
   return { match: match && { ...match, author: match.author ?? fixedAuthor?.name ?? null }, author: fixedAuthor?.name ?? null, authorSource: fixedAuthor?.source ?? null, outcome, candidates: top };
 }
+
+// The titles the index knows by one author (the name 70%+ alike): Wikipedia, Wikidata and
+// the publishers' sites. For a cover whose author was read well and title badly.
+export async function titlesBy(name) {
+  if (!name || letters(name) < 4) return [];
+  const rows = await many(
+    `SELECT title, author, source FROM ref_titles WHERE author_f % heb_fold($1) AND similarity(author_f, heb_fold($1)) >= 0.5 LIMIT 300`, [name]);
+  return rows.filter((r) => titleSimilarity(r.author, name) >= 0.7);
+}

@@ -6,11 +6,11 @@ import sharp from 'sharp';
 import { config } from './config.js';
 import { one, many, q, tx } from './db.js';
 import { requireUser } from './auth.js';
-import { lookupIsbn, lookupTitle, findOrCreateBook } from './books.js';
+import { lookupIsbn, lookupTitle, findOrCreateBook, nliTitlesBy } from './books.js';
 import { readBooks, sharpness, BLURRY, readCover, readCoverText, readIsbnBarcodes, normTitle, titleSimilarity, coverAgrees, authorsAgree } from './vision.js';
 import { pickFrames } from './frames.js';
-import { webCheck, purgeSearchCache, blurbSearch } from './websearch.js';
-import { localCheck, swapIfReversed } from './refindex.js';
+import { webCheck, purgeSearchCache, blurbSearch, authorTitles, wordsKept } from './websearch.js';
+import { localCheck, swapIfReversed, knownAuthor, titlesBy } from './refindex.js';
 import { cropCover } from './covers.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
 import { initialStatus, awardSighting } from './moderation.js';
@@ -476,6 +476,44 @@ async function saveCropThumb(jpeg, scanId, n) {
   return rel;
 }
 
+// Among an author's books, the one whose title is printed on the cover: every word of its main
+// title close to a word read there (look-alike letters count as close); a one-word title must be
+// nearly the same as a word read. The surest wins; two different titles as sure: none.
+export function titleOnCover(candidates, coverText) {
+  const words = normTitle(coverText).split(' ').filter((w) => w.length >= 2);
+  const scored = [];
+  for (const c of candidates) {
+    const main = String(c.title).split(/\s+[:/–-]\s+|\s*:\s*/)[0].trim();
+    const mw = normTitle(main).split(' ').filter(Boolean);
+    if (!mw.length || normTitle(main).replace(/ /g, '').length < 3) continue;
+    const score = mw.length === 1 ? Math.max(0, ...words.map((w) => titleSimilarity(w, mw[0]))) : wordsKept(main, coverText);
+    if (score >= (mw.length === 1 ? 0.8 : 0.75)) scored.push({ ...c, title: main, score, n: mw.length });
+  }
+  scored.sort((a, b) => b.score - a.score || b.n - a.n);
+  const [top, next] = scored;
+  if (!top) return null;
+  if (next && normTitle(next.title) !== normTitle(top.title) && next.score === top.score && next.n === top.n) return null;
+  return top;
+}
+async function titleByAuthor(author, coverText) {
+  const known = await knownAuthor(author).catch(() => null);
+  const name = known?.name ?? author;
+  const seen = new Set();
+  const uniq = (list) => list.filter((c) => { const k = normTitle(c.title); if (seen.has(k)) return false; seen.add(k); return true; });
+  let cands = uniq([...await titlesBy(name).catch(() => []), ...(/[א-ת]/.test(name) ? await nliTitlesBy(name).catch(() => []) : [])]);
+  let pick = titleOnCover(cands, coverText);
+  let verdict = pick ? 'found offline' : 'no offline title fits';
+  if (!pick) {
+    const web = await authorTitles(name);
+    const more = uniq(web.titles);
+    cands = cands.concat(more);
+    pick = titleOnCover(more, coverText);
+    verdict = pick ? 'found on the web' : `none fits (web: ${web.verdict})`;
+  }
+  await step('author-first', { note: "the author's books held against the cover's text", read: author, name, candidates: cands.length, pick, verdict });
+  return { pick: pick && { title: pick.title, author: pick.author ?? name, source: pick.source }, name, count: cands.length, verdict };
+}
+
 // One book's covers: read, looked up (the scanned code first, then the barcode or ISBN
 // read from the covers, then the title), and one queue item with both pictures.
 async function processCover(scan, { dry = false } = {}) {
@@ -563,6 +601,18 @@ async function processCover(scan, { dry = false } = {}) {
     if (w.fixed) {
       [readTitle, readAuthor, fixedBy] = [w.fixed.title, w.fixed.author ?? readAuthor, 'web'];
       await lookFor(readTitle, readAuthor, 'web');
+    }
+  }
+  // The author read well, the title badly ("דוקסן" for "הקמע" by קאזו קיבואישי): the author's
+  // books (local index, the National Library; the web if neither has one that fits) are held
+  // against the cover's text, and the one whose title is printed there is taken.
+  if (!book && !fixedBy && readAuthor && !backOnly) {
+    const A = await titleByAuthor(readAuthor, printed).catch((err) => ({ pick: null, verdict: `error: ${err.message}` }));
+    ev.push({ stage: 'correct', source: A.pick ? `author:${A.pick.source}` : 'author', outcome: A.pick ? 'corrected' : 'unknown', before: [readTitle, readAuthor].filter(Boolean).join(' | '),
+      after: A.pick ? [A.pick.title, A.pick.author].join(' | ') : null, detail: { name: A.name ?? null, candidates: A.count ?? 0, verdict: A.verdict } });
+    if (A.pick) {
+      [readTitle, readAuthor, fixedBy] = [A.pick.title, A.pick.author, 'author'];
+      await lookFor(readTitle, readAuthor, 'author');
     }
   }
   // The back cover's blurb searched word for word (the only way for a back without its front).

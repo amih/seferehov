@@ -93,6 +93,16 @@ It runs at https://seferehov.com. Hebrew is the default (right to left); English
 - **Catalogue lookup**: a local copy of Open Library (38.6 million books, refreshed monthly), then the National Library of Israel, Google Books and Open Library online. Covers and descriptions for book pages come from the National Library of Israel, Simania, Open Library and Amazon.
 - **National Library of Israel and Hebrew author names**: the National Library is read through its catalogue's public SRU interface (Alma, MARC records, no key); its older search API went behind a browser check in November 2026. Names come from the MARC fields marked Hebrew, and only real authors are kept: the main author, and added names marked as authors or named before the ";" of the credit line (translators, editors and illustrators come after it). Hebrew books from Open Library carry library romanization ("Menaḥem Miśgav"); when such a book is saved, the National Library record of the same book gives the names in Hebrew ("מנחם משגב"): found by ISBN, or by the exact title when one of its authors has the same consonants as a romanized name. Failing that, the marks are dropped ("Menahem Misgav"). `server/scripts/nli-hebrew-names.js` fixed the books already saved: of 60 Hebrew books with romanized names (2026-11-06), 37 now have Hebrew names and the rest plain letters.
 
+### Covers: more passes (8 Nov 2026)
+
+Of the first 40 covers, 16 needed editing and 6 were declined. Covers now go through, in order, until a catalogue knows the book:
+1. **Reading**: the vision model and Surya OCR; on Hebrew covers the 3 biggest lines (title, author) are cut out, enlarged and read again by Surya and Tesseract, and the readings vote (hspell breaks ties).
+2. **Codes**: barcodes and printed ISBN/Danacode; an ISBN no catalogue knows is also looked up among the books publishers list on their own sites.
+3. **Corrections like spines**: title/author swap, the local title index, the web check.
+4. **Author first**: the author read well and the title badly: the author's books (local index, National Library, else one web search) held against the cover's text; the one whose title is printed there is taken.
+5. **The blurb**: a sentence of the back cover (or a 7+ word "title", a back photographed alone) searched word for word; pages quoting it name the book.
+Every step is recorded as evidence and gives the item a confidence for the queue. Re-reading the 20 covers readers had fixed or declined: 15 came out right with no edit (2 more were stopped only by the search engines' pause). Searching a Danacode on the web finds nothing and is not used. `scripts/cover-test.js [scan…]` re-reads saved covers without saving.
+
 ## The approval queue
 
 - Every book found, from any photo or barcode, waits in one queue per reader (`/queue`), one book at a time with a big picture: approve, later, or wrong. The title and author can be fixed before approving.
