@@ -294,16 +294,25 @@ export async function coverCorners(buffer) {
 export async function generate(jpeg, prompt, numPredict) {
   const images = Array.isArray(jpeg) ? jpeg : [jpeg];
   const t0 = Date.now();
-  const res = await fetch(`${config.vision.url}/api/generate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: config.vision.model, prompt, images: images.map((b) => b.toString('base64')), stream: false, think: false,
-      keep_alive: '3m', options: { num_ctx: 8192, num_predict: numPredict, temperature: 0, repeat_penalty: 1.1 },
-    }),
-    signal: AbortSignal.timeout(120_000),
-  });
-  if (!res.ok) throw new Error(`vision ${res.status}`);
+  // Ollama answers 500 when the GPU ran out of memory (another job loaded a model at the same
+  // moment: a 37-photo session failed so on 8 Nov 2026); it then frees the memory, so the same
+  // request is tried again a little later.
+  let res;
+  for (const wait of [0, 10_000, 30_000, 90_000]) {
+    if (wait) { await step('model-retry', { status: res?.status ?? null, wait_ms: wait }); await new Promise((r) => setTimeout(r, wait)); }
+    res = await fetch(`${config.vision.url}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: config.vision.model, prompt, images: images.map((b) => b.toString('base64')), stream: false, think: false,
+        keep_alive: '3m', options: { num_ctx: 8192, num_predict: numPredict, temperature: 0, repeat_penalty: 1.1 },
+      }),
+      signal: AbortSignal.timeout(120_000),
+    }).catch((err) => ({ ok: false, status: 0, err }));
+    // Retried: a 5xx or a refused connection (Ollama restarting); not a time-out.
+    if (res.ok || (res.status > 0 && res.status < 500) || res.err?.name === 'TimeoutError') break;
+  }
+  if (!res.ok) throw res.err ?? new Error(`vision ${res.status}`);
   const answer = (await res.json()).response ?? '';
   await step('model', { model: config.vision.model, prompt, answer, ms: Date.now() - t0 },
     Object.fromEntries(images.map((b, i) => [i ? `image${i + 1}` : 'image', b])), { side: 1000 });
