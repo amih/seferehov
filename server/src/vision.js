@@ -414,7 +414,7 @@ export async function locateSpine(buffer, title) {
   // The model's box often takes in the thin spines beside this one: narrowed to the band
   // where OCR finds its title (as when reading). Unconfirmed: the box as located.
   const pad = Math.min(box[2] - box[0], box[3] - box[1]) * 0.06 + 6;
-  const read = await readCrop(await cut(upright, W, H, box, pad), box[2] - box[0], box[3] - box[1], title).catch(() => null);
+  const read = await readCrop(await cut(upright, W, H, box, pad), box[2] - box[0], box[3] - box[1], title, { ownLines: false }).catch(() => null);
   const one = Array.isArray(read) ? null : read;
   const sure = !!one?.verified && !!one.across;
   return { ...spotOf({ tilt: 0, box: sure ? narrowed(box, cutArea(W, H, box, pad), one.across) : box }, W, H), how: sure ? 'located' : 'located-rough' };
@@ -536,7 +536,7 @@ const UPRIGHT_MARGIN = 0.2;
 // (verified: null). title: the book we are looking for (findSpine), read by the
 // vision model elsewhere.
 const ORIENT_OK = 0.5;
-export async function readCrop(img, w, h, title = null, { split = false } = {}) {
+export async function readCrop(img, w, h, title = null, { split = false, ownLines = true } = {}) {
   const spine = h > w * 1.3;
   const angles = spine ? [270, 90] : [0, 180];
   const tries = await Promise.all(angles.map(async (angle) => {
@@ -615,10 +615,13 @@ export async function readCrop(img, w, h, title = null, { split = false } = {}) 
   // Looking for a title (findSpine) that was misread: the band is cut around the lines of what
   // the model read on this cut-out, which is the reading kept.
   let lines = best.lines;
-  if (title && best.read) {
+  // (ownLines false: the band of the title looked for, to locate that book.)
+  if (title && best.read && ownLines) {
     const own = best.ocr.boxes.filter((b) => b.confidence >= 0.5)
       .map((b) => ({ ...b, score: Math.max(overlap(best.read.title, b.text), 0.8 * overlap(best.read.author, b.text)) }));
     if (own.some((b) => b.score >= 0.4)) lines = own;
+  } else if (title && !ownLines) {
+    lines = best.ocr.boxes.filter((b) => b.confidence >= 0.5).map((b) => ({ ...b, score: overlap(title, b.text) }));
   }
   let crop = best.jpeg, cutInfo = null;
   // A book lying flat shows its spine as a long level strip: cut and straightened the same way.
