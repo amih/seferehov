@@ -537,8 +537,10 @@ async function processCover(scan, { dry = false } = {}) {
   let readTitle = read.title, readAuthor = read.author, fixedBy = null;
   const heldSteps = []; let blurbHeld = null; // searches the engines could not take now: queued
   const authorOnly = (c) => authorsAgree(c.authors, [readAuthor, ...names]);
-  const lookFor = async (t, a, how) => {
-    const r = await lookupTitle(t, a, dry ? 'trace' : 'scan', authorOnly).catch(() => ({}));
+  // byAuthor: found through the author, so the record must name an author, and the same one.
+  const lookFor = async (t, a, how, byAuthor = false) => {
+    const verify = byAuthor ? (c) => c.authors?.length > 0 && authorOnly(c) : authorOnly;
+    const r = await lookupTitle(t, a, dry ? 'trace' : 'scan', verify).catch(() => ({}));
     ev.push({ stage: 'verify', source: how, outcome: r.book ? 'match' : 'no_match', before: [t, a].filter(Boolean).join(' | '), after: r.book?.title ?? null, detail: { book_id: r.book?.id ?? null } });
     if (r.book) { book = r.book; lookupId = r.lookupId ?? lookupId; }
   };
@@ -572,19 +574,19 @@ async function processCover(scan, { dry = false } = {}) {
   // The author read well, the title badly ("דוקסן" for "הקמע" by קאזו קיבואישי): the author's
   // books (local index, the National Library; the web if neither has one that fits) are held
   // against the cover's text, and the one whose title is printed there is taken.
-  if (!book && !fixedBy && readAuthor && !backOnly) {
-    const A = await titleByAuthor(readAuthor, printed).catch((err) => ({ pick: null, verdict: `error: ${err.message}` }));
+  const frontPrinted = [read.title, read.author, ...read.alternatives.flatMap((a) => [a.title, a.author]), read.frontText].filter(Boolean).join('\n');
+  const sentence = (read.title ?? '').split(/\s+/).length >= 7; // a back cover's blurb read as the title
+  if (!book && !fixedBy && readAuthor && !backOnly && !sentence) {
+    const A = await titleByAuthor(readAuthor, frontPrinted).catch((err) => ({ pick: null, verdict: `error: ${err.message}` }));
     if (A.held) heldSteps.push('author');
     ev.push({ stage: 'correct', source: A.pick ? `author:${A.pick.source}` : 'author', outcome: A.pick ? 'corrected' : A.held ? 'held' : 'unknown', before: [readTitle, readAuthor].filter(Boolean).join(' | '),
       after: A.pick ? [A.pick.title, A.pick.author].join(' | ') : null, detail: { name: A.name ?? null, candidates: A.count ?? 0, verdict: A.verdict } });
     if (A.pick) {
       [readTitle, readAuthor, fixedBy] = [A.pick.title, A.pick.author, 'author'];
-      await lookFor(readTitle, readAuthor, 'author');
+      await lookFor(readTitle, readAuthor, 'author', true);
     }
   }
   // The back cover's blurb searched word for word (the only way for a back without its front).
-  // A "title" of 7+ words is a sentence: the photo was of a back cover (the blurb's opening line).
-  const sentence = (read.title ?? '').split(/\s+/).length >= 7;
   if (!book && !fixedBy && (back || sentence)) {
     const blurb = (back && !backOnly ? read.backText : null) ?? (backOnly || sentence ? read.frontText ?? read.text : null)
       ?? (back ? await scope('back-ocr', () => readCoverText(back)).then((x) => x.text).catch(() => null) : null);
@@ -616,7 +618,7 @@ async function processCover(scan, { dry = false } = {}) {
       [item.id, e.stage, e.source, e.outcome, e.before ?? null, e.after ?? null, JSON.stringify(e.detail ?? {})]).catch(() => {});
   }
   if (!book && heldSteps.length) {
-    await enqueueWeb(item.id, 'cover', heldSteps, { title: read.title, author: read.author, text: printed.slice(0, 4000), blurb: blurbHeld?.slice(0, 4000) ?? null })
+    await enqueueWeb(item.id, 'cover', heldSteps, { title: read.title, author: read.author, text: frontPrinted.slice(0, 4000), blurb: blurbHeld?.slice(0, 4000) ?? null })
       .catch((err) => log.warn({ err }, 'web queue'));
   }
 }

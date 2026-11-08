@@ -73,7 +73,9 @@ async function run(job) {
   let book = null;
   if (fixed) {
     // A cover's record must at least be by the author read (as when the scan was read).
-    const verify = job.kind === 'cover' && how !== 'blurb' ? (c) => authorsAgree(c.authors, [p.author, fixed.author]) : null;
+    const verify = job.kind !== 'cover' || how === 'blurb' ? null
+      : how === 'author' ? (c) => c.authors?.length > 0 && authorsAgree(c.authors, [p.author, fixed.author])
+        : (c) => authorsAgree(c.authors, [p.author, fixed.author]);
     const r = await lookupTitle(fixed.title, fixed.author, 'webqueue', verify).catch(() => ({}));
     book = r.book ?? null;
     ev.push({ stage: 'verify', source: how, outcome: book ? 'match' : 'no_match', before: fixed.title, after: book?.title ?? null, detail: { queued: true, book_id: book?.id ?? null } });

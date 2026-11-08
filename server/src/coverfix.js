@@ -10,13 +10,23 @@ import { step } from './trace.js';
 // title close to a word read there (look-alike letters count as close); a one-word title must be
 // nearly the same as a word read. The surest wins; two different titles as sure: none.
 export function titleOnCover(candidates, coverText) {
-  const words = normTitle(coverText).split(' ').filter((w) => w.length >= 2);
+  // Lines of the cover, and each line joined with the next (a title over two lines).
+  const raw = String(coverText ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const lines = [...raw, ...raw.slice(1).map((l, k) => `${raw[k]} ${l}`)];
   const scored = [];
   for (const c of candidates) {
     const main = String(c.title).split(/\s+[:/–-]\s+|\s*:\s*/)[0].trim();
     const mw = normTitle(main).split(' ').filter(Boolean);
     if (!mw.length || normTitle(main).replace(/ /g, '').length < 3) continue;
-    const score = mw.length === 1 ? Math.max(0, ...words.map((w) => titleSimilarity(w, mw[0]))) : wordsKept(main, coverText);
+    // The title must be one line of the cover (its words there, and that line mostly its
+    // words): three common words found somewhere in a long blurb ("איש צדיק היה") are not a title.
+    let score = 0;
+    for (const line of lines) {
+      const lw = normTitle(line).split(' ').filter(Boolean);
+      if (!lw.length || lw.length > mw.length * 2 + 2) continue;
+      const s1 = mw.length === 1 ? Math.max(0, ...lw.map((w) => titleSimilarity(w, mw[0]))) : wordsKept(main, line);
+      if (s1 > score && wordsKept(line, main) >= 0.5) score = s1;
+    }
     if (score >= (mw.length === 1 ? 0.8 : 0.75)) scored.push({ ...c, title: main, score, n: mw.length });
   }
   scored.sort((a, b) => b.score - a.score || b.n - a.n);
