@@ -2,13 +2,15 @@
 // Library, else one web search), the one whose title is printed on the cover.
 import { knownAuthor, titlesBy } from './refindex.js';
 import { nliTitlesBy } from './books.js';
-import { authorTitles, wordsKept } from './websearch.js';
+import { authorTitles } from './websearch.js';
 import { normTitle, titleSimilarity } from './vision.js';
 import { step } from './trace.js';
 
 // Among an author's books, the one whose title is printed on the cover: every word of its main
 // title close to a word read there (look-alike letters count as close); a one-word title must be
 // nearly the same as a word read. The surest wins; two different titles as sure: none.
+// Share of the words in `a` with a word in `b` at least 80% alike (a misread letter or two).
+const kept = (a, b) => a.filter((w) => b.some((x) => titleSimilarity(w, x) >= 0.8)).length / a.length;
 export function titleOnCover(candidates, coverText) {
   // Lines of the cover, and each line joined with the next (a title over two lines).
   const raw = String(coverText ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
@@ -23,9 +25,9 @@ export function titleOnCover(candidates, coverText) {
     let score = 0;
     for (const line of lines) {
       const lw = normTitle(line).split(' ').filter(Boolean);
-      if (!lw.length || lw.length > mw.length * 2 + 2) continue;
-      const s1 = mw.length === 1 ? Math.max(0, ...lw.map((w) => titleSimilarity(w, mw[0]))) : wordsKept(main, line);
-      if (s1 > score && wordsKept(line, main) >= 0.5) score = s1;
+      if (!lw.length || lw.length > mw.length + 2) continue;
+      const s1 = mw.length === 1 ? Math.max(0, ...lw.map((w) => titleSimilarity(w, mw[0]))) : kept(mw, lw);
+      if (s1 > score && kept(lw, mw) >= 0.6) score = s1;
     }
     if (score >= (mw.length === 1 ? 0.8 : 0.75)) scored.push({ ...c, title: main, score, n: mw.length });
   }
