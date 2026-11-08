@@ -566,8 +566,11 @@ async function processCover(scan, { dry = false } = {}) {
     }
   }
   // The back cover's blurb searched word for word (the only way for a back without its front).
-  if (!book && !fixedBy && back) {
-    const blurb = read.backText ?? (backOnly ? read.frontText : null) ?? await scope('back-ocr', () => readCoverText(back)).then((x) => x.text).catch(() => null);
+  // A "title" of 7+ words is a sentence: the photo was of a back cover (the blurb's opening line).
+  const sentence = (read.title ?? '').split(/\s+/).length >= 7;
+  if (!book && !fixedBy && (back || sentence)) {
+    const blurb = (back && !backOnly ? read.backText : null) ?? (backOnly || sentence ? read.frontText ?? read.text : null)
+      ?? (back ? await scope('back-ocr', () => readCoverText(back)).then((x) => x.text).catch(() => null) : null);
     const B = await blurbSearch(blurb).catch((err) => ({ found: null, outcome: `error: ${err.message}`, tries: [] }));
     ev.push({ stage: 'correct', source: 'blurb', outcome: B.outcome, before: readTitle ?? null, after: B.found ? [B.found.title, B.found.author].filter(Boolean).join(' | ') : null, detail: { tries: B.tries } });
     if (B.found) {
