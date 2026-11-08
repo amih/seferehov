@@ -3,8 +3,7 @@
 // time someone opens the book, cached on the books row, looked up again after a month.
 //
 // Hebrew books: the National Library (by ISBN; the only source with back covers, for
-// books it photographed), then Open Library. Others: Open Library, then Amazon for the
-// front cover. Cover pictures are copied to our own uploads.
+// books it photographed), then Open Library. Others: Open Library only. Cover pictures are copied to our own uploads.
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import sharp from 'sharp';
@@ -14,7 +13,7 @@ import { normTitle } from './vision.js';
 import { normalizeDanacode } from './util.js';
 import { nliRecords, marcFields } from './books.js';
 
-const UA = 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Mobile Safari/537.36 Seferehov/0.1 (+https://seferehov.com)';
+const UA = 'SeferehovBot/0.1 (+https://seferehov.com/bot)';
 const REFRESH_DAYS = 30;
 const inFlight = new Map();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -88,12 +87,6 @@ async function fromOpenLibrary(book) {
   };
 }
 
-// Amazon's image server, front cover only; a miss is a 1×1 GIF.
-async function fromAmazon(book) {
-  const i10 = isbn10(book.isbn13);
-  return i10 ? { source: 'amazon', front_url: `https://images-na.ssl-images-amazon.com/images/P/${i10}.01._SCLZZZZZZZ_.jpg`, back_url: null, description: null } : null;
-}
-
 const isHebrew = (book) => book.isbn13?.startsWith('978965') || /[֐-׿]/.test(book.title);
 
 // Copies a cover to our uploads (no hotlinking; resized). Null when it is not a real picture.
@@ -112,7 +105,7 @@ async function keep(url, bookId, side) {
 }
 
 async function lookUp(book) {
-  const sources = isHebrew(book) ? [fromNli, fromOpenLibrary] : [fromOpenLibrary, fromAmazon];
+  const sources = isHebrew(book) ? [fromNli, fromOpenLibrary] : [fromOpenLibrary];
   const found = { front_url: null, back_url: null, description: null, sources: [] };
   for (const src of sources) {
     let r = null;
