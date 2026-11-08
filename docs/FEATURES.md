@@ -213,7 +213,7 @@ Everything runs on one home server:
 | Disks | 1.8 TB NVMe (1.5 TB free) for the app; a separate hard disk for the nightly backup |
 | Software | Node 22 + Fastify API, PostgreSQL 16 + PostGIS (Docker), nginx, Ollama (vision model on the GPU), Surya OCR (on the CPU), hspell |
 
-The same server also runs other services. The GPU is shared with other occasional jobs.
+The same server also runs other services. The GPU is shared with other occasional jobs through [gpu-queue](https://github.com/amih/gpu-queue) (since 8 Nov 2026): every program that uses the card waits its turn there, and the card is emptied before it passes from one program to another. Seferehov's photo reading and cover sharpening run at normal priority: a page where someone is waiting goes first, and bulk background work goes after. A photo may wait a few minutes while another program uses the card, so the reading time-out is 10 minutes (`VISION_TIMEOUT_MS`).
 
 # Capacity: how many scans the GPU can handle
 

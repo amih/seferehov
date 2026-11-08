@@ -15,8 +15,11 @@ import { one, q } from './db.js';
 function realesrgan(input, output) {
   return new Promise((resolve, reject) => {
     const bin = config.enhanceBin;
-    const p = spawn(bin, ['-i', input, '-o', output, '-n', 'realesrgan-x4plus', '-m', join(dirname(bin), 'models'), '-f', 'png'],
-      { stdio: 'ignore', timeout: 300_000 });
+    const args = ['-i', input, '-o', output, '-n', 'realesrgan-x4plus', '-m', join(dirname(bin), 'models'), '-f', 'png'];
+    const lease = config.enhanceLease;
+    const p = lease
+      ? spawn(lease, ['-c', 'seferehov-enhance', '--', bin, ...args], { stdio: 'ignore', timeout: 900_000 })
+      : spawn(bin, args, { stdio: 'ignore', timeout: 300_000 });
     p.on('error', reject);
     p.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`realesrgan exit ${code}`))));
   });

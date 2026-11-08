@@ -21,6 +21,8 @@ export const config = {
   vision: {
     url: (env.OLLAMA_URL || 'http://127.0.0.1:11434').replace(/\/$/, ''),
     model: env.VISION_MODEL || 'qwen3-vl:8b-instruct',
+    // Includes any wait in a GPU queue in front of Ollama (OLLAMA_URL may point at one).
+    timeoutMs: Number(env.VISION_TIMEOUT_MS || 120_000),
   },
   // SearXNG (docker-compose service "search"): a spine misread by the OCR is looked up
   // on the web, and the spelling the web gives is kept. Empty = no web check.
@@ -30,6 +32,8 @@ export const config = {
   // Real-ESRGAN (realesrgan-ncnn-vulkan, its models/ beside it) sharpens cover photos
   // for showing. Unset = covers are shown as taken.
   enhanceBin: env.ENHANCE_BIN || '',
+  // Optional: run it through gpu-lease (github.com/amih/gpu-queue) so it waits its turn on the GPU.
+  enhanceLease: env.ENHANCE_LEASE || '',
   // Checks public texts for door codes, phone numbers etc. Same model = no GPU swap.
   privacyModel: env.PRIVACY_MODEL || env.VISION_MODEL || 'qwen3-vl:8b-instruct',
   google: {

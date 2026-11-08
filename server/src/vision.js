@@ -355,7 +355,7 @@ export async function generate(jpeg, prompt, numPredict) {
         model: config.vision.model, prompt, images: images.map((b) => b.toString('base64')), stream: false, think: false,
         keep_alive: '3m', options: { num_ctx: 8192, num_predict: numPredict, temperature: 0, repeat_penalty: 1.1 },
       }),
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(config.vision.timeoutMs),
     }).catch((err) => ({ ok: false, status: 0, err }));
     // Retried: a 5xx or a refused connection (Ollama restarting); not a time-out.
     if (res.ok || (res.status > 0 && res.status < 500) || res.err?.name === 'TimeoutError') break;
@@ -1042,7 +1042,7 @@ export async function dominantTilt(image) {
 // models tend to repeat one line until the token limit).
 async function readOnce(jpeg) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 120_000);
+  const timer = setTimeout(() => ctrl.abort(), config.vision.timeoutMs);
   const res = await fetch(`${config.vision.url}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
