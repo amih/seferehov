@@ -353,8 +353,22 @@ export async function hebrewAuthors(b) {
   return (await hebrewTitleAuthors(b)).authors;
 }
 
+// Names in a record's author list that are not the book's authors:
+//   - organisations (a theatre, a council, a museum: "Teatron ha-Kameri shel Tel-Aviv", "Habimah");
+//   - in a Hebrew book whose record names someone in Hebrew, the names in Latin letters next
+//     to them: Library of Congress style records add adapters, translators and producers that
+//     way ("אשה בורחת מבשורה": דויד גרוסמן, Hanan Senir, Teatron ha-Kameri…, 8 Nov 2026).
+// Never leaves the list empty.
+const ORG = /\b(teatron|theat(er|re)|habimah|universit\w*|institut\w*|muzeon|museum|press|publish\w*|society|association|council|ministry|library|lishkat|mahleket|ltd|inc|company|foundation|kibbutz|irgun|agudat|hotsaat|\(israel\))(?=\W|$)|תיאטרון|הבימה|אוניברסיט|מוזיאון|לשכת|מחלקת|מכון|עמותת|הוצאת|קיבוץ|ארגון|אגודת|מועצ[הת]|משרד ה/i;
+export function bookAuthors(title, authors) {
+  let out = (authors ?? []).filter((a) => !ORG.test(a));
+  if (isHebrew(title ?? '') && out.some(isHebrew)) out = out.filter(isHebrew);
+  return out.length ? out : authors ?? [];
+}
+
 export async function upsertBook(b) {
   b = { ...b, ...(await hebrewTitleAuthors(b)) };
+  b.authors = bookAuthors(b.title, b.authors);
   if (b.danacode && !b.isbn13) {
     const known = await one('SELECT * FROM books WHERE danacode = $1', [b.danacode]);
     if (known) return known;
