@@ -54,15 +54,13 @@ export default async function whereRoutes(app) {
     const rows = await many(SEEN_SQL, [Number(req.params.id) || 0, user?.id ?? 0]);
     const out = [];
     for (const r of rows) {
-      const sibs = r.spot ? (await many(SIBLINGS_SQL, [r.scan_id, r.frame_path, r.id])).filter((x) => x.spot?.poly) : [];
+      const sibs = r.spot?.poly ? (await many(SIBLINGS_SQL, [r.scan_id, r.frame_path, r.id])).filter((x) => x.spot?.poly).map((x) => ({ title: x.title, poly: x.spot.poly })) : [];
       out.push({
         item: r.id, scan: r.scan_id, at: r.created_at, mine: !!user && r.user_id === user.id,
         photo: `/uploads/${r.frame_path}`, crop: r.crop_path ? `/uploads/${r.crop_path}` : null,
         poly: r.spot?.poly ?? null, label: r.label ?? null,
         location: r.location_id && !r.owner ? { name: r.location_name, code: r.location_code } : null,
         neighbours: r.spot?.poly ? neighboursOf(r.spot, sibs) : null,
-        // Everything else on the photo, outlined faintly.
-        others: sibs.map((x) => ({ poly: x.spot.poly, title: x.title })),
       });
     }
     return { seen: out };
