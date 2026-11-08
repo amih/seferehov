@@ -28,11 +28,16 @@ const mainTitle = (t) => t.split(/\s+[:/–-]\s+|\s*:\s*/)[0].trim();
 
 // Share of the author's name words (3+ letters) that are on the spine, at least 80% alike:
 // names are compared more strictly than titles ("פישר" is not "שיר").
+// The surname (last word) must be there: "רועי חן" is not "רועי יזביכין" (8 Nov 2026).
 function authorKept(name, read) {
   const have = normTitle(read).split(' ').filter(Boolean);
-  const want = normTitle(name).split(' ').filter((w) => w.length >= 3);
+  const near = (w) => have.some((h) => titleSimilarity(w, h) >= 0.8);
+  const all = normTitle(name).split(' ').filter(Boolean);
+  const surname = all.at(-1);
+  if (surname && surname.length >= 2 && all.length > 1 && !near(surname)) return 0;
+  const want = all.filter((w) => w.length >= 3);
   if (!want.length) return 0;
-  return want.filter((w) => have.some((h) => titleSimilarity(w, h) >= 0.8)).length / want.length;
+  return want.filter(near).length / want.length;
 }
 
 async function candidates(queries) {

@@ -10,6 +10,7 @@ import { config } from './config.js';
 import { normTitle, titleSimilarity } from './vision.js';
 import { step } from './trace.js';
 import { one, q } from './db.js';
+import { unknownWords, plainWord } from './hebfix.js';
 
 const RESULTS = 8;
 const WORD_NEAR = 0.6; // a corrected word must be this alike to some word read on the spine
@@ -158,4 +159,64 @@ export async function webCheck(title, author) {
     }
   }
   return { fixed: null, outcome: 'unknown', tries };
+}
+
+// The back cover's blurb, searched word for word: pages that quote it (bookshops, Goodreads,
+// publishers) name the book in their titles. Only the search results are read, no site.
+// Measured on 8 Nov 2026: a back photographed without its front ("נכנסתי לחדר המלון בקומה
+// העשירית משוכנעת") gave "זה לא שאני לא אוהבת" by אורית הראל at once.
+// Phrases: runs of 6–8 words in one sentence that hspell knows (Hebrew) or that are plain
+// words (Latin), so an OCR slip does not break the exact match; at most 2 searched.
+const PHRASE = [6, 8];
+export async function phrasesOf(text) {
+  const sentences = String(text ?? '').split(/[.!?;\n"״”“]+/).map((x) => x.trim()).filter(Boolean);
+  const clean = (w) => w.replace(/^[(\[«'"]+|[)\]»,:'"]+$/g, '');
+  const all = sentences.flatMap((x) => x.split(/\s+/)).map(clean);
+  const bad = await unknownWords(all.filter((w) => /[\u0590-\u05FF]/.test(w)));
+  const good = (w) => (/[\u0590-\u05FF]/.test(w) ? !bad.has(plainWord(w)) && plainWord(w).length >= 2 : /^[A-Za-z'’-]{2,}$/.test(w));
+  const runs = [];
+  for (const sentence of sentences) {
+    const words = sentence.split(/\s+/).map(clean);
+    let best = [];
+    for (let i = 0, run = []; i <= words.length; i++) {
+      if (i < words.length && words[i] && good(words[i])) { run.push(words[i]); continue; }
+      if (run.length > best.length) best = run;
+      run = [];
+    }
+    if (best.length >= PHRASE[0]) runs.push(best.slice(0, PHRASE[1]).join(' '));
+  }
+  // Longer first; one per sentence.
+  return [...new Set(runs)].sort((a, b) => b.length - a.length).slice(0, 2);
+}
+
+// { found: { title, author } | null, outcome, tries }
+export async function blurbSearch(text) {
+  const tries = [];
+  if (!config.searchUrl) return { found: null, outcome: 'off', tries };
+  for (const phrase of await phrasesOf(text)) {
+    const query = `"${phrase}"`;
+    let results = [], verdict, found = null, answer = null, cached = false;
+    try { ({ results, cached } = await search(query)); } catch (err) { verdict = err.message; }
+    if (!verdict && !results.length) verdict = 'no results';
+    if (!verdict) {
+      const listing = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.text}`).join('\n');
+      answer = await ask(`These web search results were found by searching for a sentence from a book's back cover: "${phrase}".
+${listing}
+
+If the results clearly name the book this sentence is from, answer one line: TITLE | AUTHOR, spelled exactly as in the results, in the original language. If they do not, answer NONE.`).catch(() => 'NONE');
+      const line = answer.split('\n')[0].replace(/^["'*\s]+|["'*\s]+$/g, '');
+      const [t, a] = line.split('|').map((x) => x?.trim().replace(/^["']|["']$/g, ''));
+      // Kept when written in the results, by at least two of them or by one that quotes the phrase.
+      const naming = t && !/^none\b/i.test(t) ? results.filter((r) => normTitle(`${r.title} ${r.text}`).includes(normTitle(t))) : [];
+      const quoting = naming.filter((r) => wordsKept(phrase, r.text) >= 0.6);
+      if (!naming.length) verdict = t && !/^none\b/i.test(t) ? 'dropped: the answer is not written in the results' : 'the results do not name a book';
+      else if (naming.length < 2 && !quoting.length) verdict = 'dropped: one result names it and does not quote the sentence';
+      else { found = { title: t, author: a && !/^(unknown|none|-)$/i.test(a) ? a : null }; verdict = 'found'; }
+    }
+    await step('blurb-search', { query, results: results.map((x) => ({ title: x.title, text: x.text.slice(0, 160), url: x.url })), answer, found, cached, verdict });
+    tries.push({ query, verdict, cached });
+    if (found) return { found, outcome: 'found', tries };
+    if (String(verdict).startsWith('not searched')) return { found: null, outcome: 'held', tries };
+  }
+  return { found: null, outcome: tries.length ? 'unknown' : 'no phrase', tries };
 }

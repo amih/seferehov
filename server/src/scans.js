@@ -7,9 +7,9 @@ import { config } from './config.js';
 import { one, many, q, tx } from './db.js';
 import { requireUser } from './auth.js';
 import { lookupIsbn, lookupTitle, findOrCreateBook } from './books.js';
-import { readBooks, sharpness, BLURRY, readCover, readIsbnBarcodes, normTitle, titleSimilarity, coverAgrees, authorsAgree } from './vision.js';
+import { readBooks, sharpness, BLURRY, readCover, readCoverText, readIsbnBarcodes, normTitle, titleSimilarity, coverAgrees, authorsAgree } from './vision.js';
 import { pickFrames } from './frames.js';
-import { webCheck, purgeSearchCache } from './websearch.js';
+import { webCheck, purgeSearchCache, blurbSearch } from './websearch.js';
 import { localCheck, swapIfReversed } from './refindex.js';
 import { cropCover } from './covers.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
@@ -527,17 +527,73 @@ async function processCover(scan, { dry = false } = {}) {
     book = r.book && verify(r.book) ? r.book : null;
     lookupId = r.lookupId ?? lookupId;
   }
+  // Still nothing: what corrects spines corrects covers too (8 Nov 2026: of the 40 covers so
+  // far 16 needed editing and 6 were declined; these steps fixed 6 of the 13 they could check).
+  // A record found this way need not agree with the misread cover text, only with its author.
+  const ev = [{ stage: 'read', source: 'vision+ocr', outcome: 'as_read', after: read.title ?? null, detail: { author: read.author ?? null, codes: read.codes ?? [], quality: read.quality } }];
+  if (book) ev.push({ stage: 'verify', source: 'catalogue', outcome: 'match', before: read.title ?? null, after: book.title, detail: { book_id: book.id } });
+  let readTitle = read.title, readAuthor = read.author, fixedBy = null;
+  const authorOnly = (c) => authorsAgree(c.authors, [readAuthor, ...names]);
+  const lookFor = async (t, a, how) => {
+    const r = await lookupTitle(t, a, dry ? 'trace' : 'scan', authorOnly).catch(() => ({}));
+    ev.push({ stage: 'verify', source: how, outcome: r.book ? 'match' : 'no_match', before: [t, a].filter(Boolean).join(' | '), after: r.book?.title ?? null, detail: { book_id: r.book?.id ?? null } });
+    if (r.book) { book = r.book; lookupId = r.lookupId ?? lookupId; }
+  };
+  if (!book && readTitle && !backOnly) {
+    const sw = await swapIfReversed(readTitle, readAuthor).catch(() => null);
+    if (sw) {
+      ev.push({ stage: 'correct', source: 'swap', outcome: 'corrected', before: `${readTitle} | ${readAuthor}`, after: `${sw.title} | ${sw.author}`, detail: { name: sw.name } });
+      [readTitle, readAuthor] = [sw.title, sw.author];
+      await lookFor(readTitle, readAuthor, 'swap');
+    }
+  }
+  if (!book && readTitle && !backOnly) {
+    const L = await localCheck(readTitle, readAuthor).catch(() => ({ match: null, outcome: 'error' }));
+    ev.push({ stage: 'correct', source: L.match?.source ? `index:${L.match.source}` : 'index', outcome: L.outcome, before: [readTitle, readAuthor].filter(Boolean).join(' | '),
+      after: L.match ? [L.match.title, L.match.author].filter(Boolean).join(' | ') : null });
+    if (L.match) {
+      [readTitle, readAuthor, fixedBy] = [L.match.title, L.match.author ?? readAuthor, 'index'];
+      await lookFor(readTitle, readAuthor, 'index');
+    }
+  }
+  if (!book && readTitle && !backOnly && fixedBy !== 'index') {
+    const w = await webCheck(readTitle, readAuthor).catch((err) => ({ fixed: null, outcome: `error: ${err.message}`, tries: [] }));
+    ev.push({ stage: 'correct', source: 'web', outcome: w.outcome, before: [readTitle, readAuthor].filter(Boolean).join(' | '),
+      after: w.fixed ? [w.fixed.title, w.fixed.author].filter(Boolean).join(' | ') : null, detail: { tries: w.tries } });
+    if (w.fixed) {
+      [readTitle, readAuthor, fixedBy] = [w.fixed.title, w.fixed.author ?? readAuthor, 'web'];
+      await lookFor(readTitle, readAuthor, 'web');
+    }
+  }
+  // The back cover's blurb searched word for word (the only way for a back without its front).
+  if (!book && !fixedBy && back) {
+    const blurb = read.backText ?? (backOnly ? read.frontText : null) ?? await scope('back-ocr', () => readCoverText(back)).then((x) => x.text).catch(() => null);
+    const B = await blurbSearch(blurb).catch((err) => ({ found: null, outcome: `error: ${err.message}`, tries: [] }));
+    ev.push({ stage: 'correct', source: 'blurb', outcome: B.outcome, before: readTitle ?? null, after: B.found ? [B.found.title, B.found.author].filter(Boolean).join(' | ') : null, detail: { tries: B.tries } });
+    if (B.found) {
+      [readTitle, readAuthor, fixedBy] = [B.found.title, B.found.author ?? readAuthor, 'blurb'];
+      const r = await lookupTitle(readTitle, readAuthor, dry ? 'trace' : 'scan').catch(() => ({}));
+      ev.push({ stage: 'verify', source: 'blurb', outcome: r.book ? 'match' : 'no_match', before: readTitle, after: r.book?.title ?? null, detail: { book_id: r.book?.id ?? null } });
+      if (r.book) { book = r.book; lookupId = r.lookupId ?? lookupId; }
+    }
+  }
   // Nothing readable: the item still waits, with its pictures, for the reader to type the title.
-  const title = read.title || book?.title || (isbn ? `ISBN ${isbn}` : danacode ? `דאנאקוד ${danacode}` : '');
+  const title = readTitle || book?.title || (isbn ? `ISBN ${isbn}` : danacode ? `דאנאקוד ${danacode}` : '');
+  const [confidence, confidenceWhy] = book ? (fixedBy ? [75, 'corrected_catalogue'] : [85, 'catalogue'])
+    : fixedBy === 'index' ? [65, 'index'] : fixedBy ? [55, fixedBy] : read.quality === 'low' || backOnly ? [15, 'low'] : [40, 'ocr'];
   await step('match', { note: 'catalogue lookup: the scanned code, then codes read from the covers (a printed Danacode only if its title matches), then the title',
     codes_tried: [scan.book_code, ...(read.codes ?? [])].filter(Boolean), doubtful: doubtful?.book?.title ?? null, book: book && { id: book.id, title: book.title, authors: book.authors, isbn13: book.isbn13 }, queue_title: title });
   if (dry) return;
-  await q(
-    `INSERT INTO scan_items(scan_id, title, author, isbn13, danacode, book_id, via, matched, frame_path, back_path, quality, lookup_id, sources)
-     VALUES ($1, $2, $3, $4, $5, $6, 'vision', $7, $8, $9, $10, $11, '{cover}')`,
-    [scan.id, title, read.author ?? book?.authors?.[0] ?? null, book?.isbn13 ?? isbn, danacode, book?.id ?? null, !!book, frame, backPath,
-      book ? 'high' : read.quality === 'low' || backOnly ? 'low' : 'medium', lookupId],
+  const item = await one(
+    `INSERT INTO scan_items(scan_id, title, author, isbn13, danacode, book_id, via, matched, frame_path, back_path, quality, lookup_id, sources, confidence, confidence_why)
+     VALUES ($1, $2, $3, $4, $5, $6, 'vision', $7, $8, $9, $10, $11, '{cover}', $12, $13) RETURNING id`,
+    [scan.id, title, readAuthor ?? book?.authors?.[0] ?? null, book?.isbn13 ?? isbn, danacode, book?.id ?? null, !!book, frame, backPath,
+      book ? 'high' : read.quality === 'low' || backOnly ? 'low' : 'medium', lookupId, confidence, confidenceWhy],
   );
+  for (const e of ev) {
+    await q(`INSERT INTO scan_item_evidence(item_id, stage, source, outcome, before, after, detail) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [item.id, e.stage, e.source, e.outcome, e.before ?? null, e.after ?? null, JSON.stringify(e.detail ?? {})]).catch(() => {});
+  }
 }
 
 // The video as sent, for the trace view: re-encoded small, without its metadata (GPS).
@@ -572,7 +628,7 @@ export function confidenceOf(item, book) {
   return [25, 'read'];
 }
 
-async function processScan(scan, { dry = false } = {}) {
+export async function processScan(scan, { dry = false } = {}) {
   if (scan.source === 'cover') return processCover(scan, { dry });
   const ctx = dry ? 'trace' : 'scan';
   const dir = join(MEDIA_DIR, scan.id);

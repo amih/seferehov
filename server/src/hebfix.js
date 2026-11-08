@@ -95,3 +95,9 @@ export async function unreverse(text) {
   const [a, b] = await Promise.all([knownShare(text), knownShare(flipped)]);
   return a != null && b != null && b > a + 0.3 ? flipped : text;
 }
+
+// The words of `words` hspell does not know (a Set); empty without hspell.
+export async function unknownWords(words) {
+  try { return await unknown([...new Set(words.map(plain))]); } catch { return new Set(); }
+}
+export const plainWord = (w) => plain(w);

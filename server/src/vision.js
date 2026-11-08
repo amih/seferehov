@@ -180,7 +180,7 @@ export async function readCover(front, back = null, extras = { front: [], back: 
   const alternatives = [pick, model, ...spellings].filter((b) => b?.title && normTitle(b.title) !== normTitle(book?.title)).map((b) => ({ title: b.title, author: b.author ?? null }));
   await step('cover-read', { title: book?.title ?? null, author: book?.author ?? null, quality: book?.quality ?? 'low', model: model && { title: model.title, author: model.author }, pick: pick && { title: pick.title, author: pick.author }, alternatives, barcodes: codes.slice(0, fromBarcodes), codes: unique, unchecked });
   return { title: book?.title ?? null, author: book?.author ?? null, quality: book?.quality ?? 'low', isbn: unique[0] ?? null, codes: unique, unchecked,
-    alternatives, text: [text, backText].filter(Boolean).join('\n') };
+    alternatives, text: [text, backText].filter(Boolean).join('\n'), frontText: text || null, backText: backText || null };
 }
 
 // Each field the model read is swapped for the OCR line it resembles (or for single OCR
