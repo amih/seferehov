@@ -101,7 +101,7 @@ Of the first 40 covers, 16 needed editing and 6 were declined. Covers now go thr
 3. **Corrections like spines**: title/author swap, the local title index, the web check.
 4. **Author first**: the author read well and the title badly: the author's books (local index, National Library, else one web search) held against the cover's text; the one whose title is printed there is taken.
 5. **The blurb**: a sentence of the back cover (or a 7+ word "title", a back photographed alone) searched word for word; pages quoting it name the book.
-Every step is recorded as evidence and gives the item a confidence for the queue. Re-reading the 20 covers readers had fixed or declined: 15 came out right with no edit (2 more were stopped only by the search engines' pause). Searching a Danacode on the web finds nothing and is not used. `scripts/cover-test.js [scan…]` re-reads saved covers without saving.
+Every step is recorded as evidence and gives the item a confidence for the queue. Re-reading the 20 covers readers had fixed or declined: 15 came out right with no edit, 2 matched another book by the author read, 3 were not found. Author-first needs the title on one line of the front cover and a record naming the same author (it once matched a memorial booklet whose three common title words were all in a blurb). Searching a Danacode on the web finds nothing and is not used. `scripts/cover-test.js [scan…]` re-reads saved covers without saving.
 
 ### Web searches: engines in turn, and a queue (8 Nov 2026)
 
