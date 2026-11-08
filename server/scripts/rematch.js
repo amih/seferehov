@@ -5,7 +5,7 @@
 //   node --env-file=../.env scripts/rematch.js --apply  → change it
 import { many, q, pool } from '../src/db.js';
 import { lookupTitle } from '../src/books.js';
-import { swapIfReversed } from '../src/refindex.js';
+import { swapIfReversed, localCheck } from '../src/refindex.js';
 
 const apply = process.argv.includes('--apply');
 const items = await many(`
@@ -27,10 +27,23 @@ for (const i of items) {
     ev.push({ stage: 'correct', source: 'swap', outcome: 'corrected', before: `${title} | ${author}`, after: `${sw.title} | ${sw.author}`, detail: { name: sw.name, rematch: true } });
     [title, author] = [sw.title, sw.author];
   }
-  const r = await lookupTitle(title, author, 'rematch').catch((err) => ({ error: err.message }));
+  let r = await lookupTitle(title, author, 'rematch').catch((err) => ({ error: err.message }));
+  ev.push({ stage: 'verify', source: r.source ?? 'none', outcome: r.book ? 'match' : 'no_match', before: title, after: r.book?.title ?? null,
+    detail: { rematch: true, book_id: r.book?.id ?? null, was_book_id: i.book_id ?? null } });
+  // As in a scan: a reading no catalogue knows is corrected from the local title index
+  // ("המילים סוד" → "סוד המילים"), then looked up again.
+  if (!r.book) {
+    const w = await localCheck(title, author).catch(() => null);
+    const fixed = w?.match ? { title: w.match.title, author: w.match.author ?? author } : null;
+    if (fixed) {
+      ev.push({ stage: 'correct', source: `index:${w.match.source}`, outcome: 'corrected', before: `${title} | ${author ?? ''}`, after: `${fixed.title} | ${fixed.author ?? ''}`, detail: { rematch: true } });
+      [title, author] = [fixed.title, fixed.author];
+      r = await lookupTitle(title, author, 'rematch').catch((err) => ({ error: err.message }));
+      ev.push({ stage: 'verify', source: r.source ?? 'none', outcome: r.book ? 'match' : 'no_match', before: title, after: r.book?.title ?? null,
+        detail: { rematch: true, book_id: r.book?.id ?? null, was_book_id: i.book_id ?? null } });
+    }
+  }
   const book = r.book ?? null;
-  ev.push({ stage: 'verify', source: r.source ?? 'none', outcome: book ? 'match' : 'no_match', before: title, after: book?.title ?? null,
-    detail: { rematch: true, book_id: book?.id ?? null, was_book_id: i.book_id ?? null } });
   const same = (book?.id ?? null) === (i.book_id ?? null) && !sw;
   const was = i.book_id ? `${i.book_title} / ${(i.book_authors ?? []).join(', ') || '-'}` : '(no book)';
   const now = book ? `${book.title} / ${(book.authors ?? []).join(', ') || '-'}` : '(no book)';
