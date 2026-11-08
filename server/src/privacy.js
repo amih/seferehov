@@ -43,7 +43,8 @@ Answer with only JSON: {"private": true|false, "reason": "short reason in Englis
 async function llmCheck(text) {
   const res = await fetch(`${config.vision.url}/api/generate`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    // Someone is waiting for this answer: go before photo reading in the GPU queue.
+    headers: { 'Content-Type': 'application/json', 'X-GPU-Priority': 'interactive' },
     body: JSON.stringify({
       model: config.privacyModel,
       prompt: PROMPT.replace('{TEXT}', text.replaceAll('"""', '"')),

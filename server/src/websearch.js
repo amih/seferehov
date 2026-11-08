@@ -112,7 +112,7 @@ async function ask(prompt) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: config.vision.model, prompt, stream: false, think: false, keep_alive: '3m',
       options: { num_ctx: 8192, num_predict: 120, temperature: 0 } }),
-    signal: AbortSignal.timeout(90_000),
+    signal: AbortSignal.timeout(config.vision.timeoutMs), // includes any wait in the GPU queue
   });
   if (!res.ok) throw new Error(`model ${res.status}`);
   return String((await res.json()).response ?? '').trim();

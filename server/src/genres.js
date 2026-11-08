@@ -45,7 +45,7 @@ async function ask(prompt) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: config.vision.model, prompt, stream: false, think: false, keep_alive: '3m',
       options: { num_ctx: 4096, num_predict: 20, temperature: 0 } }),
-    signal: AbortSignal.timeout(60_000),
+    signal: AbortSignal.timeout(config.vision.timeoutMs), // includes any wait in the GPU queue
   });
   if (!res.ok) throw new Error(`vision ${res.status}`);
   return (await res.json()).response ?? '';
