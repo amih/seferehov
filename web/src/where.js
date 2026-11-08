@@ -32,7 +32,7 @@ export async function whereBox(el, bookId) {
       <div class="where-photo">
         <img src="${esc(s.photo)}" alt="" loading="lazy">
         ${s.poly ? `<svg viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
-          <path class="dim" fill-rule="evenodd" d="M0,0H1V1H0Z M${s.poly.map(([x, y]) => `${x},${y}`).join(' L')} Z"></path>
+          <path class="dim" fill-rule="evenodd" style="fill: rgba(0, 0, 0, .55)" d="M0,0H1V1H0Z M${s.poly.map(([x, y]) => `${x},${y}`).join(' L')} Z"></path>
           <polygon class="me" points="${pts(s.poly)}"></polygon></svg>` : ''}
       </div>
       ${s.poly ? '' : `<p class="muted small">${t('where.no_outline')}</p>`}
