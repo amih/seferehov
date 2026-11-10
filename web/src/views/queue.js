@@ -142,6 +142,7 @@ export default async function queueView(root) {
       </div>
       ${i.back ? `<a href="${esc(i.back)}" target="_blank" class="big-pic back-pic"><img src="${esc(i.back)}" alt="${t('queue.back_cover')}"></a>` : ''}
       ${i.crop && i.frame ? `<p><a class="small" href="${esc(i.frame)}" target="_blank">${t('queue.whole_photo')}</a></p>` : ''}
+      ${i.crop && i.crop_hidden ? `<p class="note small">${t('queue.crop_hidden')}</p>` : ''}
       ${i.code && !i.book_id && ['photo', 'video'].includes(i.source) ? `<p class="note small">${t('check.queue_hint')} <a href="/l/${i.code}/check">🔎 ${t('check.title')}</a></p>` : ''}
       <div class="decide">
         <button class="btn primary" data-d="approved">✓ ${t('queue.approve')}</button>

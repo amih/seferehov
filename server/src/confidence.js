@@ -38,7 +38,12 @@ function weakIndexFix(ev) {
 // cropShape (scans.js): long side / short side of the spine's cut-out. A spine standing in
 // a row is cut 5–16 times as long as it is high; under 4, 4 of 8 were declined, and "sure"
 // went from 47 of 49 to 46 of 46 (Nov 2026).
-const WIDE_CROP = 4;
+export const WIDE_CROP = 4;
+// A cut-out more than a quarter blank (scans.js badCrop): every such shelf crop was declined.
+export const BAD_BLANK = 0.25;
+// SQL: the cut-out of scan item `i` is good enough to show on public pages (not short and
+// wide, not mostly blank). Readers still see every cut-out in the queue.
+export const CROP_SHOWN_SQL = `COALESCE((i.crop_shape->>'ratio')::real >= ${WIDE_CROP} AND (i.crop_shape->>'blank')::real < ${BAD_BLANK}, true)`;
 const wideCrop = (item) => item.cropShape?.ratio != null && item.cropShape.ratio < WIDE_CROP;
 
 const frameCount =(item, ev) => item.frames?.size

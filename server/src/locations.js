@@ -2,6 +2,7 @@ import { config, POINTS } from './config.js';
 import { one, many, tx } from './db.js';
 import { coverTexts } from './seo.js';
 import { OPEN_SPINES_SQL } from './approvals.js';
+import { CROP_SHOWN_SQL } from './confidence.js';
 import { requireUser } from './auth.js';
 import { savePhoto, photoUrls, avatarUrl } from './photos.js';
 import { bookDetails } from './details.js';
@@ -268,7 +269,7 @@ export default async function locationRoutes(app) {
           WHERE s.location_id = $1 AND s.book_id = $2 AND s.status = 'approved'
          UNION ALL
          SELECT i.crop_path, 'spine', s.created_at FROM scan_items i JOIN sightings s ON s.id = i.sighting_id
-          WHERE s.location_id = $1 AND s.book_id = $2 AND s.status = 'approved' AND i.crop_path IS NOT NULL
+          WHERE s.location_id = $1 AND s.book_id = $2 AND s.status = 'approved' AND i.crop_path IS NOT NULL AND ${CROP_SHOWN_SQL}
          UNION ALL
          SELECT i.frame_path, 'shelf', s.created_at FROM scan_items i JOIN sightings s ON s.id = i.sighting_id
           WHERE s.location_id = $1 AND s.book_id = $2 AND s.status = 'approved' AND i.frame_path IS NOT NULL) x

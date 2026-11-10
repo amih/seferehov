@@ -88,6 +88,28 @@ export async function mergeLocations(keepId, dropId) {
   });
 }
 
+// A library a reader added and scanned books at, with an OpenStreetMap library this close:
+// almost always the same one entered twice (28 m apart, Nov 2026). The OpenStreetMap entry
+// is merged into the reader's, unless it has anything of its own (books, scans, checks,
+// edits) or a reader marked the two as different; those wait on the duplicates page.
+const OSM_TWIN_M = 40;
+export async function absorbOsmTwin(locationId) {
+  const twin = await one(
+    `SELECT y.id, round(ST_Distance(x.geom, y.geom))::int AS metres
+       FROM locations x JOIN locations y ON y.source = 'osm' AND y.id <> x.id AND ST_DWithin(x.geom, y.geom, ${OSM_TWIN_M})
+      WHERE x.id = $1 AND x.source = 'user' AND x.status IN ('approved', 'pending') AND y.status IN ('approved', 'pending')
+        AND EXISTS (SELECT 1 FROM scans s WHERE s.location_id = x.id)
+        AND NOT EXISTS (SELECT 1 FROM location_not_dupes n WHERE n.a = LEAST(x.id, y.id) AND n.b = GREATEST(x.id, y.id))
+        AND NOT EXISTS (SELECT 1 FROM sightings s WHERE s.location_id = y.id)
+        AND NOT EXISTS (SELECT 1 FROM scans s WHERE s.location_id = y.id)
+        AND NOT EXISTS (SELECT 1 FROM location_checks c WHERE c.location_id = y.id)
+        AND NOT EXISTS (SELECT 1 FROM location_edits e WHERE e.location_id = y.id)
+      ORDER BY metres LIMIT 1`, [locationId]);
+  if (!twin) return null;
+  await mergeLocations(locationId, twin.id);
+  return twin;
+}
+
 export default async function duplicateRoutes(app) {
   const trusted = { preHandler: requireUser(2) };
 

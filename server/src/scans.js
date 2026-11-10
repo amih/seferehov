@@ -18,12 +18,13 @@ import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations
 import { initialStatus, awardSighting } from './moderation.js';
 import { parseLatLon, normalizeIsbn, normalizeDanacode } from './util.js';
 import { mergeDuplicates, autoConfirmKnown, autoApproveSure, closeIfDone } from './approvals.js';
+import { absorbOsmTwin } from './duplicates.js';
 import { ownerOf } from './mybooks.js';
 import { sendMail } from './mail.js';
 import { TRACE_DIR, here, purgeTraces, scope, step, traceFile, withTrace } from './trace.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { confidenceOf } from './confidence.js';
+import { confidenceOf, BAD_BLANK } from './confidence.js';
 
 // Raw uploads (may carry GPS in EXIF) live outside the public uploads folder and
 // are deleted once read. Only re-encoded thumbnails go to uploads/.
@@ -345,6 +346,10 @@ async function runScan(scan) {
     await autoConfirmKnown(scan).catch((err) => log.warn({ err, scan: scan.id }, 'auto confirm'));
     await mergeDuplicates(scan.user_id).catch((err) => log.warn({ err, scan: scan.id }, 'merge duplicates'));
     await autoApproveSure(scan).catch((err) => log.warn({ err, scan: scan.id }, 'auto approve'));
+    if (scan.location_id) {
+      const twin = await absorbOsmTwin(scan.location_id).catch((err) => log.warn({ err, scan: scan.id }, 'osm twin'));
+      if (twin) log.info({ scan: scan.id, location: scan.location_id, osm: twin.id, metres: twin.metres }, 'OpenStreetMap twin merged into the library');
+    }
   } catch (err) {
     log.error({ err, scan: scan.id }, 'scan failed');
     await q(`UPDATE scans SET status = 'failed', error = $2, finished_at = now() WHERE id = $1`, [scan.id, String(err.message).slice(0, 300)]);
@@ -467,8 +472,7 @@ export async function cropShape(jpeg) {
   return { blank: Math.round((100 * blank) / (data.length / 3)) / 100, ratio: Math.round((10 * long) / short) / 10 };
 }
 // 6 Nov 2026: every shelf crop over 25% blank was declined; no approved one was over 20%.
-// (Short, tall cuts holding several books were often approved: the title was still read.)
-const BAD_BLANK = 0.25;
+// Short, wide cuts holding several books are kept for reading but not shown (confidence.js).
 export const badCrop = (shape) => (shape && shape.blank >= BAD_BLANK ? 1 : 0);
 
 // The cut-out spine, so the user can compare it with what we read.
@@ -836,12 +840,12 @@ export async function processScan(scan, { dry = false } = {}) {
   for (const [n, { item, book, title, isbn, quality, lookupId }] of rows.entries()) {
     const crop = item.crop ? await saveCropThumb(item.crop, scan.id, n) : null;
     const saved = await one(
-      `INSERT INTO scan_items(scan_id, title, author, isbn13, book_id, via, matched, frame_path, quality, crop_path, lookup_id, sources, trace_at, confidence, confidence_why, spot)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
+      `INSERT INTO scan_items(scan_id, title, author, isbn13, book_id, via, matched, frame_path, quality, crop_path, lookup_id, sources, trace_at, confidence, confidence_why, spot, crop_shape)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id`,
       // The frame shown is the one the spine's outline is on.
       [scan.id, title, item.author ?? book?.authors?.[0] ?? null, book?.isbn13 ?? isbn ?? null, book?.id ?? null, item.via, !!book, item.spot?.frame ?? item.frame, quality, crop, lookupId,
         [item.via === 'barcode' ? 'barcode' : scan.source], item.at?.length ? item.at : null, item.confidence ?? null, item.confidenceWhy ?? null,
-        item.spot ? JSON.stringify({ poly: item.spot.poly }) : null],
+        item.spot ? JSON.stringify({ poly: item.spot.poly }) : null, crop && item.cropShape ? JSON.stringify(item.cropShape) : null],
     );
     for (const e of item.evidence ?? []) {
       await q(`INSERT INTO scan_item_evidence(item_id, stage, source, outcome, before, after, detail) VALUES ($1, $2, $3, $4, $5, $6, $7)`,

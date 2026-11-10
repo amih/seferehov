@@ -11,6 +11,7 @@ import { unlink } from 'node:fs/promises';
 import sharp from 'sharp';
 import { config } from './config.js';
 import { one, q } from './db.js';
+import { CROP_SHOWN_SQL } from './confidence.js';
 
 function realesrgan(input, output) {
   return new Promise((resolve, reject) => {
@@ -77,7 +78,7 @@ async function nextScanPicture() {
   const r = await one(
     `SELECT x.rel, x.spine FROM (
        SELECT i.crop_path AS rel, true AS spine, s.created_at FROM scan_items i JOIN scans s ON s.id = i.scan_id
-        WHERE s.status IN ('done', 'confirmed') AND i.crop_path IS NOT NULL
+        WHERE s.status IN ('done', 'confirmed') AND i.crop_path IS NOT NULL AND ${CROP_SHOWN_SQL}
        UNION ALL
        SELECT i.frame_path, false, s.created_at FROM scan_items i JOIN scans s ON s.id = i.scan_id
         WHERE s.status IN ('done', 'confirmed') AND i.frame_path IS NOT NULL AND s.source <> 'cover') x

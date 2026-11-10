@@ -15,11 +15,13 @@ import { normTitle, titleSimilarity } from './vision.js';
 import { knownWords } from './hebfix.js';
 import { fixesToVote } from './fixes.js';
 import { queueWaits, keepForReview } from './scans.js';
+import { CROP_SHOWN_SQL } from './confidence.js';
 
 const UNDO_DAYS = 14;
 
 const ITEM_SQL = `
   SELECT i.id, i.title, i.author, i.isbn13, i.via, i.matched, i.quality, i.frame_path, i.crop_path, i.back_path, i.decision, i.sources,
+         NOT ${CROP_SHOWN_SQL} AS crop_hidden,
          s.id AS scan_id, s.kind, s.source, s.owner, s.friend_name, l.code, l.name AS location_name,
          b.id AS book_id, b.title AS book_title, b.authors AS book_authors, b.cover_url, b.year,
          COALESCE(i.confidence, CASE i.quality WHEN 'high' THEN 85 WHEN 'medium' THEN 40 ELSE 20 END) AS confidence,
@@ -111,7 +113,7 @@ export const OPEN_SPINES_SQL = `
     FROM scan_items i JOIN scans s ON s.id = i.scan_id
    WHERE s.location_id = $1 AND s.source IN ('photo', 'video') AND s.status IN ('done', 'confirmed')
      AND i.book_id IS NULL AND i.quality <> 'low' AND (i.decision IS NULL OR i.decision = 'later')
-     AND i.crop_path IS NOT NULL AND i.created_at > now() - interval '60 days'
+     AND i.crop_path IS NOT NULL AND ${CROP_SHOWN_SQL} AND i.created_at > now() - interval '60 days'
    ORDER BY i.created_at DESC LIMIT 12`;
 
 // A scan is finished once none of its books waits for a decision.
