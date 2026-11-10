@@ -22,7 +22,7 @@ This document follows one scan from the phone camera to a book in the approval q
 
 - **Qwen3-VL 8B** (graphics card) does most of the model work: sorting photos, finding and reading spines, reading covers, and choosing among search results. It takes 7.4 GB, but only 5.8 GB fits on the 8 GB card, so 1.6 GB runs from ordinary memory. It writes about 29 word-pieces (tokens) a second.
 - **Surya OCR** runs on the CPU and uses about 19 GB of RAM. It takes 9 s per image typically and 30 s when slow.
-- **The only model on the phone** is in the covers camera: MobileNet-V3 small, 4 MB, which checks "is a book filling the view?" and "are all corners in view?". The main "Photograph books" camera uses no model, just plain code for steadiness and sharpness.
+- **One camera, sorted on the server:** the main button's camera takes shelves and covers alike, using no model, only plain code for steadiness and sharpness. Qwen3-VL on the server then decides, photo by photo, whether it is a shelf, a front or a back cover. The only model on the phone (MobileNet-V3 small, 4 MB) is in a one-book covers camera that opens only from a library's unknown spines or a book's page.
 - **Time per scan:** a shelf photo takes 3.5 to 7 minutes and a cover about 1 minute.
 - **Estimates** (marked "est."): the shelf steps' times, worked out from the model's speed, and the phone's, Tesseract's and Real-ESRGAN's memory.
 
@@ -34,11 +34,11 @@ This document follows one scan from the phone camera to a book in the approval q
 
 ## The phone
 
-There are two cameras.
+**The main button opens one camera for everything (A1).** Shelves, front covers and back covers go in any order, in one session. The phone **does not decide** what a photo shows and uses **no AI model**. Plain code checks the live picture every 150 ms: how much it moved since the last check, how sharp it is (the variance of the Laplacian), and how bright it is. A photo is taken when the picture has changed (moved along the shelf, a book turned over, the next book) and the phone is then held steady for about half a second. The sharpest full-size frame of that pause is kept, and if the phone is still steady a moment later, one extra frame is taken.
 
-**"Photograph books" (A1)** is the main camera. It takes shelves and covers mixed together, and it uses **no AI model**. Plain code checks the live picture every 150 ms: how much it moved since the last check, how sharp it is (the variance of the Laplacian), and how bright it is. A photo is taken when the view is new and the phone is held steady for about half a second. The sharpest full-size frame of that pause is kept, and if the phone is still steady a moment later, one extra frame is taken.
+**The split happens on the server, photo by photo** (Branch 2 below): Qwen3-VL labels each photo SHELF, FRONT, BACK or OTHER, and plain code pairs fronts with backs. Until 3 Nov 2026 the phone guessed from its own movement (turned over = same book, moved sideways = next book), and it split three books into six, so the guess was dropped.
 
-**The covers camera (A2)** is for one book, or for many books photographed one after another. It runs the only model on the phone:
+**A second, one-book camera (A2)** is not on the main screen. It opens only from two places: the 📷 "take it out" button next to a spine that no catalogue knew, on a library's page; and "add a photo" on a book's page. It expects the covers of one book, and runs the only model on the phone:
 
 - **MobileNet-V3 small** (MediaPipe Image Embedder) turns each frame into 1,024 numbers.
 - **Two tiny layers trained for Seferehov** sit on top. One answers "is a book filling the view?", the other "are all four corners of the cover in view?".

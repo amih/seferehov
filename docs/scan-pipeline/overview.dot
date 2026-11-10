@@ -3,8 +3,8 @@ digraph overview {
 #include
   subgraph cluster_phone {
     label="PHONE (the Seferehov web app)"; style="rounded"; color="#3f9a3f"; fontcolor="#3f9a3f";
-    cam1 [label="A1  'Photograph books' camera\nshelves and covers mixed\ncheck every 150 ms: motion, sharpness, light\n< 5 ms per check (est.)"];
-    cam2 [label="A2  Covers camera\none book, or many books in a row"];
+    cam1 [label="A1  The main button's camera\nshelves and covers mixed, no model\nthe phone does not decide what a photo shows\ncheck every 150 ms: motion, sharpness, light\n< 5 ms per check (est.)", style="filled,bold"];
+    cam2 [label="A2  One-book covers camera (not on the main screen)\nonly from: 'take it out' on an unknown spine,\nor 'add a photo' on a book's page", style="filled,dashed"];
     mnet [label="MobileNet-V3 small (MediaPipe) + 2 tiny Seferehov layers\n'is a book filling the view?'  'are all 4 corners in view?'\nfile 4.1 MB + 9.6 MB runtime · ~30–60 MB RAM (est.)\ntens of ms per frame (est.)", fillcolor="#c9f0c9", color="#3f9a3f"];
     bc   [label="Barcode reader\nbrowser BarcodeDetector or ZXing (WebAssembly)\nISBN / Danacode, every 600 ms", fillcolor="#c9f0c9", color="#3f9a3f"];
     shot [label="Take the photo when the phone is steady\nkeep the sharpest frame, +1–2 extra frames"];
