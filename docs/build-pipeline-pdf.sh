@@ -9,9 +9,9 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cp -r scan-pipeline pdf.css "$tmp/"
 cat > "$tmp/extra.css" <<'CSS'
-h1 { break-before: page; }
+h1 { break-before: page; break-after: avoid; }
 h1:first-of-type { break-before: auto; }
-img { max-width: 100%; max-height: 24.5cm; display: block; margin: 0.6em auto; }
+img { max-width: 100%; max-height: 21cm; display: block; margin: 0.6em auto; }
 p:has(> img) { break-inside: avoid; }
 table { font-size: 0.82em; }
 CSS
