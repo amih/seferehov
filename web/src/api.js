@@ -59,6 +59,7 @@ export async function getMe(force = false) {
 // Sign-out: nothing the phone kept for this reader stays behind.
 export async function forgetReader() {
   remember(null);
+  try { localStorage.removeItem('todo-counts'); } catch { /* private mode */ }
   me = null;
   await caches?.delete('api').catch(() => {});
 }

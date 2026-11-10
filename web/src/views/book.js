@@ -114,7 +114,7 @@ function renderBook(root, { b, photos, texts, again, back, status, actions, wire
       <figure class="${p.wide ? 'wide' : ''}"><button class="pic" data-i="${i}" aria-label="${esc(p.label)}"><img src="${esc(p.url)}" alt="" loading="${i ? 'lazy' : 'eager'}"></button><figcaption>${esc(p.label)}</figcaption></figure>`).join('')}</div>
       ${pics.length > 1 ? `<p class="muted small center">${t('book.swipe', { n: pics.length })}</p>` : ''}` : '<div class="nocover big">📖</div>'}
     <div class="add-photos" hidden>
-      ${!b.back_url && !latest('back') ? `<p class="note">${t('book.no_back')}</p>` : ''}
+      ${!b.back_url && !latest('back') ? `<p class="note">${t(pics.length ? 'book.no_back' : 'book.no_covers')}</p>` : !pics.length ? `<p class="note">${t('book.no_front')}</p>` : ''}
       <p class="row"><button class="btn ${!b.back_url && !latest('back') ? '' : 'small'}" data-new="front">📷 ${t('book.new_front')}</button>
         <button class="btn ${!b.back_url && !latest('back') ? 'primary' : 'small'}" data-new="back">📷 ${t('book.new_back')}</button></p></div>
     <div class="shots" id="shots" hidden></div>

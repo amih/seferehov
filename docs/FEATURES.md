@@ -28,6 +28,8 @@ It runs at https://seferehov.com. Hebrew is the default (right to left); English
 - **Town pages and country pages** for search engines, with the libraries and books in each town (towns come from GeoNames and OpenStreetMap boundaries).
 - Only libraries with something of their own (added, checked, edited or reported by readers, or in Israel) are in the sitemap and open to search engines; the untouched OpenStreetMap shelves abroad, and towns and countries made only of them, get `noindex` so Google doesn't treat them as duplicates.
 
+- **Asking for cover photos**: a library's page tells how many of its books have no photo of their front and back covers yet, invites a reader at the library to take one out and photograph both, and marks each such book "📷 needs cover photos" (a link to its page). A book needs them when it has no picture of its front at all, or no back cover (from a catalogue, a reader's library photo, or anyone's My books). On the book's page, a reader standing at the library (or holding their own book) is asked for both covers, or for the one that is missing; the one-book covers camera opens from there.
+
 ## Adding books — three ways
 
 1. **One camera for everything, free style** (main way, at a library and at home, `web/src/capture.js`): one button, "Photograph books". The reader points at a shelf, a front cover or a back cover, in any order, and stops for a moment; every stop is a photo. The phone does not decide what a photo is: the server does. (Until 4 Nov 2026 the covers camera decided on the phone — turned over = the same book, moved sideways = the next book — and on a real session of books standing on a shelf it split 3 books into 6: a book turned over on a shelf moves in the picture just as the phone moving on does.)
@@ -172,6 +174,8 @@ Every step is recorded as evidence and gives the item a confidence for the queue
 - **Points and levels** for approved reports, with a daily cap. New readers' reports are reviewed first; after a few good ones they publish directly. Reports made far from the library always go to review.
 
 ## App and updates
+
+- **The menu's to-do count shows at once**: the count of books and other items waiting for the reader is fetched in the background when the app starts, every minute while it is in view, and when it comes back into view, and kept on the phone (with the reader's id; cleared on sign-out). The menu opens with it, and brings it up to date again. The library-duplicates count behind it now starts from the libraries readers added instead of comparing all 48,000 with each other: 1.8 s → 38 ms.
 
 - Installable from the browser (PWA), works offline, Hebrew and English.
 - Server not answering (no signal, a stale DNS address, the server down): screens never wait on a blank page. A screen shows "Loading…" until it draws; after 4 s a bar under the header says the server is slow; screens seen before open after 3.5 s from the last answer the phone kept (marked "showing what the phone saved last"); who is signed in is kept on the phone, so the menu and screens don't flip to "signed out". The bar asks the server again every few seconds (and on "Try again") and goes away on the first real answer. Sign-out deletes the kept answers.

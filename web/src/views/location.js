@@ -56,6 +56,7 @@ export default async function locationView(root, [code]) {
 
     <h2>${t('loc.shelf')} <span class="count">${books.length}</span></h2>
     ${books.length ? '' : `<p class="muted">${t('loc.no_books')}</p>`}
+    ${books.some((b) => b.needs_covers) ? `<p class="note">📷 ${t('loc.covers_invite', { n: books.filter((b) => b.needs_covers).length })}</p>` : ''}
     <ul class="books">
       ${books.map((b) => `
         <li data-id="${b.id}"${Date.now() - new Date(b.last_seen) > STALE_MS ? ' class="stale"' : ''}>
@@ -64,6 +65,7 @@ export default async function locationView(root, [code]) {
             <a href="/l/${l.code}/b/${b.id}" class="title-link" data-book><strong>${esc(b.title)}</strong></a>
             <span>${esc(b.authors.join(', '))}${b.year ? ` · ${b.year}` : ''}</span>
             <span class="muted">${t('loc.seen', { when: timeAgo(b.last_seen) })}</span>
+            ${b.needs_covers ? `<a class="small" href="/l/${l.code}/b/${b.id}" data-book>📷 ${t('loc.needs_covers')}</a>` : ''}
             ${b.waiting?.others ? `<span class="waiting">👥 ${t('watch.waiting', { n: b.waiting.others, mine: b.waiting.mine })}</span>` : ''}
             <span class="row"><button class="link" data-kind="seen">${t('loc.still')}</button><button class="link" data-kind="taken">${t('loc.took')}</button><button class="link" data-kind="gone">${t('loc.gone')}</button></span>
           </div>

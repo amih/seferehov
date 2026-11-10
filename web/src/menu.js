@@ -17,7 +17,7 @@ async function open() {
   if (document.querySelector('.menu-back')) return;
   // On a bad connection the menu opens anyway, after a moment, as if signed out.
   const me = await Promise.race([getMe(), new Promise((r) => setTimeout(() => r(null), 1500))]);
-  const waiting = waitingIn(me && lastTodoCounts());
+  const waiting = waitingIn(me && lastTodoCounts(me.id));
   // The list opens with the reader: their own picture and screen name, or "sign in".
   const items = [
     me ? [avatarHtml(me, 30), me.screen_name || t('menu.me'), '/me', 'me'] : ['👤', 'menu.signin', '/login'],
@@ -56,7 +56,7 @@ async function open() {
   document.body.append(el);
   el.querySelector('a').focus();
   if (me) {
-    todoCounts().then((todo) => {
+    todoCounts(me.id).then((todo) => {
       const a = el.querySelector('a.todo');
       if (!a) return;
       const n = waitingIn(todo);

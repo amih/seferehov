@@ -26,6 +26,7 @@ import shelfCheckView from './views/shelf-check.js';
 import editLocationView from './views/edit-location.js';
 import pageView from './views/page.js';
 import { initMenu } from './menu.js';
+import { todoCounts } from './todo.js';
 import './install.js';
 import searchView from './views/search.js';
 import myBooksView, { addMyBooksView } from './views/my-books.js';
@@ -190,6 +191,12 @@ applyLang();
 translateShell();
 
 initMenu();
+
+// The menu's to-do count, fetched ahead so the menu shows it at once (todo.js keeps it).
+const refreshTodo = () => getMe().then((u) => u && todoCounts(u.id)).catch(() => {});
+refreshTodo();
+setInterval(() => { if (!document.hidden) refreshTodo(); }, 60_000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshTodo(); });
 
 // Errors on the phone go to the server log (a few per page load at most).
 let reported = 0;

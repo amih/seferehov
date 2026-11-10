@@ -38,7 +38,12 @@ const PRESENT_BOOKS_SQL = `
      WHERE s.location_id = $1 AND s.status = 'approved'
      ORDER BY s.book_id, s.created_at DESC
   )
-  SELECT b.id, b.isbn13, b.title, b.authors, b.year, b.cover_url, l.created_at AS last_seen
+  SELECT b.id, b.isbn13, b.title, b.authors, b.year, b.cover_url, l.created_at AS last_seen,
+         -- No picture of its front at all, or no back cover (its blurb, its barcode): readers
+         -- at the library are asked to photograph both.
+         (COALESCE(b.cover_url, b.front_url) IS NULL AND NOT EXISTS (SELECT 1 FROM sightings x WHERE x.book_id = b.id AND x.photo_id IS NOT NULL AND x.status = 'approved'))
+           OR (b.back_url IS NULL AND NOT EXISTS (SELECT 1 FROM sightings x WHERE x.book_id = b.id AND x.back_photo_id IS NOT NULL AND x.status = 'approved')
+                                  AND NOT EXISTS (SELECT 1 FROM my_books m WHERE m.book_id = b.id AND m.back_photo_id IS NOT NULL)) AS needs_covers
     FROM latest l JOIN books b ON b.id = l.book_id
    WHERE l.kind IN ('seen', 'added')
    ORDER BY l.created_at DESC`;

@@ -50,13 +50,15 @@ export async function mergeBooks(keepId, dropId) {
 
 // Libraries within this many metres of each other.
 const SAME_SPOT_M = 20;
+// Starts from the few libraries readers added (indexed distance search from each), not
+// every pair of the 48,000: 1.8 s → a few ms (10 Nov 2026).
 export const LOCATION_PAIRS_SQL = `
-  SELECT x.id AS a, y.id AS b, round(ST_Distance(x.geom, y.geom))::int AS metres
-    FROM locations x JOIN locations y ON x.id < y.id AND ST_DWithin(x.geom, y.geom, ${SAME_SPOT_M})
-   WHERE x.status IN ('approved', 'pending') AND y.status IN ('approved', 'pending')
-     AND (x.created_by IS NOT NULL OR y.created_by IS NOT NULL)
-     AND NOT EXISTS (SELECT 1 FROM location_not_dupes n WHERE n.a = x.id AND n.b = y.id)
-   ORDER BY metres, x.id DESC LIMIT 30`;
+  SELECT DISTINCT LEAST(x.id, y.id) AS a, GREATEST(x.id, y.id) AS b, round(ST_Distance(x.geom, y.geom))::int AS metres
+    FROM locations x JOIN locations y ON y.id <> x.id AND ST_DWithin(x.geom, y.geom, ${SAME_SPOT_M})
+   WHERE x.created_by IS NOT NULL
+     AND x.status IN ('approved', 'pending') AND y.status IN ('approved', 'pending')
+     AND NOT EXISTS (SELECT 1 FROM location_not_dupes n WHERE n.a = LEAST(x.id, y.id) AND n.b = GREATEST(x.id, y.id))
+   ORDER BY metres, a DESC LIMIT 30`;
 
 const LOCATION_SQL = `
   SELECT l.id, l.code, l.name, l.description, l.source, l.status, l.created_at,
