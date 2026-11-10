@@ -7,9 +7,28 @@ This document follows one scan from the phone camera to a book in the approval q
 
 **Measured** numbers come from the server on 10 November 2026: traces of 44 recent scans, the GPU queue, `ollama ps`, `nvidia-smi` and `ps`. **(est.)** marks an estimate. Estimates for Qwen3-VL are based on its measured speed on this card: about 29 output tokens a second, and about 270 prompt tokens a second.
 
-![Legend](scan-pipeline/legend.svg)
+# Summary
+
+**What's in it:**
+
+- **Overview:** phone, then home server, then where each book ends up.
+- **One diagram each** for a shelf photo, a cover photo, the matching chain, and the background jobs.
+- **Every branch is drawn:** barcode on the phone or not; what kind of photo it is; leaning spines; whether the AI model and the OCR agree; upside down; two spines in one cut-out; the OCR service being down; back cover only; Hebrew or Latin script; code found or not; search engines busy.
+- **Colours:** grey is plain code, orange is a model on the server's graphics card, blue is a model on the server's CPU, green is a model on the phone, and purple is an outside service.
+- **Each step shows** what it does, where it runs, and its time.
+- **A table of all models and tools** at the end, with memory and time per call.
+
+**Main findings:**
+
+- **Qwen3-VL 8B** (graphics card) does most of the model work: sorting photos, finding and reading spines, reading covers, and choosing among search results. It takes 7.4 GB, but only 5.8 GB fits on the 8 GB card, so 1.6 GB runs from ordinary memory. It writes about 29 word-pieces (tokens) a second.
+- **Surya OCR** runs on the CPU and uses about 19 GB of RAM. It takes 9 s per image typically and 30 s when slow.
+- **The only model on the phone** is in the covers camera: MobileNet-V3 small, 4 MB, which checks "is a book filling the view?" and "are all corners in view?". The main "Photograph books" camera uses no model, just plain code for steadiness and sharpness.
+- **Time per scan:** a shelf photo takes 3.5 to 7 minutes and a cover about 1 minute.
+- **Estimates** (marked "est."): the shelf steps' times, worked out from the model's speed, and the phone's, Tesseract's and Real-ESRGAN's memory.
 
 # 1. The whole flow
+
+![Legend](scan-pipeline/legend.svg)
 
 ![Overview](scan-pipeline/overview.svg)
 
@@ -80,6 +99,7 @@ The web check uses free search engines only, one at a time, through a self-hoste
 | Outcome | When |
 |---|---|
 | **Approval queue** | Every item a shelf or cover scan saves. Shown surest first: green at 75 or more, yellow at 45–74, red under 45. |
+| **Auto-approved ("sure")** | Only when `AUTO_APPROVE_SURE=1` (off for now): a catalogue match confirmed by OCR, by the author read on the spine, with the record's main title, seen in two photos or more. See `CONFIDENCE_REVIEW.md`. |
 | **Auto-confirmed** | A library shelf scan whose catalogue book is already listed on that shelf. |
 | **Merged** | The same book seen twice: same book id, ISBN, Danacode, or a near title at the same library. |
 | **Set aside ("skipped")** | Shelf readings with no catalogue match that look like junk: low quality, title equals author, a near copy of a book found in the same scan, or Hebrew with no dictionary word. Covers are never set aside. "Show skipped" brings them back. |

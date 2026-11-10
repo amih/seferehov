@@ -12,6 +12,15 @@ import { authorsAgree } from './vision.js';
 const DAY_GAP = 3 * 60_000, NIGHT_GAP = 60_000, RETRY_MS = 30 * 60_000, MAX_TRIES = 6;
 const night = () => Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', hour: 'numeric', hour12: false }).format(new Date())) < 7;
 
+// As src/confidence.js for a book the web queue found: the record must name the author read.
+function webConfidence(book, fixed, how) {
+  if (!book) return [55, how];
+  const authors = (book.authors ?? []).filter(Boolean);
+  if (!authors.length) return [60, 'catalogue_no_author'];
+  if (fixed.author && !authorsAgree(authors, [fixed.author])) return [50, 'catalogue_other_author'];
+  return [75, 'corrected_catalogue'];
+}
+
 export async function enqueueWeb(itemId, kind, steps, payload) {
   if (!steps.length) return;
   await q(`INSERT INTO web_jobs(item_id, kind, steps, payload, run_after) VALUES ($1, $2, $3, $4, now() + interval '20 minutes')
@@ -84,7 +93,7 @@ async function run(job) {
     if (now && !now.book_id && !['approved', 'declined', 'merged', 'skipped'].includes(now.decision)) {
       await q(`UPDATE scan_items SET title = $2, author = $3, book_id = $4, matched = $5, quality = $6, isbn13 = coalesce($7, isbn13), confidence = $8, confidence_why = $9 WHERE id = $1`,
         [item.id, fixed.title, fixed.author ?? book?.authors?.[0] ?? item.author, book?.id ?? null, !!book, book ? 'high' : item.quality, book?.isbn13 ?? null,
-          book ? 75 : 55, book ? 'corrected_catalogue' : how]);
+          ...webConfidence(book, fixed, how)]);
     }
   }
   for (const e of ev) {

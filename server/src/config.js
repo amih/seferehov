@@ -18,6 +18,8 @@ export const config = {
   reviewAllLocations: (env.REVIEW_ALL_LOCATIONS ?? '1') === '1',
   // Admins get one email per this many minutes when something waits for review. 0 = off.
   notifyAdminMinutes: Number(env.NOTIFY_ADMIN_MINUTES ?? 10),
+  // 1 = books with confidence "sure" (src/confidence.js) are approved without the reader.
+  autoApproveSure: env.AUTO_APPROVE_SURE === '1',
   vision: {
     url: (env.OLLAMA_URL || 'http://127.0.0.1:11434').replace(/\/$/, ''),
     model: env.VISION_MODEL || 'qwen3-vl:8b-instruct',

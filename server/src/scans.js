@@ -17,12 +17,13 @@ import { cropCover } from './covers.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
 import { initialStatus, awardSighting } from './moderation.js';
 import { parseLatLon, normalizeIsbn, normalizeDanacode } from './util.js';
-import { mergeDuplicates, autoConfirmKnown, closeIfDone } from './approvals.js';
+import { mergeDuplicates, autoConfirmKnown, autoApproveSure, closeIfDone } from './approvals.js';
 import { ownerOf } from './mybooks.js';
 import { sendMail } from './mail.js';
 import { TRACE_DIR, here, purgeTraces, scope, step, traceFile, withTrace } from './trace.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { confidenceOf } from './confidence.js';
 
 // Raw uploads (may carry GPS in EXIF) live outside the public uploads folder and
 // are deleted once read. Only re-encoded thumbnails go to uploads/.
@@ -343,6 +344,7 @@ async function runScan(scan) {
     await q(`UPDATE scans SET status = 'done', finished_at = now() WHERE id = $1`, [scan.id]);
     await autoConfirmKnown(scan).catch((err) => log.warn({ err, scan: scan.id }, 'auto confirm'));
     await mergeDuplicates(scan.user_id).catch((err) => log.warn({ err, scan: scan.id }, 'merge duplicates'));
+    await autoApproveSure(scan).catch((err) => log.warn({ err, scan: scan.id }, 'auto approve'));
   } catch (err) {
     log.error({ err, scan: scan.id }, 'scan failed');
     await q(`UPDATE scans SET status = 'failed', error = $2, finished_at = now() WHERE id = $1`, [scan.id, String(err.message).slice(0, 300)]);
@@ -633,31 +635,11 @@ async function keepVideo(file) {
     .catch((err) => step('error', { error: `video copy: ${err.message}` }));
 }
 
+// How sure the server is of each book: src/confidence.js.
+export { confidenceOf };
+
 // dry: an admin's test upload (/admin/trace): read and looked up the same way, with
 // nothing saved but the trace.
-// How sure the server is of a book from a shelf scan, 0–100, and the main reason; the
-// approval queue shows the surest first. From the evidence gathered for it:
-//   barcode + catalogue 95 · catalogue, reading confirmed by OCR 90 · catalogue 85 ·
-//   corrected (index / web / other frame) then found in a catalogue 75 · known to the
-//   local index only 65 · corrected by the web only 55 · OCR-confirmed reading 40 ·
-//   the vision model alone 25 · low-quality reading 15
-export function confidenceOf(item, book) {
-  const ev = item.evidence ?? [];
-  const corrected = ev.some((e) => e.stage === 'correct' && e.outcome === 'corrected');
-  const known = (prefix) => ev.some((e) => e.stage === 'correct' && e.source.startsWith(prefix) && ['corrected', 'confirmed'].includes(e.outcome));
-  if (book && item.via === 'barcode') return [95, 'barcode'];
-  // Read only from the whole shelf, no cut-out of its own spine: the reading cannot be seen to
-  // match, and such matches went wrong ("The Millionaire Next Door", "3rd Degree", Nov 2026).
-  if (book && item.via === 'vision' && !item.crop) return [45, 'catalogue_whole'];
-  if (book && !corrected) return item.verified ? [90, 'catalogue_ocr'] : [85, 'catalogue'];
-  if (book) return [75, 'corrected_catalogue'];
-  if (known('index:')) return [65, 'index'];
-  if (known('web')) return [55, 'web'];
-  if (item.quality === 'low') return [15, 'low'];
-  if (item.verified) return [40, 'ocr'];
-  return [25, 'read'];
-}
-
 export async function processScan(scan, { dry = false } = {}) {
   if (scan.source === 'cover') return processCover(scan, { dry });
   const ctx = dry ? 'trace' : 'scan';

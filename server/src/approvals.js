@@ -123,6 +123,24 @@ export async function closeIfDone(scanId) {
   );
 }
 
+// Books the server is sure of (confidence "sure", src/confidence.js) are approved without
+// the reader, when AUTO_APPROVE_SURE=1. They show in "Recent decisions", where an auto
+// approval can be undone like any other. Returns how many were approved.
+export async function autoApproveSure(scan) {
+  if (!config.autoApproveSure || !['photo', 'video'].includes(scan.source)) return 0;
+  const items = await many(
+    `SELECT i.* FROM scan_items i WHERE i.scan_id = $1 AND i.decision IS NULL AND i.confidence_why = 'sure' AND i.book_id IS NOT NULL`, [scan.id]);
+  if (!items.length) return 0;
+  const user = await one('SELECT * FROM users WHERE id = $1', [scan.user_id]);
+  for (const item of items) {
+    const r = await approveItem(item, scan, user);
+    await q(`UPDATE scan_items SET decision = 'approved', decided_at = now(), outcome = 'kept', auto = true, sighting_id = $2, my_book_id = $3 WHERE id = $1`,
+      [item.id, r?.sighting?.id ?? null, r?.myBookId ?? null]);
+  }
+  await closeIfDone(scan.id);
+  return items.length;
+}
+
 // Shelf photos at a library: a book the photos found that is already on that library's
 // shelf needs no approval: it is marked seen now (unless this reader reported it seen in
 // the last few hours). Returns how many were confirmed.
@@ -417,7 +435,7 @@ export default async function approvalRoutes(app) {
         if (m) await db.query('DELETE FROM photos WHERE id = ANY($1)', [[m.photo_id, m.back_photo_id].filter(Boolean)]);
       }
       await db.query(
-        `UPDATE scan_items SET decision = NULL, decided_at = NULL, outcome = NULL, sighting_id = NULL, my_book_id = NULL WHERE id = $1`, [item.id]);
+        `UPDATE scan_items SET decision = NULL, decided_at = NULL, outcome = NULL, sighting_id = NULL, my_book_id = NULL, auto = false WHERE id = $1`, [item.id]);
       await db.query(`UPDATE scans SET status = 'done' WHERE id = $1 AND status = 'confirmed'`, [item.scan_id]);
     });
     const back = await one(`${ITEM_SQL} WHERE i.id = $1`, [item.id]);
