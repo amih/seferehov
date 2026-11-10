@@ -35,7 +35,13 @@ function weakIndexFix(ev) {
   });
 }
 
-const frameCount = (item, ev) => item.frames?.size
+// cropShape (scans.js): long side / short side of the spine's cut-out. A spine standing in
+// a row is cut 5–16 times as long as it is high; under 4, 4 of 8 were declined, and "sure"
+// went from 47 of 49 to 46 of 46 (Nov 2026).
+const WIDE_CROP = 4;
+const wideCrop = (item) => item.cropShape?.ratio != null && item.cropShape.ratio < WIDE_CROP;
+
+const frameCount =(item, ev) => item.frames?.size
   ?? ev.find((e) => e.stage === 'read')?.detail?.frames?.length ?? 1;
 
 export function confidenceOf(item, book) {
@@ -55,6 +61,9 @@ export function confidenceOf(item, book) {
     const spine = spineAuthor(item, ev);
     if (!spine) return [70, 'catalogue_no_author_read'];
     if (!authorsAgree(authors, [spine])) return [70, 'catalogue_author_unsure'];
+    // A short, wide cut-out is a stack of books lying flat, or two spines in one: the book
+    // is usually right but the picture is not, and readers declined it (Nov 2026).
+    if (wideCrop(item)) return [70, 'crop_wide'];
     if (item.verified && frameCount(item, ev) >= 2 && titleSimilarity(item.title ?? '', mainTitle(book.title)) >= 0.9) return [92, 'sure'];
     return item.verified ? [90, 'catalogue_ocr'] : [85, 'catalogue'];
   }

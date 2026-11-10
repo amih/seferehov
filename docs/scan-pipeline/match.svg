@@ -256,7 +256,7 @@
 <polygon fill="#ffffff" stroke="#888888" stroke-width="2" points="529.65,-82.2 0,-82.2 0,0 529.65,0 529.65,-82.2"/>
 <text xml:space="preserve" text-anchor="middle" x="264.83" y="-66.72" font-family="Helvetica,sans-Serif" font-size="12.50">Confidence</text>
 <text xml:space="preserve" text-anchor="middle" x="264.83" y="-51.72" font-family="Helvetica,sans-Serif" font-size="12.50">95 barcode · 92 sure (author agrees, seen twice) · 90 match + OCR · 85 match</text>
-<text xml:space="preserve" text-anchor="middle" x="264.83" y="-36.72" font-family="Helvetica,sans-Serif" font-size="12.50">75 corrected then matched · 70 author not read / unlike · 65 index only</text>
+<text xml:space="preserve" text-anchor="middle" x="264.83" y="-36.72" font-family="Helvetica,sans-Serif" font-size="12.50">75 corrected then matched · 70 author not read / unlike / wide cut&#45;out · 65 index only</text>
 <text xml:space="preserve" text-anchor="middle" x="264.83" y="-21.72" font-family="Helvetica,sans-Serif" font-size="12.50">60 record without author / weak index fix · 55 web only · 50 record by another author</text>
 <text xml:space="preserve" text-anchor="middle" x="264.83" y="-6.72" font-family="Helvetica,sans-Serif" font-size="12.50">45 whole&#45;photo match · 40 OCR reading only · 30 web found nothing · 25 model only · 15 low</text>
 </g>

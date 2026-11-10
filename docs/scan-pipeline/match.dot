@@ -16,7 +16,7 @@ digraph match {
   busy  [label="Engines\nbusy?", shape=diamond, fillcolor="#fff7c2", color="#c9a400"];
   held  [label="Held → background web queue\n(faster at night)"];
   rules [label="Drop rules (shelf): same book twice in the scan;\nno match + cut-out ≥ 25% blank;\nwhole-photo reading with no cut-out of its own"];
-  conf  [label="Confidence\n95 barcode · 92 sure (author agrees, seen twice) · 90 match + OCR · 85 match\n75 corrected then matched · 70 author not read / unlike · 65 index only\n60 record without author / weak index fix · 55 web only · 50 record by another author\n45 whole-photo match · 40 OCR reading only · 30 web found nothing · 25 model only · 15 low", shape=box, style="filled,bold", fillcolor="#ffffff"];
+  conf  [label="Confidence\n95 barcode · 92 sure (author agrees, seen twice) · 90 match + OCR · 85 match\n75 corrected then matched · 70 author not read / unlike / wide cut-out · 65 index only\n60 record without author / weak index fix · 55 web only · 50 record by another author\n45 whole-photo match · 40 OCR reading only · 30 web found nothing · 25 model only · 15 low", shape=box, style="filled,bold", fillcolor="#ffffff"];
 
   in -> blurb; blurb -> drop1 [label="yes"]; blurb -> swap [label="no"];
   swap -> hasisbn; hasisbn -> isbn [label="yes"]; hasisbn -> title [label="no"];

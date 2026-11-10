@@ -621,7 +621,10 @@ export async function readCrop(img, w, h, title = null, { split = false, ownLine
       const texts = await Promise.all([best, other].map((x) => tesseractWords(x.jpeg).catch(() => '')));
       const fit = texts.map((t) => Math.max(overlap(want.title, t), 0.8 * overlap(want.author, t)));
       upright = { angles: [best.angle, other.angle], tesseract: texts, fit: fit.map((f) => Math.round(f * 100) / 100) };
-      if (fit[1] - fit[0] >= UPRIGHT_MARGIN) {
+      // Tesseract's text must really hold the title or author the other way up: its garbage
+      // from upright print matched "Nehls" 0.4 by chance and turned "The Indoctrinated Brain"
+      // over (8 Nov 2026). All right turns in the traces fitted 0.55 or more.
+      if (fit[1] - fit[0] >= UPRIGHT_MARGIN && fit[1] >= ORIENT_OK) {
         // Turned over, the reading stays the one Tesseract confirmed (the model may have read
         // a neighbour the other way up); Surya's lines are matched to it again.
         upright.turned = true;

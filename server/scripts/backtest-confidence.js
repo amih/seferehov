@@ -4,7 +4,10 @@
 //   node --env-file=../.env scripts/backtest-confidence.js           → table by confidence
 //   node --env-file=../.env scripts/backtest-confidence.js --list    → plus every declined book
 import { many, pool } from '../src/db.js';
+import { join } from 'node:path';
+import sharp from 'sharp';
 import { confidenceOf } from '../src/confidence.js';
+import { config } from '../src/config.js';
 
 const list = process.argv.includes('--list');
 const rows = await many(`
@@ -23,6 +26,9 @@ for (const r of rows) {
   const read = evidence.find((e) => e.stage === 'read');
   const item = { title: r.title, author: r.author, via: r.via, quality: r.quality, crop: r.crop_path, evidence,
     verified: read?.detail?.verified ?? (read?.source === 'vision+ocr' ? true : undefined) };
+  // The cut-out's shape, from the saved picture (same proportions as the cut itself).
+  const meta = r.crop_path ? await sharp(join(config.uploadDir, r.crop_path)).metadata().catch(() => null) : null;
+  item.cropShape = meta ? { ratio: Math.max(meta.width, meta.height) / Math.min(meta.width, meta.height) } : null;
   const book = r.book_id ? { id: r.book_id, title: r.book_title, authors: r.book_authors ?? [] } : null;
   const [c, why] = confidenceOf(item, book);
   const key = `${String(c).padStart(2)} ${why}`;

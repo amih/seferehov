@@ -44,3 +44,8 @@ test('no spine cut-out: whole shelf only', () => {
   const item = spine('The Millionaire Next Door', 'Thomas J. Stanley', [read('The Millionaire Next Door', 'Thomas J. Stanley')], { crop: null });
   assert.deepEqual(confidenceOf(item, { title: 'The Millionaire Next Door', authors: ['Thomas J. Stanley'] }), [45, 'catalogue_whole']);
 });
+
+test('a short, wide cut-out (books lying flat) is never sure', () => {
+  const item = spine('מכתב שנשכח', 'קתרין יוז', [read('מכתב שנשכח', 'קתרין יוז', [1, 2])], { cropShape: { ratio: 2.7, blank: 0 } });
+  assert.deepEqual(confidenceOf(item, { title: 'מכתב שנשכח', authors: ['קתרין יוז'] }), [70, 'crop_wide']);
+});

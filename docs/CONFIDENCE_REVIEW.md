@@ -53,7 +53,7 @@ Changed in `server/src/confidence.js`:
 | **92 sure** | found in a catalogue, reading confirmed by OCR, the spine's author agrees with the record, the title read is the record's main title, seen in 2+ photos |
 | 90 | the same, seen in one photo |
 | 75 | corrected, then found in a catalogue by the corrected author |
-| 70 | found, but no author was read, or the spine's author is unlike the record's |
+| 70 | found, but no author was read, or the spine's author is unlike the record's, or the cut-out is short and wide (section 5) |
 | 60 | found, but the record names no author; or an index correction replaced the author by an unlike name |
 | 50 | found, but the record is by another author |
 | 30 | OCR-confirmed reading, and the web search found nothing (was 40) |
@@ -84,7 +84,26 @@ The rest is unchanged. The same author checks now apply when the background web 
 
 **Caveat:** the rules were found on these same decisions, so the next batches are the real test. Running `backtest-confidence.js` after each batch shows whether "sure" stays near 96%.
 
-# 5. Auto-approval
+# 5. Why the right books were declined
+
+The reader's answers for the 9 "right book, declined anyway" books:
+
+| Book | Reason |
+|---|---|
+| מה לאכול, הדודה מיכל, מכתב שנשכח, האיש שצפה בנשים, אני הורג | Right book, bad cut-out (four of them lie flat in a stack) |
+| משחקי הרעב | Two books in one cut-out; it should have been cut into two |
+| Deep Work | Barely in view, half hidden: a thin sliver of a cut-out |
+| The Indoctrinated Brain | Right book, cut-out turned upside down |
+| אבוא בם אודה-יה | Declined by mistake (it was in one scan only, so not a duplicate) |
+
+So the reader also judges the picture, not only the book. Two changes follow:
+
+- **Short, wide cut-outs** (under 4 times as long as high) are flat stacks or two spines. They now score 70 (`crop_wide`), and never "sure". With this rule, 164 books score 75 or more with **96% agreement**, and **all 46 "sure" books were approved**. Moving the line to 5 or 6 keeps "sure" at 100% but moves more approved books down.
+- **The upside-down cut-out** was a bug. Both ways up were read alike, so Tesseract decided. Its garbage from the upright strip ("Semmens (one HW.)…") matched the author "Nehls" 0.4 by chance, and the strip was turned over. Now Tesseract turns a strip only when its text fits the title or author 0.5 or more. In the traces, every right turn fitted 0.55 or more, and the 3 wrong-looking ones 0.22–0.4.
+
+Not caught yet: a cut-out that runs off the end of the spine (מה לאכול) or a thin sliver (Deep Work). Both are still 90.
+
+# 6. Auto-approval
 
 Books scored "sure" can be approved without the reader: set `AUTO_APPROVE_SURE=1` in `.env`. It is **off** for now.
 
@@ -92,9 +111,9 @@ Books scored "sure" can be approved without the reader: set `AUTO_APPROVE_SURE=1
 - **Undoing:** auto-approved books appear in "Recent decisions" and can be undone for 14 days.
 - **Statistics:** an undone auto approval is cleared (`auto = false`), so the statistics count the reader's own decision.
 
-# 6. Next steps
+# 7. Next steps
 
-1. Tell me why the 9 right-looking books were declined. If there is a rule behind it (for example, books lying flat on top of a row, or books in My books that belong to someone else), it can be added.
-2. After the next batch of approvals, run the backtest again. If "sure" stays at 95% or more, turn on auto-approval.
-3. Possibly later: also auto-approve "corrected, then found" (75). It was 98% here, but it rests on corrections, so it needs more data first.
-4. The wrong cut-out ("Call It Sleep") comes from a book that the whole-photo reading found and the spine search then located. Checking the cut-out's OCR against the record would catch it.
+1. After the next batch of approvals, run the backtest again. If "sure" stays at 95% or more, turn on auto-approval.
+2. Possibly later: also auto-approve "corrected, then found" (75). It was 98% here, but it rests on corrections, so it needs more data first.
+3. The wrong cut-out ("Call It Sleep") comes from a book that the whole-photo reading found and the spine search then located. Checking the cut-out's OCR against the record would catch it.
+4. Books lying flat are read right but cut badly. Cutting flat stacks one book at a time, and splitting two spines in one cut-out, would let them be approved.
