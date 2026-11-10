@@ -1,0 +1,48 @@
+digraph overview {
+  rankdir=TB;
+#include
+  subgraph cluster_phone {
+    label="PHONE (the Seferehov web app)"; style="rounded"; color="#3f9a3f"; fontcolor="#3f9a3f";
+    cam1 [label="A1  'Photograph books' camera\nshelves and covers mixed\ncheck every 150 ms: motion, sharpness, light\n< 5 ms per check (est.)"];
+    cam2 [label="A2  Covers camera\none book, or many books in a row"];
+    mnet [label="MobileNet-V3 small (MediaPipe) + 2 tiny Seferehov layers\n'is a book filling the view?'  'are all 4 corners in view?'\nfile 4.1 MB + 9.6 MB runtime · ~30–60 MB RAM (est.)\ntens of ms per frame (est.)", fillcolor="#c9f0c9", color="#3f9a3f"];
+    bc   [label="Barcode reader\nbrowser BarcodeDetector or ZXing (WebAssembly)\nISBN / Danacode, every 600 ms", fillcolor="#c9f0c9", color="#3f9a3f"];
+    shot [label="Take the photo when the phone is steady\nkeep the sharpest frame, +1–2 extra frames"];
+    box  [label="Outbox on the phone (IndexedDB)\nstore and forward, retries 15 s → 15 min\nsent even with the app closed"];
+    cam1 -> shot; cam2 -> mnet -> shot; cam1 -> bc [style=dashed]; cam2 -> bc [style=dashed]; bc -> shot [style=dashed, label="code"];
+    shot -> box;
+  }
+  subgraph cluster_server {
+    label="HOME SERVER (Threadripper 48 threads, 251 GB RAM, GTX 1080 8 GB)"; style="rounded"; color="#d9822b"; fontcolor="#d9822b";
+    hasbc [label="Barcode read\non the phone?", shape=diamond, fillcolor="#fff7c2", color="#c9a400"];
+    fast  [label="Look up the ISBN at once\n(< 1 s – 10 s)"];
+    sess  [label="B1–B2  Capture session\nwait for the end of the session\n(5 s after the last photo, up to 3 min)"];
+    sort  [label="B3  Sort the photos\nQwen3-VL: SHELF / FRONT / BACK / OTHER?\n~5 s per photo (measured)\npair front + back covers, group shelf photos", fillcolor="#ffd8a8", color="#d9822b"];
+    kind  [label="What is it?", shape=diamond, fillcolor="#fff7c2", color="#c9a400"];
+    drop0 [label="OTHER: dropped", shape=box, style="filled,bold", fillcolor="#ffffff"];
+    worker[label="B6  Scan worker: one scan at a time\ncovers first, readers take turns"];
+    shelf [label="SHELF PIPELINE (section 2)\n3.5–7 min per shelf photo"];
+    cover [label="COVER PIPELINE (section 3)\n~1 min per book"];
+    match [label="MATCHING CHAIN (section 4)\ncatalogues, local index, web"];
+    conf  [label="Confidence score 15–95\nfrom the evidence"];
+  }
+  subgraph cluster_after {
+    label="AFTER READING"; style="rounded"; color="#555555";
+    auto  [label="Auto-confirmed\n(already listed on this shelf)", shape=box, style="filled,bold", fillcolor="#ffffff"];
+    merged[label="Merged into a duplicate", shape=box, style="filled,bold", fillcolor="#ffffff"];
+    aside [label="Set aside ('skipped')\njunk readings, shelf only", shape=box, style="filled,bold", fillcolor="#ffffff"];
+    queue [label="Approval queue (/queue)\nsurest first: green ≥ 75, yellow 45–74, red < 45", shape=box, style="filled,bold", fillcolor="#ffffff"];
+    human [label="A PERSON approves, corrects or declines\n~8 s per decision (measured)", fillcolor="#fffbe6", color="#c9a400"];
+    later [label="Background, when the GPU is idle (section 5)\nweb-search queue, cover text, genres, sharpening"];
+  }
+  box -> hasbc;
+  hasbc -> fast [label="yes (A2)"]; hasbc -> worker [label="no, A2 covers"]; hasbc -> sess [label="A1 photos"];
+  fast -> queue [label="found"]; fast -> worker [label="not found:\nsend the photos"];
+  sess -> sort -> kind;
+  kind -> worker [label="shelf run / front+back book"]; kind -> drop0 [label="other"];
+  worker -> shelf [label="shelf"]; worker -> cover [label="cover"];
+  shelf -> match; cover -> match; match -> conf;
+  conf -> auto; conf -> merged; conf -> aside; conf -> queue;
+  queue -> human; human -> later [style=dashed, label="approved covers"];
+  match -> later [style=dashed, label="search engines busy:\nheld for later"];
+}

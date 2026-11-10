@@ -1,0 +1,12 @@
+digraph legend {
+  rankdir=LR;
+#include
+  code  [label="Plain code\n(no model)"];
+  gpu   [label="Model on the server GPU\n(GTX 1080 8 GB, via the GPU queue)", fillcolor="#ffd8a8", color="#d9822b"];
+  cpu   [label="Model / OCR on the\nserver CPU", fillcolor="#cfe3ff", color="#4a7cc9"];
+  phone [label="Model on the phone", fillcolor="#c9f0c9", color="#3f9a3f"];
+  ext   [label="Outside service\n(catalogue, web search)", fillcolor="#ead7ff", color="#8a5cc9", style="rounded,filled,dashed"];
+  dec   [label="Branch", shape=diamond, fillcolor="#fff7c2", color="#c9a400"];
+  out   [label="Where the book ends up", shape=box, style="filled,bold", fillcolor="#ffffff", color="#222222"];
+  code -> gpu -> cpu -> phone -> ext -> dec -> out [style=invis];
+}

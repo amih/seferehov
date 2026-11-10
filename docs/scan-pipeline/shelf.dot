@@ -1,0 +1,36 @@
+digraph shelf {
+  rankdir=TB;
+#include
+  in    [label="Shelf photos of one scan (up to 8 places)"];
+  blur  [label="1  Sharpness check (Laplacian)\nskip blurry photos if a sharp one exists\n< 1 s"];
+  isbn  [label="2a  ISBN barcodes in the photo\nZXing (WebAssembly), EAN-13 978/979\n< 1 s", fillcolor="#cfe3ff", color="#4a7cc9"];
+  det   [label="2b-1  Find every spine\nQwen3-VL: boxes as JSON (photo at 1280 px, ≤ 1500 tokens)\n15–40 s (est. from 29 tokens/s)\n≤ 30 boxes", fillcolor="#ffd8a8", color="#d9822b"];
+  tilt  [label="2b-2  Lean of each box (edge angles)\n< 1 s"];
+  lean  [label="Boxes lean\n> 5°?", shape=diamond, fillcolor="#fff7c2", color="#c9a400"];
+  rot   [label="Turn the photo for each lean group (≤ 3)\nand find spines again with Qwen3-VL\n+15–40 s per group (est.)", fillcolor="#ffd8a8", color="#d9822b"];
+  subgraph cluster_crop {
+    label="2b-4  For every cut-out (≤ 60), both ways up at once"; style="rounded,dashed"; color="#888888";
+    vlm  [label="Qwen3-VL reads title | author\n(≤ 80 tokens) ×2 ways\n~3–6 s (est.)", fillcolor="#ffd8a8", color="#d9822b"];
+    sur  [label="Surya OCR reads the lines ×2 ways\n~9 s median, 30 s slow (measured)\nCPU, ~19 GB RAM resident", fillcolor="#cfe3ff", color="#4a7cc9"];
+    agree[label="Do the model and OCR\nagree? (score)", shape=diamond, fillcolor="#fff7c2", color="#c9a400"];
+    tie  [label="Both ways\nagree (tie)?", shape=diamond, fillcolor="#fff7c2", color="#c9a400"];
+    tess [label="Tesseract reads both ways\n(bad at upside-down print, so it\nbreaks the tie) · 1–3 s (est.)", fillcolor="#cfe3ff", color="#4a7cc9"];
+    split[label="Score < 0.5: maybe 2 spines\nsplit by OCR line groups (≤ 4)\nre-read each band with Qwen3-VL", fillcolor="#ffd8a8", color="#d9822b"];
+    cut  [label="Final straight cut at the spine's own angle\nneighbours painted grey · < 1 s"];
+    nosur[label="Surya down: model's\nreading alone (unverified)"];
+  }
+  whole [label="2b-6  Whole-photo read\nQwen3-VL lists TITLE | AUTHOR | ISBN\n(≤ 1200 tokens, streamed) · 15–45 s (est.)", fillcolor="#ffd8a8", color="#d9822b"];
+  find  [label="2b-7  For books only the whole read saw:\nQwen3-VL locates the spine by title,\ncut + check as above (Surya must confirm the title)", fillcolor="#ffd8a8", color="#d9822b"];
+  merge [label="3  Merge across photos\nsame spine = contains / 0.8 alike\nmost frequent spelling wins, best cut-out kept"];
+  out   [label="→ MATCHING CHAIN (section 4), per book", shape=box, style="filled,bold", fillcolor="#ffffff"];
+
+  in -> blur -> isbn -> det -> tilt -> lean;
+  lean -> rot [label="yes"]; lean -> vlm [label="no"]; rot -> vlm;
+  lean -> sur [style=invis];
+  vlm -> agree; sur -> agree;
+  agree -> tie [label="≥ 0.5"]; agree -> split [label="< 0.5"];
+  tie -> tess [label="yes"]; tie -> cut [label="no"]; tess -> cut; split -> cut [label="band agrees"];
+  sur -> nosur [style=dashed, label="service down"];
+  cut -> whole; nosur -> whole; whole -> find -> merge -> out;
+  isbn -> out [style=dashed, label="ISBN found"];
+}

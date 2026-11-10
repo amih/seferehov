@@ -1,0 +1,30 @@
+digraph match {
+  rankdir=TB;
+#include
+  in    [label="One reading: title, author (+ ISBN), from a spine or a cover"];
+  blurb [label="Sales phrase?\n('best seller'…)", shape=diamond, fillcolor="#fff7c2", color="#c9a400"];
+  drop1 [label="Dropped", shape=box, style="filled,bold", fillcolor="#ffffff"];
+  swap  [label="Title is a known author's name and the 'author' isn't?\n(local list of 300,000 names, ≥ 2-word titles)\n→ swap them · < 0.1 s"];
+  hasisbn[label="ISBN?", shape=diamond, fillcolor="#fff7c2", color="#c9a400"];
+  isbn  [label="ISBN lookup\nown books → local Open Library copy (38.6 M) →\nNational Library → publishers → Google Books → Open Library"];
+  title [label="Title lookup, up to 3 spellings\nown books → local Open Library copy → National Library (Hebrew)\n→ Google Books → Open Library search\nauthor on the spine is a VETO · score ≥ 0.7\nno audiobooks / ebooks"];
+  ext1  [label="Catalogues\nOpen Library, National Library of Israel,\nGoogle Books, publishers' sites\n8–15 s timeouts", fillcolor="#ead7ff", color="#8a5cc9", style="rounded,filled,dashed"];
+  found [label="Match?", shape=diamond, fillcolor="#fff7c2", color="#c9a400"];
+  idx   [label="Local title index (Postgres trigram)\n225,000 titles: Hebrew Wikipedia, Wikidata,\nBen-Yehuda, publishers' lists · < 1 s"];
+  found2[label="Index\nmatch?", shape=diamond, fillcolor="#fff7c2", color="#c9a400"];
+  web   [label="Web check: one engine in turn\n(Brave, Yandex, Yahoo; Mwmbl) via SearXNG\n≤ 15/hour, ≥ 10 s apart · then Qwen3-VL picks\ntitle + author from the results (must be in them)", fillcolor="#ffd8a8", color="#d9822b"];
+  busy  [label="Engines\nbusy?", shape=diamond, fillcolor="#fff7c2", color="#c9a400"];
+  held  [label="Held → background web queue\n(faster at night)"];
+  rules [label="Drop rules (shelf): same book twice in the scan;\nno match + cut-out ≥ 25% blank;\nwhole-photo reading with no cut-out of its own"];
+  conf  [label="Confidence\n95 barcode · 90 match + OCR · 85 match · 75 corrected then matched\n65 index only · 55 web only · 45 whole-photo match\n40 OCR reading only · 25 model only · 15 low quality", shape=box, style="filled,bold", fillcolor="#ffffff"];
+
+  in -> blurb; blurb -> drop1 [label="yes"]; blurb -> swap [label="no"];
+  swap -> hasisbn; hasisbn -> isbn [label="yes"]; hasisbn -> title [label="no"];
+  isbn -> ext1 [style=dashed, dir=both]; title -> ext1 [style=dashed, dir=both];
+  isbn -> found; title -> found;
+  found -> rules [label="yes"]; found -> idx [label="no"];
+  idx -> found2; found2 -> title [label="yes: corrected,\nlook up again"]; found2 -> busy [label="no"];
+  busy -> held [label="yes"]; busy -> web [label="no"];
+  web -> title [label="correction found"]; web -> rules [label="nothing"];
+  rules -> conf;
+}

@@ -1,0 +1,32 @@
+digraph cover {
+  rankdir=TB;
+#include
+  in    [label="Front + back photos (+ extra frames)"];
+  only  [label="Back only?", shape=diamond, fillcolor="#fff7c2", color="#c9a400"];
+  swapb [label="Read the back in the front's place"];
+  crn   [label="B5  Find the 4 cover corners\nQwen3-VL (1280 px) · ~5 s (measured)", fillcolor="#ffd8a8", color="#d9822b"];
+  cv    [label="OpenCV outline near those corners\nis it book-shaped? → straighten (warp)\n< 1 s", fillcolor="#cfe3ff", color="#4a7cc9"];
+  front [label="Read the front cover\nQwen3-VL at 0°, then 90°/270° if needed\n(≤ 120 tokens) · ~5–10 s (est.)", fillcolor="#ffd8a8", color="#d9822b"];
+  heb   [label="Hebrew, or\nnothing read?", shape=diamond, fillcolor="#fff7c2", color="#c9a400"];
+  surya [label="Surya OCR on the front + each extra frame\nlines vote (hspell breaks ties)\n~9 s per image (measured)", fillcolor="#cfe3ff", color="#4a7cc9"];
+  big   [label="3 biggest lines enlarged and re-read\nSurya + Tesseract vote", fillcolor="#cfe3ff", color="#4a7cc9"];
+  pick  [label="Qwen3-VL picks which OCR lines are\ntitle and author (≤ 160 tokens)", fillcolor="#ffd8a8", color="#d9822b"];
+  rec   [label="Reconcile: model's words replaced by the\nOCR line they resemble; hspell spelling"];
+  latin [label="Latin only: keep the\nmodel's reading"];
+  codes [label="Codes: ZXing barcodes (back, front, extras)\nelse Qwen3-VL reads the printed ISBN/Danacode\n+ codes found in the Surya text", fillcolor="#cfe3ff", color="#4a7cc9"];
+  hascode [label="Code found?", shape=diamond, fillcolor="#fff7c2", color="#c9a400"];
+  isbn  [label="ISBN lookup (section 4)\nprinted Danacode has no check digit:\ncover text and author must agree"];
+  title [label="Title lookup + corrections (section 4)\nswap → local index → web check"];
+  af    [label="Not found?\nAUTHOR FIRST: the author's titles from the\nlocal index / National Library / one web search\nkeep the one printed on the front cover"];
+  blurb [label="Still nothing? BACK-COVER SENTENCE:\nsearch 6–8 known words in quotes;\nQwen3-VL names the book; ≥ 2 results must agree", fillcolor="#ffd8a8", color="#d9822b"];
+  out   [label="One queue item, front + back pictures\nconfidence 85 / 75 / 65 / 55 / 40 / 15\nheld web steps → background queue", shape=box, style="filled,bold", fillcolor="#ffffff"];
+
+  in -> only; only -> swapb [label="yes"]; only -> crn [label="no"]; swapb -> crn;
+  crn -> cv -> front -> heb;
+  heb -> surya [label="yes"]; heb -> latin [label="no"];
+  surya -> big -> pick -> rec -> codes; latin -> codes;
+  codes -> hascode; hascode -> isbn [label="yes"]; hascode -> title [label="no"];
+  isbn -> out [label="found"]; isbn -> title [label="not found"];
+  title -> out [label="found"]; title -> af [label="no"];
+  af -> out [label="found"]; af -> blurb [label="no"]; blurb -> out;
+}

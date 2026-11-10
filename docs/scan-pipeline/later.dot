@@ -1,0 +1,12 @@
+digraph later {
+  rankdir=LR;
+#include
+  idle  [label="Every 90 s, only while\nno scan is waiting"];
+  text  [label="Cover text of approved covers\nQwen3-VL transcribes (≤ 1200 tokens)\nHebrew: Surya / Tesseract + hspell instead", fillcolor="#ffd8a8", color="#d9822b"];
+  gen   [label="Genre (1 of 23) + missing language\nQwen3-VL, 20 tokens · ~1 s per book", fillcolor="#ffd8a8", color="#d9822b"];
+  esr   [label="Sharpen pictures for display\nReal-ESRGAN x4plus (Vulkan), via gpu-lease\n~20 s per cover · ~1–2 GB GPU (est.)", fillcolor="#ffd8a8", color="#d9822b"];
+  wq    [label="Web-search queue: 1 job / 3 min by day,\n/ 1 min at night (00–07); jobs start after 20 min\nweb → author → blurb, then catalogue lookup", fillcolor="#ffd8a8", color="#d9822b"];
+  upd   [label="Updates the queue item if the\nreader hasn't decided yet (75 / 55)", shape=box, style="filled,bold", fillcolor="#ffffff"];
+  idle -> text -> gen -> esr;
+  wq -> upd;
+}
