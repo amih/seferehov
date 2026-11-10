@@ -115,8 +115,10 @@ export async function absorbOsmTwin(locationId) {
 export default async function duplicateRoutes(app) {
   const trusted = { preHandler: requireUser(2) };
 
+  // The candidates come from the daily job (jobs.js); pairs since decided are left out.
   app.get('/api/duplicates', trusted, async () => {
-    const pairs = await many(PAIRS_SQL);
+    const pairs = await many(`SELECT a, b, why FROM dupe_candidates d WHERE kind = 'book'
+      AND NOT EXISTS (SELECT 1 FROM book_not_dupes n WHERE n.a = d.a AND n.b = d.b) ORDER BY a DESC LIMIT 30`);
     const books = new Map((await many(BOOK_SQL, [[...new Set(pairs.flatMap((p) => [p.a, p.b]))]])).map((b) => [b.id, b]));
     return { pairs: pairs.map((p) => ({ why: p.why, a: books.get(p.a), b: books.get(p.b) })).filter((p) => p.a && p.b) };
   });
@@ -127,15 +129,19 @@ export default async function duplicateRoutes(app) {
     if (different) {
       const [x, y] = [Number(a), Number(b)].sort((m, n) => m - n);
       await q('INSERT INTO book_not_dupes(a, b, by_user) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [x, y, req.user.id]);
+      await q(`DELETE FROM dupe_candidates WHERE kind = 'book' AND a = $1 AND b = $2`, [x, y]);
       return { ok: true };
     }
     if (!Number(keep) || !Number(drop) || Number(keep) === Number(drop)) return reply.code(400).send({ error: 'bad_request' });
     await mergeBooks(Number(keep), Number(drop));
+    await q(`DELETE FROM dupe_candidates WHERE kind = 'book' AND $1 IN (a, b)`, [Number(drop)]);
     return { ok: true };
   });
 
   app.get('/api/duplicate-locations', trusted, async () => {
-    const pairs = await many(LOCATION_PAIRS_SQL);
+    const pairs = await many(`SELECT d.a, d.b, d.metres FROM dupe_candidates d JOIN locations x ON x.id = d.a JOIN locations y ON y.id = d.b
+      WHERE d.kind = 'library' AND x.status IN ('approved', 'pending') AND y.status IN ('approved', 'pending')
+        AND NOT EXISTS (SELECT 1 FROM location_not_dupes n WHERE n.a = d.a AND n.b = d.b) ORDER BY d.metres LIMIT 30`);
     const locs = new Map((await many(LOCATION_SQL, [[...new Set(pairs.flatMap((p) => [p.a, p.b]))]])).map((l) => [l.id, l]));
     return { pairs: pairs.map((p) => ({ metres: p.metres, a: locs.get(p.a), b: locs.get(p.b) })).filter((p) => p.a && p.b) };
   });
@@ -147,10 +153,12 @@ export default async function duplicateRoutes(app) {
       const [x, y] = [Number(a), Number(b)].sort((m, n) => m - n);
       if (!x || !y || x === y) return reply.code(400).send({ error: 'bad_request' });
       await q('INSERT INTO location_not_dupes(a, b, by_user) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [x, y, req.user.id]);
+      await q(`DELETE FROM dupe_candidates WHERE kind = 'library' AND a = $1 AND b = $2`, [x, y]);
       return { ok: true };
     }
     if (!Number(keep) || !Number(drop) || Number(keep) === Number(drop)) return reply.code(400).send({ error: 'bad_request' });
     await mergeLocations(Number(keep), Number(drop));
+    await q(`DELETE FROM dupe_candidates WHERE kind = 'library' AND $1 IN (a, b)`, [Number(drop)]);
     return { ok: true };
   });
 

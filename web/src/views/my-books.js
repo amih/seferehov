@@ -1,6 +1,7 @@
 import { api, getMe } from '../api.js';
 import { navigate } from '../nav.js';
 import { esc, timeAgo, toast, confirmDialog } from '../ui.js';
+import { queueCount } from '../todo.js';
 import { t, lang } from '../i18n.js';
 import { placeBook, ownerLabel } from '../mybooks.js';
 import { captureShots, captureFiles } from '../capture.js';
@@ -23,7 +24,7 @@ export default async function myBooksView(root) {
   </section>`;
 
   const $ = (s) => root.querySelector(s);
-  api('/api/queue/count').then((c) => {
+  queueCount().then((c) => {
     if (c.open + c.later) $('#queue-link').innerHTML = `<a class="btn" href="/queue">📥 ${t('queue.link', c)}</a>`;
   }).catch(() => {});
 
@@ -135,7 +136,7 @@ export async function addMyBooksView(root) {
     <p id="queue-link"></p>
   </section>`;
   const queueLink = root.querySelector('#queue-link');
-  const showQueue = () => api('/api/queue/count').then((c) => {
+  const showQueue = () => queueCount({ maxAge: 0 }).then((c) => {
     queueLink.innerHTML = c.open + c.later || c.processing ? `<a class="btn" href="/queue">📥 ${t('queue.link', c)}</a>` : '';
   }).catch(() => {});
   showQueue();

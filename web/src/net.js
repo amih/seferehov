@@ -38,14 +38,17 @@ function show(next) {
   scheduleProbe();
 }
 
+// A random spread, so that after a server restart the phones don't all ask at once; and no
+// asking while the app is out of view (it asks once it is back).
 function scheduleProbe() {
   clearTimeout(probe);
   probe = setTimeout(async () => {
+    if (document.hidden) { document.addEventListener('visibilitychange', scheduleProbe, { once: true }); return; }
     const ok = await ping();
     if (ok) { show('ok'); return; }
     probeEvery = Math.min(probeEvery * 1.5, 60_000);
     scheduleProbe();
-  }, probeEvery);
+  }, probeEvery * (0.5 + Math.random()));
 }
 
 // /api/health skips the phone's copies (sw.js), so only the real server answers it.

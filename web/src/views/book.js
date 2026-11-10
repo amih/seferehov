@@ -87,7 +87,15 @@ function renderBook(root, { b, photos, texts, again, back, status, actions, wire
   // Covers and the back-cover text are still being looked up: show this, then look again.
   const path = location.pathname;
   let timer = null;
-  if (b.details_pending) timer = setTimeout(() => { if (location.pathname === path) again(); }, 6000);
+  // 6 s, then longer, at most 8 times; not while the app is out of view.
+  const looks = root._detailLooks?.path === path ? root._detailLooks.n : 0;
+  root._detailLooks = { path, n: looks + 1 };
+  if (b.details_pending && looks < 8) {
+    timer = setTimeout(function look() {
+      if (document.hidden) { document.addEventListener('visibilitychange', look, { once: true }); return; }
+      if (location.pathname === path) again();
+    }, Math.min(6000 * 1.5 ** looks, 60_000));
+  } else if (!b.details_pending) root._detailLooks = null;
 
   // Front and back covers photographed by readers say it all: then only those two.
   // Otherwise a cover photo taken at the shelf first, then the covers found online (so a

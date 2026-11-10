@@ -110,7 +110,9 @@ export function kick(ms = 0) {
   }
 }
 
-const backoff = (tries) => Math.min(15 * 60_000, 15_000 * 2 ** Math.min(tries, 6));
+// Longer after each failed try (15 s → 15 min), with a random spread so that after an
+// outage the phones don't all send again at the same moment.
+const backoff = (tries) => Math.min(15 * 60_000, 15_000 * 2 ** Math.min(tries, 6)) * (0.75 + Math.random() * 0.5);
 
 // One pass over the waiting uploads, oldest first. Returns the answers sent in this pass,
 // and whether some still wait for a reason that should clear by itself (for the service worker).
@@ -189,7 +191,9 @@ async function sendOne(it) {
     await set(it.id, next, store);
     return sendOne(next);
   }
-  if (res.status === 401) { await save(it, { ...problem(it, 'signin', 401), hold: false }); emit(it.id, 'waiting', 'signin'); return { stop: true, retryIn: 60_000 }; }
+  // Signed out: a whole photo upload every minute would be wasted until the reader signs in
+  // again; the wait grows like any other (the app sends at once when it starts again).
+  if (res.status === 401) { await save(it, { ...problem(it, 'signin', 401), tries: (it.tries ?? 0) + 1, hold: false }); emit(it.id, 'waiting', 'signin'); return { stop: true, retryIn: backoff(it.tries ?? 0) }; }
   if (res.status === 426) { await save(it, { ...problem(it, 'update', 426), hold: false }); emit(it.id, 'waiting', 'server'); return { stop: true, retryIn: 60_000 }; }
   if (res.status >= 500 || res.status === 429 || res.status === 408 || res.status === 425) {
     await save(it, { ...problem(it, 'server', res.status), tries: (it.tries ?? 0) + 1, nextAt: Date.now() + backoff(it.tries ?? 0), hold: false });

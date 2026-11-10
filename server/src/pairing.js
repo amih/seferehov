@@ -121,14 +121,22 @@ export async function sortShots(shots, { log = () => {} } = {}) {
 
   // Fronts and backs: every pair near each other in the session is scored, best first.
   const fronts = groups.filter((g) => g.kind === 'front'), backs = groups.filter((g) => g.kind === 'back');
+  // A generous reader may photograph several fronts in a row and then their backs in the
+  // same order (F1 F2 F3 B1 B2 B3). So a front and a back are candidates however far apart,
+  // and the k-th front of the session next to the k-th back counts like photos side by side
+  // (a cover the model took for the other side shifts the count by one: one off counts less).
+  const byStart = (gs) => [...gs].sort((x, y) => x.idx[0] - y.idx[0]);
+  const rankF = new Map(byStart(fronts).map((g, k) => [g, k])), rankB = new Map(byStart(backs).map((g, k) => [g, k]));
   const cands = [];
   for (const F of fronts) for (const B of backs) {
     const gap = Math.min(...F.idx.flatMap((a) => B.idx.map((b) => Math.abs(a - b))));
-    if (gap > WINDOW) continue;
+    const off = Math.abs(rankF.get(F) - rankB.get(B));
     const near = F.idx.flatMap((a) => B.idx.map((b) => [a, b])).sort((p, q) => Math.abs(p[0] - p[1]) - Math.abs(q[0] - q[1]))[0];
     const col = Math.max(...F.idx.flatMap((a) => B.idx.map((b) => colourLike(info[a].f.hist, info[b].f.hist))));
-    let score = col + 1 / gap * 0.6 + (near[1] > near[0] ? 0.15 : 0); // a back usually comes after its front
-    cands.push({ F, B, gap, col, score });
+    const close = Math.max(gap <= WINDOW ? 0.6 / gap : 0, off === 0 ? 0.6 : off === 1 ? 0.3 : 0);
+    if (!close) continue;
+    const score = col + close + (near[1] > near[0] ? 0.15 : 0); // a back usually comes after its front
+    cands.push({ F, B, gap, off, col, score });
   }
   cands.sort((a, b) => b.score - a.score);
   // The vision model looks at the likely pairs (both covers side by side).
@@ -160,6 +168,6 @@ export async function sortShots(shots, { log = () => {} } = {}) {
   if (run.length) shelves.push(run);
   const other = info.filter((x) => x.kind === 'other').map((x) => x.i);
   await step('shots-paired', { note: 'covers grouped (same side twice) and paired (front + back)', books: books.map(({ front, back, codes }) => ({ front, back, codes })), shelves, other,
-    pairs: cands.map((c) => ({ front: c.F.idx, back: c.B.idx, gap: c.gap, colour: +c.col.toFixed(2), same: c.same ?? null, score: +c.score.toFixed(2) })) });
+    pairs: cands.map((c) => ({ front: c.F.idx, back: c.B.idx, gap: c.gap, off: c.off, colour: +c.col.toFixed(2), same: c.same ?? null, score: +c.score.toFixed(2) })) });
   return { shelves, books, other, info: info.map(({ f, ...x }) => x) };
 }

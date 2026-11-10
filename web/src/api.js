@@ -10,6 +10,7 @@ export class ApiError extends Error {
   }
 }
 
+let seenVersion = null;
 export async function api(path, { method = 'GET', json, form, timeout = null } = {}) {
   const headers = { 'X-App-Build': String(__APP_BUILD__) };
   let body;
@@ -22,8 +23,9 @@ export async function api(path, { method = 'GET', json, form, timeout = null } =
   const res = await watched(fetch(path, { method, headers, body, credentials: 'same-origin', signal: AbortSignal.timeout(timeout ?? (form ? 300_000 : 20_000)) }), { upload: !!form })
     .catch((err) => { throw err.name === 'TimeoutError' ? new TypeError('timeout') : err; });
 
+  // A new version on the server: checked once per version seen, not on every reply.
   const serverVersion = res.headers.get('X-App-Version');
-  if (serverVersion && serverVersion !== __APP_VERSION__) checkForUpdate();
+  if (serverVersion && serverVersion !== __APP_VERSION__ && serverVersion !== seenVersion) { seenVersion = serverVersion; checkForUpdate(); }
   if (res.status === 426) {
     checkForUpdate();
     maybeApply();

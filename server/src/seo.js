@@ -48,13 +48,15 @@ function indexHtml() {
 }
 
 const cache = new Map();
-async function cached(key, fn) {
+// Concurrent requests for one page share the computation in flight.
+function cached(key, fn) {
   const hit = cache.get(key);
-  if (hit && hit.at > Date.now() - CACHE_MS) return hit.value;
-  const value = await fn();
-  cache.set(key, { at: Date.now(), value });
+  if (hit && hit.at > Date.now() - CACHE_MS) return hit.p;
+  const p = Promise.resolve().then(fn);
+  cache.set(key, { at: Date.now(), p });
+  p.catch(() => cache.delete(key));
   if (cache.size > 2000) cache.delete(cache.keys().next().value);
-  return value;
+  return p;
 }
 
 // A page changed (a review was written): drop its cached copies, in both languages.

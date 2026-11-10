@@ -1,6 +1,7 @@
 import { api, getMe } from '../api.js';
 import { navigate } from '../nav.js';
 import { esc, toast, getPosition, timeAgo } from '../ui.js';
+import { queueCount } from '../todo.js';
 import { t } from '../i18n.js';
 import { bookShots, coversTarget } from '../shots.js';
 
@@ -54,7 +55,7 @@ export default async function shelfCheckView(root, [code]) {
             <p class="muted small">${t('check.last_seen', { when: timeAgo(b.last_seen) })}</p>
             <p class="row"><button class="btn small" data-kind="seen">${t('loc.still')}</button><button class="btn small danger" data-kind="gone">✕ ${t('loc.gone')}</button></p></div></li>`).join('')}</ul>`
         : `<p class="note">${t('check.missing_none')}</p>`}`;
-    const c = await api('/api/queue/count').catch(() => null);
+    const c = await queueCount().catch(() => null);
     if (c?.open + c?.later) body.insertAdjacentHTML('beforeend', `<p><a class="btn" href="/queue">📥 ${t('queue.link', c)}</a></p>`);
     if (d.processing && !stopped) timer = setTimeout(show, 8000);
   }

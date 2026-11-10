@@ -9,7 +9,7 @@ import { bookDetails } from './details.js';
 import { lookupIsbn, upsertBook, findOrCreateBook } from './books.js';
 import { readForm } from './multipart.js';
 import { initialStatus, locationStatus, award, awardSighting } from './moderation.js';
-import { parseLatLon, shortCode } from './util.js';
+import { parseLatLon, shortCode, memo } from './util.js';
 import { checkPrivate } from './privacy.js';
 import { waitingFor } from './finder.js';
 
@@ -39,11 +39,14 @@ const PRESENT_BOOKS_SQL = `
      ORDER BY s.book_id, s.created_at DESC
   )
   SELECT b.id, b.isbn13, b.title, b.authors, b.year, b.cover_url, l.created_at AS last_seen,
-         -- No picture of its front at all, or no back cover (its blurb, its barcode): readers
-         -- at the library are asked to photograph both.
-         (COALESCE(b.cover_url, b.front_url) IS NULL AND NOT EXISTS (SELECT 1 FROM sightings x WHERE x.book_id = b.id AND x.photo_id IS NOT NULL AND x.status = 'approved'))
-           OR (b.back_url IS NULL AND NOT EXISTS (SELECT 1 FROM sightings x WHERE x.book_id = b.id AND x.back_photo_id IS NOT NULL AND x.status = 'approved')
-                                  AND NOT EXISTS (SELECT 1 FROM my_books m WHERE m.book_id = b.id AND m.back_photo_id IS NOT NULL)) AS needs_covers
+         -- Readers at the library are asked to photograph both covers (048_covers_and_indexes.sql).
+         book_lacks_front(b.id) OR book_lacks_back(b.id) AS needs_covers,
+         -- Days readers photographed this library's shelves since, without this book among
+         -- what was read: maybe taken, maybe only on a shelf they didn't photograph.
+         (SELECT count(DISTINCT date_trunc('day', sc.created_at))::int FROM scans sc
+           WHERE sc.location_id = $1 AND sc.source IN ('photo', 'video') AND sc.status IN ('done', 'confirmed') AND sc.created_at > l.created_at
+             AND NOT EXISTS (SELECT 1 FROM scan_items i JOIN scans s2 ON s2.id = i.scan_id
+                              WHERE i.book_id = b.id AND s2.location_id = $1 AND date_trunc('day', s2.created_at) = date_trunc('day', sc.created_at))) AS missed_visits
     FROM latest l JOIN books b ON b.id = l.book_id
    WHERE l.kind IN ('seen', 'added')
    ORDER BY l.created_at DESC`;
@@ -94,17 +97,28 @@ export default async function locationRoutes(app) {
     }
     const clamp = (n, lim) => Math.min(Math.max(n, -lim), lim);
     const [w, s, e, n] = [clamp(bbox[0], 180), clamp(bbox[1], 90), clamp(bbox[2], 180), clamp(bbox[3], 90)];
+    // The approved libraries are the same for everyone: kept a minute (the phone asks for
+    // areas snapped to a grid, so many ask for the same). A signed-in reader's own libraries
+    // still waiting for approval are added on top.
+    const shared = await memo(`map:${req.query.bbox}:${req.query.zoom}:${req.query.px}`, 60_000, () => mapArea(w, s, e, n, null, req.query));
+    if (!req.user) { reply.header('Cache-Control', 'public, max-age=60'); return shared; }
+    if (shared.clusters) return shared;
+    const own = await mapArea(w, s, e, n, req.user.id, req.query, true);
+    return own.locations.length ? { ...shared, locations: [...shared.locations, ...own.locations] } : shared;
+  });
+
+  async function mapArea(w, s, e, n, userId, query, ownPending = false) {
     const where = `l.geom::geometry && ST_MakeEnvelope($1, $2, $3, $4, 4326)
-          AND (l.status = 'approved' OR (l.status = 'pending' AND l.created_by = $5))`;
-    const params = [w, s, e, n, req.user?.id ?? null];
+          AND ${ownPending ? `l.status = 'pending' AND l.created_by = $5` : `(l.status = 'approved' OR (l.status = 'pending' AND l.created_by = $5))`}`;
+    const params = [w, s, e, n, userId];
 
     // Zoomed out: one bubble per grid cell instead of thousands of pins.
-    if (Number(req.query.zoom) < CLUSTER_BELOW_ZOOM) {
+    if (!ownPending && Number(query.zoom) < CLUSTER_BELOW_ZOOM) {
       const clusters = await many(
         `SELECT count(*)::int AS n, avg(ST_Y(l.geom::geometry)) AS lat, avg(ST_X(l.geom::geometry)) AS lon
            FROM locations l WHERE ${where}
           GROUP BY ST_SnapToGrid(l.geom::geometry, $6)`,
-        [...params, Math.max(e - w, 0.01) / (Math.min(Math.max(Number(req.query.px) || 400, 200), 4000) / CELL_PX)],
+        [...params, Math.max(e - w, 0.01) / (Math.min(Math.max(Number(query.px) || 400, 200), 4000) / CELL_PX)],
       );
       return { clusters };
     }
@@ -118,7 +132,7 @@ export default async function locationRoutes(app) {
       params,
     );
     return { locations: rows, truncated: rows.length === MAP_LIMIT };
-  });
+  }
 
   app.get('/api/locations/:code', async (req, reply) => {
     const loc = await locationByCode(req.params.code);
@@ -359,8 +373,10 @@ export default async function locationRoutes(app) {
     return { sighting: s, book };
   });
 
-  app.get('/api/leaderboard', async (req) => {
+  app.get('/api/leaderboard', async (req, reply) => {
     const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 3650);
+    reply.header('Cache-Control', 'public, max-age=300');
+    return memo(`leaders:${days}`, 300_000, async () => {
     const rows = await many(
       `SELECT u.id, u.screen_name IS NOT NULL AS public, COALESCE(u.screen_name, 'Reader #' || u.id) AS name, u.avatar_path, sum(k.points)::int AS points,
               (SELECT sum(points) FROM karma_events WHERE user_id = u.id)::int AS karma
@@ -371,13 +387,32 @@ export default async function locationRoutes(app) {
     );
     for (const r of rows) { r.avatar = avatarUrl(r.avatar_path); delete r.avatar_path; }
     return { days, leaders: rows };
+    });
   });
 
-  app.get('/api/stats', async () => one(
-    `SELECT (SELECT count(*) FROM locations WHERE status = 'approved')::int AS locations,
-            (SELECT count(*) FROM books)::int AS books,
-            (SELECT count(*) FROM sightings WHERE status = 'approved')::int AS sightings`,
-  ));
+  // Libraries where help is wanted: books with no cover photos, spines no catalogue knew
+  // (from the daily job, jobs.js), nearest first when the reader's position is given.
+  app.get('/api/libraries/need-help', async (req, reply) => {
+    const p = parseLatLon(req.query.lat, req.query.lon);
+    if (!p) reply.header('Cache-Control', 'public, max-age=600');
+    const rows = await memo(p ? `need:${p.lat.toFixed(2)},${p.lon.toFixed(2)}` : 'need', 600_000, () => many(
+      `SELECT l.code, l.name, n.books, n.need_covers, n.open_spines,
+              ST_Y(l.geom::geometry) AS lat, ST_X(l.geom::geometry) AS lon,
+              ${p ? 'round(ST_Distance(l.geom, ST_MakePoint($1, $2)::geography))::int' : 'NULL::int'} AS metres
+         FROM library_needs n JOIN locations l ON l.id = n.location_id
+        WHERE l.status = 'approved' AND n.need_covers + n.open_spines >= 3
+        ORDER BY ${p ? 'metres' : 'n.need_covers + n.open_spines DESC'} LIMIT 10`, p ? [p.lon, p.lat] : []));
+    return { libraries: rows, points: { front: POINTS.coverFront, back: POINTS.coverBack, spine: POINTS.spineCovers } };
+  });
+
+  // The same for everyone: kept 5 minutes.
+  app.get('/api/stats', async (req, reply) => {
+    reply.header('Cache-Control', 'public, max-age=300');
+    return memo('stats', 300_000, () => one(
+      `SELECT (SELECT count(*) FROM locations WHERE status = 'approved')::int AS locations,
+              (SELECT count(*) FROM books)::int AS books,
+              (SELECT count(*) FROM sightings WHERE status = 'approved')::int AS sightings`));
+  });
 }
 
 export const splitAuthors = (s) => String(s ?? '').split(/[,;&]/).map((a) => a.trim()).filter(Boolean).slice(0, 10);

@@ -26,7 +26,7 @@ import shelfCheckView from './views/shelf-check.js';
 import editLocationView from './views/edit-location.js';
 import pageView from './views/page.js';
 import { initMenu } from './menu.js';
-import { todoCounts } from './todo.js';
+import { todoCounts, queueCount, queueCountStale } from './todo.js';
 import './install.js';
 import searchView from './views/search.js';
 import myBooksView, { addMyBooksView } from './views/my-books.js';
@@ -132,6 +132,7 @@ const showBadge = () => {
 };
 let wasWaiting = 0;
 onQueueChange((c) => {
+  if (c.waiting < wasWaiting) queueCountStale(); // a photo reached the server: a scan is being read
   if (wasWaiting && !c.waiting && !c.failed) toast(t('queue.uploaded', { n: wasWaiting }));
   wasWaiting = c.waiting; queued = c; showBadge();
 });
@@ -172,7 +173,7 @@ async function showReadyBanner(me, path) {
   document.getElementById('ready')?.remove();
   if (!me || path === '/' || path === '/queue' || path.startsWith('/scan/') || /\/(add|barcode)$/.test(path)) return;
   let c;
-  try { c = await api('/api/queue/count'); } catch { return; }
+  try { c = await queueCount(); } catch { return; }
   if (!c.open || document.getElementById('ready')) return;
   const a = document.createElement('a');
   a.id = 'ready';
@@ -192,11 +193,11 @@ translateShell();
 
 initMenu();
 
-// The menu's to-do count, fetched ahead so the menu shows it at once (todo.js keeps it).
-const refreshTodo = () => getMe().then((u) => u && todoCounts(u.id)).catch(() => {});
-refreshTodo();
-setInterval(() => { if (!document.hidden) refreshTodo(); }, 60_000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshTodo(); });
+// The menu's to-do count, fetched ahead so the menu shows it at once (todo.js keeps it):
+// when the app starts, and when it comes back into view after 10 minutes or more. No timer.
+const refreshTodo = (maxAge) => getMe().then((u) => u && todoCounts(u.id, { maxAge })).catch(() => {});
+refreshTodo(0);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshTodo(600_000); });
 
 // Errors on the phone go to the server log (a few per page load at most).
 let reported = 0;

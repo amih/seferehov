@@ -1,6 +1,7 @@
 import { api, getMe } from '../api.js';
 import { navigate } from '../nav.js';
 import { esc, getPosition, noStringsNote, toast } from '../ui.js';
+import { queueCount } from '../todo.js';
 import { t, lang } from '../i18n.js';
 import { placeBook } from '../mybooks.js';
 import { captureShots, captureFiles } from '../capture.js';
@@ -46,7 +47,7 @@ export default async function addBookView(root, [code], query) {
   const queueLink = root.querySelector('#queue-link');
   async function showQueue() {
     try {
-      const c = await api('/api/queue/count');
+      const c = await queueCount({ maxAge: 0 });
       queueLink.innerHTML = `${photos ? `<a class="btn primary" href="/l/${code}/check">🔎 ${t('check.title')}</a> ` : ''}${
         c.open + c.later || c.processing ? `<a class="btn" href="/queue">📥 ${t('queue.link', c)}</a>` : ''}`;
     } catch { /* offline */ }

@@ -16,8 +16,8 @@ import { enqueueWeb } from './webqueue.js';
 import { cropCover } from './covers.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors } from './locations.js';
 import { initialStatus, awardSighting } from './moderation.js';
-import { parseLatLon, normalizeIsbn, normalizeDanacode } from './util.js';
-import { mergeDuplicates, autoConfirmKnown, autoApproveSure, closeIfDone } from './approvals.js';
+import { parseLatLon, normalizeIsbn, normalizeDanacode, memo } from './util.js';
+import { mergeDuplicates, skipMisreads, autoConfirmKnown, autoApproveSure, closeIfDone } from './approvals.js';
 import { absorbOsmTwin } from './duplicates.js';
 import { ownerOf } from './mybooks.js';
 import { sendMail } from './mail.js';
@@ -345,6 +345,7 @@ async function runScan(scan) {
     await q(`UPDATE scans SET status = 'done', finished_at = now() WHERE id = $1`, [scan.id]);
     await autoConfirmKnown(scan).catch((err) => log.warn({ err, scan: scan.id }, 'auto confirm'));
     await mergeDuplicates(scan.user_id).catch((err) => log.warn({ err, scan: scan.id }, 'merge duplicates'));
+    await skipMisreads(scan.user_id).catch((err) => log.warn({ err, scan: scan.id }, 'skip misreads'));
     await autoApproveSure(scan).catch((err) => log.warn({ err, scan: scan.id }, 'auto approve'));
     if (scan.location_id) {
       const twin = await absorbOsmTwin(scan.location_id).catch((err) => log.warn({ err, scan: scan.id }, 'osm twin'));
@@ -377,8 +378,9 @@ async function minutesPer() {
 }
 
 // For every scan waiting or being read: how many are read before it, and about how many
-// minutes until it is done.
-export async function queueWaits() {
+// minutes until it is done. The same for everyone: worked out at most every 5 s.
+export const queueWaits = () => memo('queue-waits', 5000, computeWaits);
+async function computeWaits() {
   const per = await minutesPer();
   const cost = (s) => (s.source === 'photo' ? per.photo * Math.max(1, s.media?.length ?? 1) : per[s.source] ?? per.photo);
   const running = await many(`SELECT id, source, media, started_at FROM scans WHERE status = 'processing'`);
@@ -623,10 +625,40 @@ async function processCover(scan, { dry = false } = {}) {
     await q(`INSERT INTO scan_item_evidence(item_id, stage, source, outcome, before, after, detail) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [item.id, e.stage, e.source, e.outcome, e.before ?? null, e.after ?? null, JSON.stringify(e.detail ?? {})]).catch(() => {});
   }
+  await coverForSpine(scan, item.id, { title, author: readAuthor ?? book?.authors?.[0] ?? null, book })
+    .catch((err) => log.warn({ err, scan: scan.id }, 'cover for spine'));
   if (!book && heldSteps.length) {
     await enqueueWeb(item.id, 'cover', heldSteps, { title: read.title, author: read.author, text: frontPrinted.slice(0, 4000), blurb: blurbHeld?.slice(0, 4000) ?? null })
       .catch((err) => log.warn({ err }, 'web queue'));
   }
+}
+
+// Covers photographed at a library with the main camera may be of a spine read there before
+// that no catalogue knew. The reader doesn't say which: the covers' title (and author) is
+// matched against the library's open spines, and the spine is folded into the covers' item,
+// so its finder gets points when the covers are approved (approvals.js awardSpine).
+const SPINE_FOR_COVER = 0.75;
+async function coverForSpine(scan, itemId, { title, author, book }) {
+  if (!scan.location_id || scan.replaces_item) return;
+  const spines = await many(
+    `SELECT i.id, i.scan_id, i.title, i.author FROM scan_items i JOIN scans s ON s.id = i.scan_id
+      WHERE s.location_id = $1 AND s.source IN ('photo', 'video') AND i.book_id IS NULL
+        AND (i.decision IS NULL OR i.decision IN ('later', 'skipped')) AND i.created_at > now() - interval '60 days'`,
+    [scan.location_id]);
+  const names = [title, book?.title].filter(Boolean);
+  let best = null;
+  for (const sp of spines) {
+    const like = Math.max(...names.map((n) => titleSimilarity(sp.title ?? '', n)));
+    if (author && sp.author && !authorsAgree([author], [sp.author])) continue;
+    if (like >= SPINE_FOR_COVER && (!best || like > best.like)) best = { ...sp, like };
+  }
+  await step('cover-for-spine', { note: `the library's open spines no catalogue knew (${spines.length}); the one whose title is ${SPINE_FOR_COVER * 100}%+ like the covers', author not someone else's, is folded in`,
+    spine: best && { id: best.id, title: best.title, author: best.author, like: Math.round(best.like * 100) / 100 } });
+  if (!best) return;
+  await q('UPDATE scans SET replaces_item = $2 WHERE id = $1', [scan.id, best.id]);
+  scan.replaces_item = best.id;
+  await q(`UPDATE scan_items SET decision = 'merged', merged_into = $2, decided_at = now() WHERE id = $1`, [best.id, itemId]);
+  await closeIfDone(best.scan_id);
 }
 
 // The video as sent, for the trace view: re-encoded small, without its metadata (GPS).

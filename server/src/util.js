@@ -62,3 +62,16 @@ export function parseLatLon(lat, lon) {
   if (!Number.isFinite(la) || !Number.isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180) return null;
   return { lat: la, lon: lo };
 }
+
+// The same answer for everyone, kept `ms` per key; concurrent callers share one computation
+// in flight (a value-only cache lets every request recompute together when it expires).
+const memos = new Map();
+export function memo(key, ms, fn) {
+  const hit = memos.get(key);
+  if (hit && hit.at > Date.now() - ms) return hit.p;
+  const p = Promise.resolve().then(fn);
+  memos.set(key, { at: Date.now(), p });
+  p.catch(() => memos.delete(key));
+  if (memos.size > 2000) memos.delete(memos.keys().next().value);
+  return p;
+}

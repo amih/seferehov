@@ -55,7 +55,7 @@ The home server has a 48-thread Threadripper, 251 GB of RAM and one **NVIDIA GTX
 
 **Branch 1: was a barcode read on the phone?** Then the ISBN is looked up at once, and a book that is found goes straight to the queue. Otherwise the photos go on.
 
-**Branch 2: sorting (A1 photos only).** When a camera session ends, Qwen3-VL labels each photo: SHELF, FRONT cover, BACK cover or OTHER. That takes about 5 s per photo (measured). Plain code then pairs fronts with backs by colour and picture likeness, and asks the model "same book?" only when unsure. Shelf photos taken in a row become one shelf scan. OTHER photos are dropped.
+**Branch 2: sorting (A1 photos only).** When a camera session ends, Qwen3-VL labels each photo: SHELF, FRONT cover, BACK cover or OTHER. That takes about 5 s per photo (measured). Plain code then pairs fronts with backs by colour and picture likeness, and asks the model "same book?" only when unsure. A front and a back are paired when taken one after the other, or when a reader photographed several fronts and then their backs in the same order (the k-th front with the k-th back). Covers taken at a library whose title matches a spine read there that no catalogue knew are linked to that spine. Shelf photos taken in a row become one shelf scan. OTHER photos are dropped.
 
 **The scan worker** reads one scan at a time. Covers go first, because a person is usually waiting for them. Readers take turns, so one person's long session doesn't block everyone else.
 

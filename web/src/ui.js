@@ -135,3 +135,14 @@ document.addEventListener('click', (e) => {
   try { localStorage.setItem(NOTE_KEY, '1'); } catch { /* session only */ }
   b.closest('.nostrings')?.remove();
 });
+
+// Waits before looking again at something the server is still working on: longer each time
+// (from `base` up to `max`), with a random spread so phones don't ask in step, and not at
+// all while the app is out of view (it looks once it is back).
+export function nextLook(n, { base = 8000, max = 60_000 } = {}) {
+  const ms = Math.min(base * 1.5 ** n, max) * (0.8 + Math.random() * 0.4);
+  return new Promise((resolve) => {
+    const go = () => { if (document.hidden) document.addEventListener('visibilitychange', go, { once: true }); else resolve(); };
+    setTimeout(go, ms);
+  });
+}

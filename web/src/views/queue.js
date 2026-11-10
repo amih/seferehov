@@ -1,9 +1,9 @@
 import { api, getMe } from '../api.js';
 import { navigate } from '../nav.js';
-import { esc, toast } from '../ui.js';
+import { esc, toast, nextLook } from '../ui.js';
 import { t } from '../i18n.js';
 import { ownerLabel } from '../mybooks.js';
-import { todoTabs } from '../todo.js';
+import { todoTabs, setQueueCount } from '../todo.js';
 import { stepsBox, attachSteps } from '../steps.js';
 
 // Books waiting for the reader's approval, from all their photos, videos and barcodes:
@@ -38,18 +38,25 @@ export default async function queueView(root) {
     items = r.items;
     processing = r.processing;
     counts = r;
+    setQueueCount(r);
   }
   const next = () => items.find((i) => !skipped.has(i.id));
 
   // While photos are still being read, look again now and then: new books take their place by confidence.
-  function poll() {
-    clearTimeout(timer);
-    if (stopped || !counts.processing) return;
-    timer = setTimeout(async () => {
-      try { await load(); } catch { /* offline: try later */ }
-      if (current) renderHeader(); else render();
-      poll();
-    }, 8000);
+  // 8 s at first, then longer (up to a minute), only while in view; back to 8 s when new
+  // books came in.
+  let looks = 0;
+  async function poll() {
+    if (stopped || !counts.processing || timer) return;
+    timer = true;
+    await nextLook(looks++);
+    timer = null;
+    if (stopped) return;
+    const before = items.length;
+    try { await load(); } catch { /* offline: try later */ }
+    if (items.length !== before) looks = 0;
+    if (current) renderHeader(); else render();
+    poll();
   }
 
   function header() {
@@ -66,6 +73,7 @@ export default async function queueView(root) {
     try {
       const r = await api(`/api/queue/${id}/undo`, { method: 'POST', json: {} });
       counts = { ...counts, ...r };
+      setQueueCount(counts);
       items = [r.item, ...items.filter((x) => x.id !== r.item.id)];
       skipped.delete(r.item.id);
       lastDone = null;
@@ -173,6 +181,7 @@ export default async function queueView(root) {
       try {
         const r = await api(`/api/queue/${i.id}`, { method: 'POST', json: body });
         counts = { ...counts, ...r };
+        setQueueCount(counts);
         if (decision === 'later') skipped.add(i.id);
         else items = items.filter((x) => x.id !== i.id);
         lastDone = decision === 'later' ? null : { id: i.id, decision, title: body.title || shownTitle };
@@ -193,5 +202,5 @@ export default async function queueView(root) {
   }
   render();
   poll();
-  return () => { stopped = true; clearTimeout(timer); };
+  return () => { stopped = true; };
 }

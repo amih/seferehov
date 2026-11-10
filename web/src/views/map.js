@@ -72,12 +72,22 @@ export default function mapView(root, _, query) {
   const shown = new Map();
   let me = null;
 
+  // The area asked for is widened to a grid of half map tiles at this zoom (and the width to
+  // 200 px steps), so that small moves ask for nothing new and many phones ask for the same
+  // areas, which the server and the network can then answer from their copies.
+  let lastAsked = null;
   async function load() {
     const b = map.getBounds();
-    const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map((n) => n.toFixed(5)).join(',');
     const zoom = map.getZoom();
+    const step = 360 / 2 ** Math.floor(zoom) / 2;
+    const snap = (n, round, lim) => Math.min(Math.max(round(n / step) * step, -lim), lim).toFixed(5);
+    const bbox = [snap(b.getWest(), Math.floor, 180), snap(b.getSouth(), Math.floor, 90), snap(b.getEast(), Math.ceil, 180), snap(b.getNorth(), Math.ceil, 90)].join(',');
+    const px = Math.max(200, Math.round(map.getSize().x / 200) * 200);
+    const ask = `/api/locations?bbox=${bbox}&zoom=${Math.floor(zoom)}&px=${px}`;
+    if (ask === lastAsked) return;
+    lastAsked = ask;
     try {
-      const { locations, clusters } = await api(`/api/locations?bbox=${bbox}&zoom=${zoom}&px=${map.getSize().x}`);
+      const { locations, clusters } = await api(ask);
       if (zoom !== map.getZoom()) return; // a newer load is coming
       bubbles.clearLayers();
       if (clusters) {
@@ -100,7 +110,7 @@ export default function mapView(root, _, query) {
         cluster.addLayer(m);
         shown.set(l.code, m);
       }
-    } catch { /* offline: keep what is shown */ }
+    } catch { lastAsked = null; /* offline: keep what is shown */ }
   }
 
   let timer;

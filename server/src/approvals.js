@@ -8,7 +8,6 @@ import { missingParts } from './details.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors, PRESENT_BOOKS_SQL } from './locations.js';
 import { initialStatus, awardSighting, award } from './moderation.js';
 import { POINTS } from './config.js';
-import { PAIRS_SQL, LOCATION_PAIRS_SQL } from './duplicates.js';
 import { parseLatLon } from './util.js';
 import { readForm } from './multipart.js';
 import { normTitle, titleSimilarity } from './vision.js';
@@ -77,6 +76,8 @@ export async function approveItem(item, scan, user, { title, author } = {}) {
       [user.id, book.id, photoId, backPhotoId, scan.owner, scan.friend_name]);
     return { sighting: null, myBookId: mine.id, book, edited };
   }
+  // Did these covers fill a gap? The first photo of a book's front or back earns points.
+  const lacked = covers ? await one('SELECT book_lacks_front($1) AS front, book_lacks_back($1) AS back', [book.id]) : null;
   const loc = await one('SELECT id, status FROM locations WHERE id = $1', [scan.location_id]);
   const far = scan.distance_m == null || scan.distance_m > config.maxReportDistanceM;
   const status = loc.status === 'approved' ? initialStatus(user, { far }) : 'pending';
@@ -89,6 +90,8 @@ export async function approveItem(item, scan, user, { title, author } = {}) {
     if (status === 'approved') {
       await awardSighting(db, { userId: user.id, locationId: scan.location_id, bookId: book.id, kind: scan.kind, sightingId: s.id });
       if (scan.replaces_item) await awardSpine(db, scan, user.id, s.id);
+      if (lacked?.front && photoId) await award(db, { userId: user.id, points: POINTS.coverFront, reason: 'cover_front', refType: 'sighting', refId: s.id });
+      if (lacked?.back && backPhotoId) await award(db, { userId: user.id, points: POINTS.coverBack, reason: 'cover_back', refType: 'sighting', refId: s.id });
       await db.query('UPDATE locations SET last_checked_at = now() WHERE id = $1', [scan.location_id]);
     }
     return s;
@@ -297,10 +300,22 @@ export async function mergeDuplicates(userId) {
 }
 
 // Pairs of books that may be the same: slow to find, so counted at most every 10 minutes.
-let dupes = { at: 0, n: 0 };
-async function duplicateCount() {
-  if (dupes.at < Date.now() - 600_000) dupes = { at: Date.now(), n: (await many(PAIRS_SQL)).length };
-  return dupes.n;
+// The same numbers for every trusted reader: read from the daily job's results (jobs.js)
+// and kept here a minute, one query in flight at a time.
+let shared = null;
+function sharedCounts() {
+  if (shared && shared.at > Date.now() - 60_000) return shared.p;
+  const p = one(
+    `SELECT (SELECT count(*) FROM locations WHERE status = 'pending')
+          + (SELECT count(*) FROM sightings s JOIN locations l ON l.id = s.location_id WHERE s.status = 'pending' AND l.status = 'approved')
+          + (SELECT count(*) FROM location_edits WHERE status = 'pending') AS review,
+            (SELECT count(*) FROM dupe_candidates d WHERE kind = 'book' AND NOT EXISTS (SELECT 1 FROM book_not_dupes n WHERE n.a = d.a AND n.b = d.b)) AS duplicates,
+            (SELECT count(*) FROM dupe_candidates d WHERE kind = 'library' AND NOT EXISTS (SELECT 1 FROM location_not_dupes n WHERE n.a = d.a AND n.b = d.b)) AS libraries,
+            (SELECT count(*) FROM photos WHERE ocr_status = 'review') AS texts`)
+    .then((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, Number(v)])));
+  shared = { at: Date.now(), p };
+  p.catch(() => { shared = null; });
+  return p;
 }
 
 export default async function approvalRoutes(app) {
@@ -312,21 +327,17 @@ export default async function approvalRoutes(app) {
     const r = { mine: c.open + c.later, processing: c.processing };
     if (req.user.trust_level >= 1) r.fixes = await fixesToVote(req.user);
     if (req.user.trust_level >= 2) {
-      r.review = (await one(
-        `SELECT (SELECT count(*) FROM locations WHERE status = 'pending')
-              + (SELECT count(*) FROM sightings s JOIN locations l ON l.id = s.location_id WHERE s.status = 'pending' AND l.status = 'approved')
-              + (SELECT count(*) FROM location_edits WHERE status = 'pending') AS n`)).n * 1;
-      r.duplicates = await duplicateCount();
-      r.libraries = (await many(LOCATION_PAIRS_SQL)).length;
+      const g = await sharedCounts();
+      Object.assign(r, { review: g.review, duplicates: g.duplicates, libraries: g.libraries });
+      if (req.user.trust_level >= 3) r.texts = g.texts;
     }
-    if (req.user.trust_level >= 3) r.texts = (await one(`SELECT count(*)::int AS n FROM photos WHERE ocr_status = 'review'`)).n;
     return r;
   });
 
   // Undecided books first, the surest first (oldest first among equals), then the ones set aside for later.
+  // Reads only: misreads are set aside and duplicates merged once, when a scan finishes
+  // (scans.js runScan), not on every visit or poll of this list.
   app.get('/api/queue', { preHandler: requireUser() }, async (req) => {
-    await skipMisreads(req.user.id);
-    await mergeDuplicates(req.user.id);
     const items = await many(
       `${ITEM_SQL}
         WHERE s.user_id = $1 AND s.status = 'done' AND (i.decision IS NULL OR i.decision = 'later')
