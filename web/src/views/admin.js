@@ -8,7 +8,7 @@ import { todoTabs } from '../todo.js';
 // For the admin only (English): the public pages search engines see, cover texts that
 // wait for a check, readers' reviews (to hide one), how the app is used (counts) with
 // Matomo's visitor numbers, and the readers one by one.
-const TABS = [['pages', 'Search pages'], ['texts', 'Cover texts'], ['reviews', 'Reviews'], ['stats', 'Activity'], ['readers', 'Readers'], ['camera', 'Camera']];
+const TABS = [['pages', 'Search pages'], ['texts', 'Cover texts'], ['reviews', 'Reviews'], ['stats', 'Activity'], ['readers', 'Readers'], ['camera', 'Camera'], ['queue', 'Queue']];
 
 export default async function adminView(root) {
   const me = await getMe();
@@ -195,6 +195,23 @@ export default async function adminView(root) {
       ${a.topPlaces.length ? `<h2>Busiest towns</h2>${table(['Town', 'Reports'], a.topPlaces.map((p) => [`<a href="/p/${p.id}-${p.slug}">${esc(p.name)}</a>`, n(p.n)]))}` : ''}`;
   }
 
+  // The scan queue: how long new shelf photos would wait, and (when it is long) the email
+  // that tells waiting readers so. Sent only from here; the server emails the admins when
+  // the wait passes the alert line.
+  async function queueTab() {
+    const d = await api('/api/admin/busy');
+    const mins = (m) => (m < 90 ? `${Math.round(m)} min` : `${(m / 60).toFixed(1)} h`);
+    return `<p>Shelf photos sent now would be read in about <b>${mins(d.maxMins)}</b>: ${n(d.photos)} photos from ${n(d.readers)} readers wait.
+      You get an email when this passes ${d.alertHours} h${d.spell ? ` (a long queue since ${day(d.spell.since)})` : ''}.</p>
+      ${d.tell.length ? `<h2>Readers waiting an hour or more, not told yet (${d.tell.length})</h2>
+        ${table(['Reader', 'Photos', 'Ready in about', 'Language'], d.tell.map((r) => [esc(r.who), n(r.photos), mins(r.mins), r.lang]))}
+        <h2>The email (English; Hebrew readers get the same in Hebrew)</h2>
+        <div class="card"><p><b>${esc(d.preview.subject)}</b></p><p style="white-space:pre-line">${esc(d.preview.body)}</p></div>
+        <p><button class="btn primary" data-busy-tell>✉️ Send to ${d.tell.length} ${d.tell.length === 1 ? 'reader' : 'readers'}</button></p>`
+        : '<p class="note">Nobody waits an hour or more without having been told.</p>'}
+      ${d.told ? `<p class="muted small">${n(d.told)} waiting scans were already told.</p>` : ''}`;
+  }
+
   async function show() {
     root.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.k === tab));
     body.innerHTML = '<p class="muted">Loading…</p>';
@@ -203,6 +220,7 @@ export default async function adminView(root) {
       if (tab === 'reviews') { body.innerHTML = await reviews(); return; }
       if (tab === 'readers') { body.innerHTML = await readersTab(); return; }
       if (tab === 'camera') { body.innerHTML = await camera(); return; }
+      if (tab === 'queue') { body.innerHTML = await queueTab(); return; }
       data ??= await api('/api/admin/overview');
       body.innerHTML = tab === 'stats' ? stats() : pages();
     } catch (e) {
@@ -230,6 +248,13 @@ export default async function adminView(root) {
   }
 
   body.addEventListener('click', async (e) => {
+    const bt = e.target.closest('[data-busy-tell]');
+    if (bt) {
+      if (!await confirmDialog('Email these readers that their photos wait longer than usual?', 'Send')) return;
+      bt.disabled = true;
+      await api('/api/admin/busy/tell', { method: 'POST', json: {} }).then((r) => { toast(`${r.sent} sent`); show(); }, (err) => { toast(err.message); bt.disabled = false; });
+      return;
+    }
     const act = e.target.closest('[data-activity]');
     if (act) { toggleActivity(act); return; }
     const rf = e.target.closest('[data-revert-fixes]');

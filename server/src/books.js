@@ -4,6 +4,7 @@ import { one, many, q } from './db.js';
 import { normalizeIsbn, normalizeDanacode } from './util.js';
 import { normTitle, titleSimilarity } from './vision.js';
 import { config } from './config.js';
+import { politeFetch } from './polite.js';
 
 const UA = 'Seferehov/0.1 (https://seferehov.com)';
 
@@ -74,8 +75,14 @@ async function withLookup(info, fn) {
   return { ...result, lookupId: store.id };
 }
 
+// politeFetch (polite.js) spaces requests per host. A host resting after a refusal counts
+// as limited (track() then leaves the source alone for an hour); a full waiting line, as an error.
 async function getJson(url) {
-  const res = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(8000) }).catch(() => null);
+  let res;
+  try { res = await politeFetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(8000) }); } catch (err) {
+    if (err.busy) { noteResponse(null, err.resting); return null; }
+    res = null;
+  }
   // Google answers 429, or 403 with a "quota"/"limit" message, when the quota is used up.
   if (res?.status === 403) {
     noteResponse(res, /quota|limit/i.test(await res.text().catch(() => '')));
@@ -125,22 +132,22 @@ async function fromGoogleBooks(isbn) {
 // $9 heb are used, and romanized ones ("Menaḥem Miśgav") only when a record has no Hebrew.
 const SRU = 'https://nli.alma.exlibrisgroup.com/view/sru/972NNL_INST';
 
-// Bursts get refused: space calls out and retry a couple of times.
-let nliChain = Promise.resolve();
+// Spaced out by politeFetch (polite.js); a server error is retried a couple of times.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-function nliFetch(url) {
-  const job = nliChain.then(async () => {
-    for (const wait of [0, 2000, 6000]) {
-      if (wait) await sleep(wait);
-      const res = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(15_000) }).catch(() => null);
-      noteResponse(res);
-      if (res?.ok) return res.text();
-      if (res && res.status < 500 && res.status !== 429) return null;
+async function nliFetch(url, throwBusy = false) {
+  for (const wait of [0, 2000, 6000]) {
+    if (wait) await sleep(wait);
+    let res = null;
+    try { res = await politeFetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(15_000) }); } catch (err) {
+      if (err.busy) { if (throwBusy) throw err; noteResponse(null, err.resting); return null; }
     }
-    return null;
-  });
-  nliChain = job.then(() => sleep(1500), () => sleep(1500));
-  return job;
+    noteResponse(res);
+    if (res?.ok) return res.text();
+    // Refused: polite.js now rests this host.
+    if (res && (res.status === 429 || res.status === 503)) { if (throwBusy) throw Object.assign(new Error('refused'), { busy: true }); return null; }
+    if (res && res.status < 500) return null;
+  }
+  return null;
 }
 
 const xmlDecode = (v) => v.replace(/&quot;/g, '"').replace(/&apos;|&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
@@ -153,8 +160,9 @@ const sub = (f, code) => f.find(([c]) => c === code)?.[1] ?? null;
 const control = (xml, tag) => xml.match(new RegExp(`<controlfield tag="${tag}">([^<]*)<`))?.[1] ?? '';
 
 // MARC XML records for a CQL query ("alma.isbn=…", "alma.title=\"…\"").
-export async function nliRecords(cql, max = 10) {
-  const xml = await nliFetch(`${SRU}?version=1.2&operation=searchRetrieve&recordSchema=marcxml&maximumRecords=${max}&query=${encodeURIComponent(cql)}`);
+// throwBusy: throw polite.js's Busy instead of answering "no records" (details.js).
+export async function nliRecords(cql, max = 10, throwBusy = false) {
+  const xml = await nliFetch(`${SRU}?version=1.2&operation=searchRetrieve&recordSchema=marcxml&maximumRecords=${max}&query=${encodeURIComponent(cql)}`, throwBusy);
   if (!xml) return [];
   return [...xml.matchAll(/<record xmlns="http:\/\/www\.loc\.gov\/MARC21\/slim">([\s\S]*?)<\/record>/g)].map((m) => m[1]);
 }

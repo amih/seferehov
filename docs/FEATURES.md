@@ -139,6 +139,7 @@ Every step is recorded as evidence and gives the item a confidence for the queue
 - Book covers go first: a cover sent while a long shelf batch is being read is read between two of its photos, within a few minutes.
 - Readers take turns: everyone's first shelf scan before anyone's second, so one big home library does not hold up everyone else.
 - The expected wait comes from the last 30 days of measured reading times.
+- **A long queue** (`server/src/busy.js`, 10 Nov 2026): every 10 minutes the server works out how long shelf photos sent now would wait. When that passes 3 hours (`BUSY_ALERT_HOURS`), the admins get one email; the next comes only after the wait has fallen under half that. On `/admin#queue` the admin sees who waits an hour or more and the email they would get, and can send it with one click: "Many people sent shelf photos today, so reading them takes longer than usual. Yours should be ready in about N hours. We will email you when they are." (in the reader's language). Each waiting scan is told at most once; nobody is emailed about it without the admin's click.
 
 ## My books (home library)
 
@@ -188,6 +189,7 @@ Every step is recorded as evidence and gives the item a confidence for the queue
   - The connection check and upload retries have a random spread (no phones in step after an outage); a signed-out phone's waiting uploads wait longer each time instead of every minute; the new-version check runs once per version seen.
   - Indexes on the columns hot requests filter on (libraries by who added them, sightings by reader, scans by library, scan items by book / sighting / my book, my books by book).
   - Not changed: the app's offline copy still includes the barcode reader (1 MB), so the camera works at a library with no signal.
+- **Polite to the catalogues** (`server/src/polite.js`, 10 Nov 2026): every request to the National Library, Open Library and Google Books, from scans and from book pages, goes through one gate per site. Requests to a site start at least 1 s apart (the National Library 1.5 s); at most 30 wait their turn and the rest are refused at once; a site that answers "too many requests" (429) or "unavailable" (503) is left alone for the time it asks, or 1, 2, 4… up to 30 minutes. A book page whose catalogues were too busy is looked up again on a later visit instead of being saved as "nothing found".
 
 - Installable from the browser (PWA), works offline, Hebrew and English.
 - Server not answering (no signal, a stale DNS address, the server down): screens never wait on a blank page. A screen shows "Loading…" until it draws; after 4 s a bar under the header says the server is slow; screens seen before open after 3.5 s from the last answer the phone kept (marked "showing what the phone saved last"); who is signed in is kept on the phone, so the menu and screens don't flip to "signed out". The bar asks the server again every few seconds (and on "Try again") and goes away on the first real answer. Sign-out deletes the kept answers.
@@ -197,6 +199,7 @@ Every step is recorded as evidence and gives the item a confidence for the queue
 ## For the admin
 
 - `/admin`: activity, readers, search pages, cover texts waiting for approval, reviews, statistics.
+- `/admin#queue`: how long new shelf photos would wait, who waits an hour or more, and the "longer than usual" email to send them (see *Reading order*).
 - `/admin#camera`: every live-camera session (shelf, covers, many books, barcode; also ones that sent no photo or whose camera would not open): phone (model · system · browser), camera resolution, time to open, photos and how each was taken, median time from ready to photo, books and front→back time, barcodes found, share of time holding, moving on, too fast, dark and glare, median speed, how it ended, and the full numbers; below, the last 100 uploads with their times on the phone, upload and server.
 - `/admin/trace`: every AI stage of every scan, step by step: the video and the frames chosen, each cut-out spine, what each model was asked and answered, and why each book was kept or dropped. Test uploads run the full pipeline without saving anything.
 - `server/scripts/eval.js`: a fixed test set for measuring reading accuracy (see below).
@@ -237,26 +240,31 @@ The same server also runs other services. The GPU is shared with other occasiona
 
 # Capacity: how many scans the GPU can handle
 
-The GPU reads one scan at a time; others wait in a queue (covers first, then readers in turn; see *Reading order*). Measured times:
+The GPU reads one scan at a time; others wait in a queue (covers first, then readers in turn; see *Reading order*). Measured times (the last five shelf scans and 40 cover scans, November 2026):
 
-| Scan | Time on the GPU |
+| Scan | Time |
 |---|---|
 | One book's front and back covers | about 1 minute |
-| One shelf photo | about 3.5–7 minutes (each spine is cut out and read twice) |
-| One batch of 8 automatic shelf photos | about 30–55 minutes |
-| A short video (no longer offered) | about 35–50 minutes |
+| One shelf photo | about 9 minutes (7–14): about 45 vision-model calls of about 9 s, and Surya OCR on the CPU taking about as long |
+| A visit to a library (about 8 shelf photos, about 8 books each) | about 75 minutes |
 
-So in 24 hours of non-stop work the GPU can read about **1,400 books by their covers**, or about **200–400 shelf photos**. That is roughly 2,500–5,000 books from shelf photos (at 10–15 books per photo).
+So in 24 hours of non-stop work, with no other program using the card, the server reads about **160 shelf photos (about 1,250 books), or about 20 library visits**. More than that every day and the queue grows without end.
 
-A home library of 300 books, photographed shelf by shelf, is about 25 photos, which is 2–3 hours of GPU time. In practice:
+| Load | What happens |
+|---|---|
+| Up to about 20 visits a day (for example 140 readers each scanning once a week) | Results within about an hour |
+| 40 visits a day, every day | The backlog grows by 20 visits a day: about 18 hours' wait on day 1, a week by day 7 |
+| An evening peak: 15 visits from 17:00 to 20:00, quiet otherwise | About 18 hours of reading; results by the next day, and the queue empties overnight |
+| A burst (an article, a TV mention): 100 readers × 8 photos in 3 hours | About 5 days to clear |
+| 300 readers × 8 photos | About 15 days; readers take turns, so everyone's first photo is read within about 45 hours |
 
-- one or two readers scanning at the same time: results within minutes to an hour;
-- five readers each scanning a home library at the same time: the last one waits 10 hours or more;
-- a reader with one book's covers waits only for the shelf photo being read now (a few minutes), not the whole batch.
+Nothing breaks under load: photos wait on the phone and on the server, the queue shows the wait, readers get an email when theirs are read, and the admin is told when the queue is long (see *Reading order*). The harm is readers waiting days and losing interest. The second limit is the web search: about 360 searches a day across the free engines, used up at full load, so unknown books get their search days later.
 
 The bottleneck is the GPU, not the CPU, memory or disk.
 
 ## Ways to grow, in order
+
+Open issues (10 Nov 2026): [#3](https://github.com/amih/seferehov/issues/3) parallel OCR, overlapped with the vision model (about 1.5–2×); [#4](https://github.com/amih/seferehov/issues/4) a quick pass when the queue is long; [#5](https://github.com/amih/seferehov/issues/5) fewer vision-model calls per spine; [#6](https://github.com/amih/seferehov/issues/6) a used RTX 3090 (estimated 3–4×). #3 and #6 together: about 100 library visits a day.
 
 1. **Smarter queue (code only, free). Done.** Covers before shelf batches, readers in turn, and an estimated wait shown in the app. This removes the worst waits but not the total: five home libraries at once still take 10+ hours in all.
 2. **Faster pipeline (code only).** Each spine is read four times now (two orientations, two readers); reading the likely orientation first and skipping the second read when both agree would cut the time considerably.

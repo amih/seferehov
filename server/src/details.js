@@ -12,16 +12,20 @@ import { one, q } from './db.js';
 import { normTitle } from './vision.js';
 import { normalizeDanacode } from './util.js';
 import { nliRecords, marcFields } from './books.js';
+import { politeFetch } from './polite.js';
 
 const UA = 'SeferehovBot/0.1 (+https://seferehov.com/bot)';
 const REFRESH_DAYS = 30;
 const inFlight = new Map();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Spaced out per host by politeFetch (polite.js). When it refuses, Busy is thrown so that
+// lookUp() leaves the book to be looked up again later instead of saving "nothing found".
 async function get(url, as = 'json', tries = [0]) {
   for (const wait of tries) {
     if (wait) await sleep(wait);
-    const res = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(12_000) }).catch(() => null);
+    const res = await politeFetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(12_000) }).catch((err) => { if (err.busy) throw err; return null; });
+    if (res && (res.status === 429 || res.status === 503)) throw Object.assign(new Error('refused'), { busy: true });
     if (res?.ok) return as === 'json' ? res.json().catch(() => null) : as === 'text' ? res.text() : Buffer.from(await res.arrayBuffer());
     if (res && res.status < 500 && res.status !== 429) return null;
   }
@@ -50,7 +54,7 @@ async function iiifImage(repId) {
 async function fromNli(book) {
   if (!book.isbn13) return null;
   for (const q of [book.isbn13, isbn10(book.isbn13)].filter(Boolean)) {
-    for (const xml of await nliRecords(`alma.isbn=${q}`, 5)) {
+    for (const xml of await nliRecords(`alma.isbn=${q}`, 5, true)) {
       if (!marcFields(xml, '020').flat().some(([, v]) => v.replace(/[^\dX]/gi, '') === q)) continue;
       const blurb = marcFields(xml, '520').map((f) => f.filter(([c]) => c === 'a').map(([, v]) => v).join(' ')).join('\n\n');
       let front = null, back = null;
@@ -107,14 +111,15 @@ async function keep(url, bookId, side) {
 async function lookUp(book) {
   const sources = isHebrew(book) ? [fromNli, fromOpenLibrary] : [fromOpenLibrary];
   const found = { front_url: null, back_url: null, description: null, sources: [] };
+  let busy = false;
   for (const src of sources) {
     let r = null;
-    try { r = await src(book); } catch { /* next source */ }
+    try { r = await src(book); } catch (err) { busy ||= !!err.busy; }
     if (!r) continue;
     let used = false;
     for (const side of ['front_url', 'back_url']) {
       if (found[side] || !r[side]) continue;
-      found[side] = await keep(r[side], book.id, side === 'front_url' ? 'front' : 'back');
+      found[side] = await keep(r[side], book.id, side === 'front_url' ? 'front' : 'back').catch((err) => { busy ||= !!err.busy; return null; });
       used ||= !!found[side];
     }
     if (!found.description && r.description) { found.description = r.description; used = true; }
@@ -124,6 +129,8 @@ async function lookUp(book) {
     if (used) found.sources.push(r.source);
     if (found.front_url && found.back_url && found.description) break;
   }
+  // A catalogue was too busy to ask: try again on a later visit, unless something was found.
+  if (busy && !found.sources.length) return book;
   return one(
     `UPDATE books SET front_url = $2, back_url = $3, details_source = $5, details_at = now(),
             description = CASE WHEN 'description' = ANY(fixed_fields) THEN description ELSE $4 END

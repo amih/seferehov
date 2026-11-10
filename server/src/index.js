@@ -33,6 +33,7 @@ import { uploadReceipts } from './receipts.js';
 import whereRoutes from './where.js';
 import { startWebQueue } from './webqueue.js';
 import { startJobs } from './jobs.js';
+import busyRoutes, { startBusyWatch } from './busy.js';
 
 const app = Fastify({ logger: true, trustProxy: '127.0.0.1', bodyLimit: 1024 * 1024 });
 
@@ -75,6 +76,7 @@ await app.register(botPage);
 await app.register(seoRoutes);
 await app.register(finderRoutes);
 await app.register(adminRoutes);
+await app.register(busyRoutes);
 await app.register(bookReviewRoutes);
 await app.register(pushRoutes);
 await app.register(fixRoutes);
@@ -117,3 +119,4 @@ startWatchNotifier(app.log);
 startOcrWorker(app.log);
 startFixWorker(app.log);
 startJobs(app.log);
+startBusyWatch(app.log);
