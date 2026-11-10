@@ -115,6 +115,24 @@ These jobs run only while no scan is waiting, so they never slow down a reader.
 
 # 6. Models and tools
 
+**Models (they learned from data):**
+
+- **Qwen3-VL 8B Instruct:** an open-weight vision-language model from Alibaba's Qwen team (2025). It takes text, images and video into one model, so it can look at a photo and answer questions about it in words: what the photo shows, where each spine is, what a spine says. The 8B version (8 billion parameters) is small enough for a home graphics card. It runs here through **Ollama**, a free program for running such models locally.
+- **Surya OCR:** an open-source text-recognition toolkit (OCR) from Datalab, built on transformer models. It finds the lines of text in a picture and reads them, in over 90 languages including Hebrew. Unlike Qwen3-VL it only reads what is printed and doesn't invent text, which is why it is used to confirm the model's readings.
+- **Tesseract:** the classic open-source OCR engine. It was started at HP in the 1980s and developed further by Google, and it has used a neural network (LSTM) for each line of text since version 4. It reads upside-down print badly, which makes it a good judge of which way up a spine is.
+- **MobileNet-V3 small:** a small image-recognition network from Google (2019), made for phones. It turns a picture into 1,024 numbers that describe it. Seferehov runs it through Google's **MediaPipe** library, with two tiny layers of its own trained on top.
+- **Real-ESRGAN x4plus:** an open-source model from Tencent ARC (2021) that enlarges and sharpens photos (super-resolution). Here it runs in its ncnn build, on the graphics card through Vulkan.
+
+**Tools (plain code, no learning):**
+
+- **hspell:** a free Hebrew spell-checker and word analyser. It knows which Hebrew words exist, so it can tell a misread title from a real one.
+- **ZXing ("zebra crossing"):** Google's open-source barcode reader, here compiled to WebAssembly so it runs in the browser and on the server.
+- **OpenCV.js:** the OpenCV computer-vision library compiled to JavaScript. It finds a cover's outline and straightens it.
+- **Postgres trigram search (pg_trgm):** a database extension that compares texts by their three-letter pieces, so a title with a misread letter still finds the right record.
+- **SearXNG:** a free, self-hosted metasearch engine. It sends one query to several public search engines and collects their results without tracking.
+
+## Memory and time
+
 | Model / tool | What it is for | Where it runs | Memory | Time per call |
 |---|---|---|---|---|
 | MobileNet-V3 small + 2 Seferehov layers | Covers camera: is a book filling the view? are all corners in? | Phone CPU (web worker) | 4.1 MB file + 9.6 MB runtime; ~30–60 MB RAM (est.) | tens of ms per frame (est.) |
