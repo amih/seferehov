@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Before a push: the full test suite (npm test: lint, unit tests, build, end to end) on each
+# commit being pushed, in a clean copy of it (uncommitted changes don't count). A failure
+# stops the push. Commits that passed are noted in .git/tested-commits, so a second push or
+# deploy/deploy.sh doesn't run them again.
+#   Turn on once per clone: git config core.hooksPath .githooks
+#   Skip in an emergency:   git push --no-verify
+set -euo pipefail
+root="$(git rev-parse --show-toplevel)"
+tested="$(git rev-parse --git-common-dir)/tested-commits"
+touch "$tested"
+zero=0000000000000000000000000000000000000000
+
+while read -r _lref lsha _rref _rsha; do
+  [[ "$lsha" == "$zero" ]] && continue          # deleting a branch
+  grep -qx "$lsha" "$tested" && { echo "pre-push: ${lsha:0:7} already passed the tests"; continue; }
+  dir="$(mktemp -d)"
+  trap 'git -C "$root" worktree remove --force "$dir" >/dev/null 2>&1 || true; rm -rf "$dir"' EXIT
+  echo "pre-push: testing ${lsha:0:7} (npm test, about 2 minutes; git push --no-verify skips)"
+  git -C "$root" worktree add --detach --quiet "$dir" "$lsha"
+  ln -s "$root/node_modules" "$dir/node_modules"
+  if (cd "$dir" && npm test > "$dir.log" 2>&1); then
+    echo "$lsha" >> "$tested"
+    echo "pre-push: ${lsha:0:7} passed"
+    rm -f "$dir.log"
+  else
+    grep -E "error|not ok|✖|Error|^\s+(/|console|page error|still loading)" "$dir.log" | head -40
+    echo "pre-push: tests failed for ${lsha:0:7}; push stopped. Full log: $dir.log" >&2
+    exit 1
+  fi
+  git -C "$root" worktree remove --force "$dir" >/dev/null 2>&1 || true
+  trap - EXIT
+done

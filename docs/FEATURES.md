@@ -226,7 +226,13 @@ Real Hebrew covers are harder than synthetic ones, so a word-accuracy figure for
 
 ## Tests (from 11 Nov 2026)
 
-`npm test` runs four checks; every push to GitHub runs them (`.github/workflows/test.yml`), and `deploy/deploy.sh` stops if any fails (`SKIP_TESTS=1` skips them for an emergency fix).
+`npm test` runs four checks, at three points:
+
+- **Before every push** (`.githooks/pre-push`; turn on once per clone with `npm run hooks`): each commit being pushed is tested in a clean copy of it, so uncommitted changes don't count. A failure stops the push and prints the failing lines. `git push --no-verify` skips it in an emergency.
+- **On GitHub** after every push (`.github/workflows/test.yml`): the same checks again, on GitHub's machines. Free for a public repository. A failed run sends an email.
+- **On deploy** (`deploy/deploy.sh`): a commit that already passed before its push (noted in `.git/tested-commits`) is only built; otherwise the tests run first and a failure stops the deploy. `SKIP_TESTS=1` skips them.
+
+Branch protection on GitHub ("master only accepts commits that passed") is not used: it works on pull requests, so every change would have to go through a pull request instead of a push. The check before the push gives the same guarantee for a single developer.
 
 1. **Lint** (`npm run lint`, `eslint.config.js`): names used but never defined, unused code, and similar mistakes, in the phone app and the server. It caught a "No, still fronts" button in the covers camera that had stopped working.
 2. **Unit tests** (`npm run test:unit`, `server/test/`): the confidence rules, the catalogue gate, the shared cache.

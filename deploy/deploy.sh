@@ -13,7 +13,12 @@ fi
 
 # Lint, unit tests, the build and the end-to-end run (test/e2e.test.js); a failure stops
 # the deploy. SKIP_TESTS=1 deploy/deploy.sh only builds (an emergency fix).
-if [[ "${SKIP_TESTS:-}" == 1 ]]; then npm run build; else npm test; fi
+# A commit that already passed before its push (.githooks/pre-push) is only built.
+if [[ "${SKIP_TESTS:-}" == 1 ]] || grep -qx "$(git rev-parse HEAD)" "$(git rev-parse --git-common-dir)/tested-commits" 2>/dev/null; then
+  npm run build
+else
+  npm test
+fi
 
 # Old hashed assets are kept (no --delete under assets/) so a tab still running
 # the previous version can lazy-load its chunks until it updates.
