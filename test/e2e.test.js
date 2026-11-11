@@ -99,7 +99,8 @@ before(async () => {
   readdirSync(join(ROOT, 'web/dist')); // the build must exist (npm run build)
   dbUrl = await startDb();
   await startServer();
-  browser = await chromium.launch();
+  // E2E_CHANNEL=chrome: the Chrome already installed (GitHub's runners have one).
+  browser = await chromium.launch(process.env.E2E_CHANNEL ? { channel: process.env.E2E_CHANNEL } : {});
 }, { timeout: 180_000 });
 
 after(async () => {

@@ -28,7 +28,7 @@ jobs:
       - run: npm run lint
       - run: npm run test:unit
       - run: npm run build
-      - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
         env:
           TEST_DATABASE_URL: postgres://seferehov:seferehov@127.0.0.1:5432/seferehov
+          E2E_CHANNEL: chrome # preinstalled on the runner: no browser download
