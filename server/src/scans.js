@@ -496,7 +496,7 @@ async function processCover(scan, { dry = false } = {}) {
   const covers = scan.media.filter((m) => m.type !== 'extra');
   const backOnly = !covers.some((m) => m.path === '0.img');
   let [front, back = null] = await Promise.all(covers.map((m) => readFile(join(dir, m.path))));
-  if (backOnly) [front, back] = [front, front];
+  if (backOnly) back = front;
   const extraOf = (side) => Promise.all(scan.media.filter((m) => m.path.startsWith(`x-${side}-`)).map((m) => readFile(join(dir, m.path))));
   const extras = { front: await extraOf('front'), back: await extraOf('back') };
   await step('input', { note: 'front and back cover photos as sent', code_scanned: scan.book_code ?? null, extra_frames: extras.front.length + extras.back.length }, { front, back });

@@ -1,5 +1,5 @@
 // Confidence rules (src/confidence.js) on real cases from the approval queue, Nov 2026.
-//   node --test scripts/confidence-test.js
+//   node --test test/   (npm test)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { confidenceOf } from '../src/confidence.js';

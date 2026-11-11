@@ -109,7 +109,7 @@ export async function searchBooks({ text, pos, km, lang, userId, genre = null, l
 export default async function finderRoutes(app) {
   app.get('/api/books/search', {
     config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
-  }, async (req, reply) => {
+  }, async (req) => {
     const text = String(req.query.q ?? '').trim().slice(0, 100);
     const pos = parseLatLon(req.query.lat, req.query.lon);
     const km = KM_CHOICES.includes(Number(req.query.km)) ? Number(req.query.km) : null;

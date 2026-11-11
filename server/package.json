@@ -7,7 +7,7 @@
     "dev": "node --watch --env-file=../.env src/index.js",
     "migrate": "node --env-file-if-exists=../.env src/migrate.js",
     "seed:osm": "node --env-file-if-exists=../.env scripts/seed-osm.js",
-    "test": "node --test"
+    "test": "node --test \"test/*.test.js\""
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.3",

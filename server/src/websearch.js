@@ -199,7 +199,7 @@ export async function webCheck(title, author) {
 const PHRASE = [6, 8];
 export async function phrasesOf(text) {
   const sentences = String(text ?? '').split(/[.!?;\n"״”“]+/).map((x) => x.trim()).filter(Boolean);
-  const clean = (w) => w.replace(/^[(\[«'"]+|[)\]»,:'"]+$/g, '');
+  const clean = (w) => w.replace(/^[([«'"]+|[)\]»,:'"]+$/g, '');
   const all = sentences.flatMap((x) => x.split(/\s+/)).map(clean);
   const bad = await unknownWords(all.filter((w) => /[\u0590-\u05FF]/.test(w)));
   const good = (w) => (/[\u0590-\u05FF]/.test(w) ? !bad.has(plainWord(w)) && plainWord(w).length >= 2 : /^[A-Za-z'’-]{2,}$/.test(w));

@@ -14,7 +14,7 @@ const googleEnabled = () => Boolean(config.google.clientId && config.google.clie
 const googleRedirect = () => `${config.baseUrl}/api/auth/google/callback`;
 
 // Letters in any script, digits, space, _ . - ; 3–30 characters.
-const SCREEN_NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} _.\-]{1,28}[\p{L}\p{N}]$/u;
+const SCREEN_NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} _.-]{1,28}[\p{L}\p{N}]$/u;
 
 export async function currentUser(req) {
   const token = req.cookies[SESSION_COOKIE];

@@ -1,0 +1,34 @@
+# Every push and pull request: lint, unit tests, the web build, and the end-to-end run
+# (a fresh database, the real server, every screen in headless Chromium). See test/e2e.test.js.
+name: test
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      db:
+        image: postgis/postgis:16-3.4-alpine
+        env:
+          POSTGRES_DB: seferehov
+          POSTGRES_USER: seferehov
+          POSTGRES_PASSWORD: seferehov
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U seferehov" --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test:unit
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+        env:
+          TEST_DATABASE_URL: postgres://seferehov:seferehov@127.0.0.1:5432/seferehov

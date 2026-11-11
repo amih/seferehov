@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build locally, ship to the server, migrate, restart.
 #   deploy/deploy.sh            (target from deploy/target.private: SSH=user@host APP_DIR=/path)
+#   SKIP_TESTS=1 deploy/deploy.sh   (build only, no tests)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source deploy/target.private
@@ -10,7 +11,9 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 1
 fi
 
-npm run build
+# Lint, unit tests, the build and the end-to-end run (test/e2e.test.js); a failure stops
+# the deploy. SKIP_TESTS=1 deploy/deploy.sh only builds (an emergency fix).
+if [[ "${SKIP_TESTS:-}" == 1 ]]; then npm run build; else npm test; fi
 
 # Old hashed assets are kept (no --delete under assets/) so a tab still running
 # the previous version can lazy-load its chunks until it updates.

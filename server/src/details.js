@@ -4,12 +4,11 @@
 //
 // Hebrew books: the National Library (by ISBN; the only source with back covers, for
 // books it photographed), then Open Library. Others: Open Library only. Cover pictures are copied to our own uploads.
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { config } from './config.js';
 import { one, q } from './db.js';
-import { normTitle } from './vision.js';
 import { normalizeDanacode } from './util.js';
 import { nliRecords, marcFields } from './books.js';
 import { politeFetch } from './polite.js';

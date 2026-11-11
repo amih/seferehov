@@ -34,6 +34,7 @@ export function initUpdates() {
   });
 
   sw.register('/sw.js', { updateViaCache: 'none' }).then((r) => {
+    if (!r) return; // a browser that blocks service workers may answer nothing
     reg = r;
     if (r.waiting && sw.controller) onWaiting();
     r.addEventListener('updatefound', () => {

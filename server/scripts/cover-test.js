@@ -3,7 +3,6 @@
 //   node --env-file=../.env scripts/cover-test.js <scan-id>...   (no ids: the covers readers edited or declined)
 import { copyFile, mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { config } from '../src/config.js';
 import { many, pool } from '../src/db.js';
 import { processScan, MEDIA_DIR } from '../src/scans.js';
 import { withTrace, TRACE_DIR } from '../src/trace.js';

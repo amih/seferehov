@@ -10,7 +10,7 @@ import { step } from './trace.js';
 // Most common confusions first: the rank breaks ties between candidates.
 export const LOOKALIKE = [['ד', 'ר'], ['ב', 'כ'], ['ק', 'פ'], ['ה', 'ח'], ['ו', 'ז'], ['ו', 'י'], ['ק', 'מ'], ['ח', 'ת'],
   ['ה', 'ת'], ['ן', 'ו'], ['ם', 'ס'], ['ט', 'מ'], ['נ', 'ג'], ['ע', 'צ']];
-const WORD = /[א-ת֑-ׇ]+/g;
+const WORD = /[\u0591-\u05C7\u05D0-\u05EA]+/g;
 const plain = (w) => w.replace(/[֑-ׇ]/g, '');
 
 // hspell speaks ISO-8859-8: Hebrew letters are 0xE0–0xFA there.

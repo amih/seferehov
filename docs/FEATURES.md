@@ -224,6 +224,17 @@ On real photos, the title was found in:
 
 Real Hebrew covers are harder than synthetic ones, so a word-accuracy figure for them needs a hand-labelled set.
 
+## Tests (from 11 Nov 2026)
+
+`npm test` runs four checks; every push to GitHub runs them (`.github/workflows/test.yml`), and `deploy/deploy.sh` stops if any fails (`SKIP_TESTS=1` skips them for an emergency fix).
+
+1. **Lint** (`npm run lint`, `eslint.config.js`): names used but never defined, unused code, and similar mistakes, in the phone app and the server. It caught a "No, still fronts" button in the covers camera that had stopped working.
+2. **Unit tests** (`npm run test:unit`, `server/test/`): the confidence rules, the catalogue gate, the shared cache.
+3. **The build** of the phone app.
+4. **End to end** (`npm run test:e2e`, `test/e2e.test.js`, about 1.5 minutes): a fresh database with every migration and a little test data, the real server, and headless Chromium. It opens every screen as a visitor, a reader and an admin, in Hebrew and English, and opens the menu on each. A screen fails if the page throws an error, logs one, gets a server error from the API, or still shows "Loading…" after 6 seconds. It also calls every GET endpoint of the API (any server error fails) and checks the server logged no errors. Nothing outside is asked: no catalogues, vision model or mail. It needs Docker for the database locally (CI uses its own) and Chromium (`npx playwright install chromium`).
+
+Checked on the to-do tabs bug of 11 Nov 2026 (screens stuck on "טוען"): lint reports `'html' is not defined`, and the end-to-end run fails on /queue and /review.
+
 # Hardware
 
 Everything runs on one home server:

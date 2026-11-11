@@ -3,7 +3,7 @@ import { initUpdates, maybeApply } from './update.js';
 import { startQueue, onQueueChange, kick, unsentItems, retryNow, discard } from './queue.js';
 import { toast, choose, esc } from './ui.js';
 import { whyText } from './outbox-ui.js';
-import { api, getMe } from './api.js';
+import { getMe } from './api.js';
 import './net.js';
 import { navigate, mapUnderneath, closeLayer } from './nav.js';
 import { trackPageView } from './analytics.js';

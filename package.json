@@ -2,14 +2,28 @@
   "name": "seferehov",
   "private": true,
   "description": "ספרחוב (Seferehov) — crowd-sourced map of free street libraries.",
-  "workspaces": ["server", "web"],
+  "workspaces": [
+    "server",
+    "web"
+  ],
   "scripts": {
     "db:up": "docker compose up -d db",
     "migrate": "npm -w server run migrate",
     "seed:osm": "npm -w server run seed:osm",
     "dev:server": "npm -w server run dev",
     "dev:web": "npm -w web run dev",
-    "build": "npm -w web run build"
+    "build": "npm -w web run build",
+    "lint": "eslint .",
+    "test:unit": "npm -w server test",
+    "test:e2e": "node --test test/e2e.test.js",
+    "test": "npm run lint && npm run test:unit && npm run build && npm run test:e2e"
   },
-  "license": "AGPL-3.0-or-later"
+  "license": "AGPL-3.0-or-later",
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^17.14.0",
+    "playwright": "^1.65.0"
+  },
+  "type": "module"
 }

@@ -17,6 +17,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export async function politeFetch(url, opts = {}) {
   const host = new URL(url).host;
+  // The test run (test/e2e.test.js) asks no outside catalogue.
+  if (process.env.NO_OUTSIDE === '1') throw new Busy(host, 'outside requests are off', false);
   const h = hosts.get(host) ?? hosts.set(host, { next: 0, waiting: 0, coolUntil: 0, strikes: 0 }).get(host);
   const now = Date.now();
   if (h.coolUntil > now) throw new Busy(host, 'resting after a refusal', true);

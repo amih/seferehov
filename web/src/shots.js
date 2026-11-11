@@ -789,6 +789,7 @@ export function bookShots({ on, panel, target, sent, onStart, onEnd }) {
     if (act === 'start') { onStart?.(); start({ auto: true }); }
     else if (act === 'switch') switchMode();
     else if (act === 'stack-backs') toBacks();
+    else if (act === 'still-fronts') stillFronts();
     else if (act === 'skip' && stack?.phase === 'backs') tookStack(null);
     else if (act.startsWith('drop-')) {
       // A wrong photo in the strip of fronts.
