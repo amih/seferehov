@@ -4,6 +4,8 @@ import { cameraLog } from './camlog.js';
 import { enqueue, kick, onItem, unsentItems } from './queue.js';
 import { detectFrame } from './scanner.js';
 import { align, cost, mean, R } from './motion.js';
+import { createHand, decide, frameScore, limits, STEADY, ROUGH, PAUSE_MS } from './steady.js';
+import { encodeJpeg } from './encode.js';
 
 // One camera for every book photo, free style: shelves (spines), front covers and back
 // covers, in any order. The phone only takes the photos; the server works out what each
@@ -14,8 +16,8 @@ import { align, cost, mean, R } from './motion.js';
 //
 // A photo is taken when the picture has changed since the last photo (moved along the
 // shelf, or a new cover: a book turned over, the next book) and the phone is then held
-// steady for PAUSE_MS (or roughly steady for ROUGH_MS); the sharpest frame of the pause
-// is kept, full size. Each photo is saved on the phone at once and sent by itself
+// steady for PAUSE_MS (or roughly steady for ROUGH_MS, or just held there for LATEST_MS:
+// steady.js learns each reader's tremor); the best frame of the pause is kept, full size. Each photo is saved on the phone at once and sent by itself
 // (queue.js), with its number in the session, the time, the barcode the camera saw just
 // before (if any), and how the phone moved since the last photo (motion sensors, picture
 // travel): logged for the server, to learn from. When the camera closes (✕, Done, screen
@@ -28,17 +30,13 @@ const W = 160;            // width of the grey copy; speeds are in its pixels pe
 // spine is then in more photos, and the server pools their readings), and a second photo
 // of the same pause (EXTRA_MS later, if still held): the server keeps the better cut of
 // each spine and votes on the readings.
-const STEADY = 1.5;       // px/tick: held steady
-const ROUGH = 3.5;        // px/tick: roughly steady
-const FAST = 7;           // px/tick: "slower"
 const NEXT = 0.3;         // moved this share of the picture since the last photo: new books
 const CHANGED = 18;       // or the picture changed this much (a book turned over, the next book)
-const PAUSE_MS = 450;     // steady this long: photo (400 ms caught books mid-turn)
-const ROUGH_MS = 900;
 const EXTRA_MS = 350;     // the second photo of a pause: at least this long after the first
 const EXTRA_UNTIL = 1500; // and given up if the phone has not been held this long
 const MIN_SHARP = 8;
 const CODE_MS = 600;      // how often the live picture is looked at for a barcode
+const SHAKE_KEY = 'seferehov.shake'; // the reader's tremor (steady.js), kept for next time
 
 const sessionId = () => crypto.randomUUID?.() ?? 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
   const r = (Math.random() * 16) | 0;
@@ -50,6 +48,7 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
   const small = document.createElement('canvas');
   const ctx = small.getContext('2d', { willReadFrequently: true });
   let prev = null, prevAt = 0, last = null, settleUntil = 0;
+  let hand = null, gyro = { sum: 0, t: 0, now: null }, gaps = [];
   let speed = 0, moved = { x: 0, y: 0 }, lost = false, arrived = 0, steadySince = 0;
   let best = null, bestScore = 0, bestSharp = 0, spare = null, sharps = [];
   let ids = [], taken = 0, places = 0, saving = Promise.resolve(), code = null, codeAt = 0, codeLook = 0;
@@ -63,7 +62,12 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
     lastMotion = now;
     const a = e.acceleration, r = e.rotationRate;
     if (a?.x != null) motion.acc += Math.hypot(a.x, a.y, a.z) * dt;
-    if (r?.alpha != null) motion.turn += Math.hypot(r.alpha, r.beta, r.gamma) * dt;
+    if (r?.alpha != null) {
+      const rate = Math.hypot(r.alpha, r.beta, r.gamma);
+      motion.turn += rate * dt;
+      gyro.sum += rate * dt; gyro.t += dt;
+      gyro.now = gyro.now == null ? rate : 0.5 * rate + 0.5 * gyro.now; // ~the last 50 ms
+    }
   }
 
   async function start() {
@@ -80,7 +84,9 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
       <p class="shot-done"></p>`;
     video = panel.querySelector('video');
     sid = sessionId();
-    log = cameraLog('capture', { screen, steady: STEADY, rough: ROUGH, next: NEXT, pause: PAUSE_MS, capture: sid });
+    const shake = Number(localStorage.getItem(SHAKE_KEY)) || null;
+    hand = createHand({ shake, tick: TICK_MS });
+    log = cameraLog('capture', { screen, steady: STEADY, rough: ROUGH, next: NEXT, pause: PAUSE_MS, capture: sid, shakeBefore: shake });
     const askedAt = Date.now();
     try {
       // As many pixels as the camera gives: small print on spines needs them.
@@ -96,7 +102,7 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
     requestAnimationFrame(() => panel.querySelector('.shot-live')?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
     opened = Date.now();
     prev = null; last = null; speed = 0; lost = false; arrived = 0; steadySince = 0; sharps = []; taken = 0; places = 0; ids = []; code = null; extra = null; dropBest();
-    motion = { acc: 0, turn: 0 }; lastMotion = 0;
+    motion = { acc: 0, turn: 0 }; lastMotion = 0; gyro = { sum: 0, t: 0, now: null }; gaps = [];
     addEventListener('devicemotion', onMotion);
     settleUntil = Date.now() + 700; // exposure and focus settle
     timer = setInterval(tick, TICK_MS);
@@ -144,22 +150,27 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
     const dark = bright / g.length < 55 ? 'shots.dark' : null;
     const t0 = performance.now();
     const step = prev?.length === g.length ? align(prev, g, w, h) : null;
-    const dt = Math.min(3 * TICK_MS, Math.max(TICK_MS / 2, now - prevAt));
+    const dt = now - prevAt;
     prev = g; prevAt = now;
     if (!step) return;
-    const v = step.edge ? 2 * R : Math.hypot(step.dx, step.dy) * (TICK_MS / dt);
-    speed = 0.6 * v + 0.4 * speed;
-    if (step.edge) lost = true; else { moved.x += step.dx; moved.y += step.dy; }
+    if (gaps.length < 400) gaps.push(dt);
+    const turning = gyro.t > 0 ? gyro.sum / gyro.t : null;
+    gyro.sum = 0; gyro.t = 0;
+    const m = hand.step(now, { ...step, R }, dt, turning);
+    speed = m.speed;
+    if (m.skip) return; // a glitch: the phone did not move (slow frame, exposure)
+    if (m.lost) lost = true; else { moved.x += step.dx; moved.y += step.dy; }
     const sharp = sharpness(g, w, h);
     if (now < settleUntil) return;
-    log?.tick(v, step.edge, performance.now() - t0);
+    log?.tick(m.v, step.edge, performance.now() - t0);
+    const lim = limits(hand.shake);
 
     // The second photo of the pause: a sharp frame while still held there.
     if (extra) {
-      if (now > extra.until || speed > ROUGH) extra = null;
+      if (now > extra.until || (speed > lim.rough && m.drift > lim.drift)) extra = null;
       else if (now >= extra.at && sharp >= 0.8 * extra.sharp) {
         extra = null;
-        keepBest(sharp / (1 + speed), sharp, g);
+        keepBest(frameScore(sharp, m.v, gyro.now), sharp, g, true);
         take('extra');
         return;
       }
@@ -170,22 +181,23 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
       const changed = last.length === g.length ? cost(last, g, w, h, mean(last), mean(g), 0, 0, 3) : 99;
       along = changed >= CHANGED ? 1 : Math.max(lost ? changed / CHANGED : 0, Math.max(Math.abs(moved.x) / w, Math.abs(moved.y) / h) / NEXT);
     }
-    if (along < 1) { arrived = 0; steadySince = 0; dropBest(); show('next', along, speed > FAST ? 'burst.slower' : dark); return; }
-    if (speed > ROUGH) {
+    const slower = speed > lim.fast && m.drift > lim.drift ? 'burst.slower' : dark;
+    if (along < 1) { arrived = 0; steadySince = 0; dropBest(); show('next', along, slower); return; }
+    arrived ||= now;
+    if (speed <= lim.steady) steadySince ||= now; else steadySince = 0;
+    const d = decide({ now, arrived, steadySince, speed, drift: m.drift, best, bestSharp, typical: typicalSharp(), lim });
+    if (!d.holding) {
       arrived = 0; steadySince = 0; dropBest();
-      show('hold', 0, speed > FAST ? 'burst.slower' : dark);
+      show('hold', 0, slower);
       return;
     }
-    arrived ||= now;
+    hand.learn(m.v);
     lookForCode(now);
-    if (speed <= STEADY) steadySince ||= now; else steadySince = 0;
-    const score = sharp / (1 + speed);
+    const score = frameScore(sharp, m.v, gyro.now);
     if (sharp > MIN_SHARP && score > bestScore) keepBest(score, sharp, g);
-    const fill = Math.max(steadySince ? (now - steadySince) / PAUSE_MS : 0, (now - arrived) / ROUGH_MS);
-    show('hold', fill, dark);
-    if (!best) return;
-    if (steadySince && now - steadySince >= PAUSE_MS) take('steady');
-    else if (now - arrived >= ROUGH_MS && bestSharp >= 0.6 * typicalSharp()) take('rough');
+    const d2 = decide({ now, arrived, steadySince, speed, drift: m.drift, best, bestSharp, typical: typicalSharp(), lim });
+    show('hold', d2.fill, dark);
+    if (d2.take) take(d2.take);
   }
 
   function typicalSharp() {
@@ -193,7 +205,9 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
     const s = [...sharps].sort((a, b) => a - b);
     return s[s.length >> 1];
   }
-  function keepBest(score, sharp, g) {
+  // A full-size copy of the frame now (costly at 4K: only for a clearly better frame).
+  function keepBest(score, sharp, g, always = false) {
+    if (!always && best && score < 1.1 * bestScore) return;
     const c = spare ?? document.createElement('canvas');
     c.width = video.videoWidth; c.height = video.videoHeight;
     c.getContext('2d').drawImage(video, 0, 0);
@@ -209,6 +223,7 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
     const travel = +Math.max(Math.abs(moved.x) / small.width, Math.abs(moved.y) / (small.height || 1)).toFixed(2);
     if (how !== 'extra') extra = { at: Date.now() + EXTRA_MS, until: Date.now() + EXTRA_UNTIL, sharp: bestSharp };
     const meta = { how, extra: how === 'extra', sharp: Math.round(bestSharp), speed: +speed.toFixed(2), travel, lost,
+      shake: hand?.shake == null ? null : +hand.shake.toFixed(2), gyro: gyro.now == null ? null : Math.round(gyro.now),
       acc: +motion.acc.toFixed(2), turn: Math.round(motion.turn), codes: code && Date.now() - codeAt < 2500 ? [code] : [] };
     const rec = lg?.photo(how, bestSharp, speed, { wait: arrived ? Date.now() - arrived : null, w: c.width, h: c.height, seq, travel, acc: meta.acc, turn: meta.turn, code: !!meta.codes.length });
     if (how === 'steady') sharps = [...sharps.slice(-9), bestSharp];
@@ -229,7 +244,9 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
     saving = saving.then(async () => {
       const t0 = performance.now();
       // Full size, encoded once: spines are thin, the server needs every pixel to read them.
-      const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9));
+      // Off the page's thread where the browser can (a 4K photo took ~9 s on a reader's
+      // phone, and the steadiness checks stalled meanwhile).
+      const blob = await encodeJpeg(c, 0.9);
       if (rec) { rec.encMs = Math.round(performance.now() - t0); rec.kb = Math.round(blob.size / 1024); }
       panel.querySelector('.burst-thumbs')?.insertAdjacentHTML('afterbegin', `<img src="${esc(URL.createObjectURL(blob))}" alt="">`);
       const id = await enqueue('/api/captures', fields, { photo: blob }, 'capture', { session: lg?.id });
@@ -251,6 +268,11 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
     stream?.getTracks().forEach((tr) => tr.stop());
     stream = null;
     best = null; spare = null;
+    if (hand?.shake != null) {
+      try { localStorage.setItem(SHAKE_KEY, hand.shake.toFixed(2)); } catch { /* private mode */ }
+      const g = [...gaps].sort((a, b) => a - b);
+      log?.event('hand', { shake: +hand.shake.toFixed(2), gapMs: g.length ? Math.round(g[g.length >> 1]) : null, gapSlow: g.length ? Math.round(g[Math.floor(g.length * 0.9)]) : null });
+    }
     log?.end(how === true ? 'done' : how || 'left');
     log = null;
     if (!running) return;
