@@ -102,6 +102,50 @@ function reviewHtml(r, T, lng, { who = true } = {}) {
   </article>`;
 }
 const reviewBody = (a) => QUESTIONS.filter((k) => a?.[k]).map((k) => a[k]).join('\n\n');
+// ---- Does a book's page show the book readers photographed? (12 Nov 2026)
+// Old catalogue matches that were approved by mistake would otherwise be indexed under the
+// wrong title: book 95, a cover reading "ארוחת הערב / הרמן קוך", was shown as a 1988 dinner
+// booklet. The main title (before ':') must be found in what was read off the book's own
+// photos: its spine readings and its cover text. A page that fails gets noindex and stays
+// out of the sitemap until a person fixes the book (scripts/book-fit.js lists them).
+// Nothing read (a barcode, a reader typed it): trusted.
+export const BOOK_EVIDENCE_SQL = `
+  SELECT b.id, b.title, b.authors, concat_ws(' ',
+    (SELECT string_agg(concat_ws(' ', i.title, i.author), ' ') FROM scan_items i
+      WHERE i.book_id = b.id AND i.decision = 'approved'),
+    (SELECT string_agg(p.ocr_text, ' ') FROM photos p WHERE p.ocr_text IS NOT NULL AND p.kind IN ('cover', 'back') AND p.id IN (
+      SELECT unnest(ARRAY[s.photo_id, s.back_photo_id]) FROM sightings s WHERE s.book_id = b.id AND s.status = 'approved'
+      UNION SELECT unnest(ARRAY[m.photo_id, m.back_photo_id]) FROM my_books m WHERE m.book_id = b.id))) AS evidence
+    FROM books b WHERE b.id = ANY($1::bigint[])`;
+
+export function titleFits(title, evidence, authors = []) {
+  const norm = (t) => normTitle(t).replace(/יי/g, 'י').replace(/וו/g, 'ו'); // היהודייה / היהודיה
+  const ev = ` ${norm(evidence)} `;
+  if (ev.trim().length < 3) return true;
+  // A word counts if found as is, without its first letter (Hebrew prefixes ה/ו/ב/ל, and
+  // OCR's look-alike first letters: "חרמן" for "הרמן") or without its last ("ויטיאל").
+  const has = (w) => ev.includes(w) || (w.length >= 4 && (ev.includes(w.slice(1)) || ev.includes(w.slice(0, -1))));
+  const share = (t) => {
+    const words = norm(t).split(' ').filter((w) => w.length >= 2).slice(0, 6);
+    return words.length ? { n: words.length, fit: words.filter(has).length / words.length } : null;
+  };
+  // Any part of the title will do: the main title, or a subtitle of two words or more
+  // ("You Can Win: Winners Don't Do Different Things", "Penguin Readers: The Knight's Tale").
+  const parts = String(title ?? '').split(/[:;]| [-–—] /).map(share).filter(Boolean);
+  if (!parts.length) return true;
+  if (parts.some((p, i) => (i === 0 || p.n >= 2) && p.fit >= 0.6)) return true;
+  // Half the main title, and an author's name: "Eleanor & Park" read as "Park / Rainbow Rowell".
+  const author = (authors ?? []).some((a) => norm(a).split(' ').some((w) => w.length >= 3 && has(w)));
+  return parts[0].fit >= 0.5 && author;
+}
+
+// Ids of the given books whose page fails titleFits.
+export async function doubtfulBooks(ids) {
+  if (!ids.length) return new Set();
+  const rows = await many(BOOK_EVIDENCE_SQL, [ids]);
+  return new Set(rows.filter((r) => !titleFits(r.title, r.evidence, r.authors)).map((r) => Number(r.id)));
+}
+
 export const bookPath = (b) => `/b/${b.id}${bookSlug(b.title) ? `-${encodeURIComponent(bookSlug(b.title))}` : ''}`;
 function bookList(books, lng = 'he') {
   return `<ul>${books.map((b) => {
@@ -364,13 +408,25 @@ async function bookPage(lng, T, id) {
     ['seo.book_back_text', photos.find((p) => p.kind === 'back' && shown(p))]].filter(([, p]) => p);
   const here = libs.filter((l) => ['seen', 'added'].includes(l.kind));
   const authors = (b.authors ?? []).join(', ');
-  const name = authors ? `${b.title} — ${authors}` : b.title;
   const blurb = b.description || texts.find(([k]) => k === 'seo.book_back_text')?.[1].ocr_text || '';
-  const description = (blurb ? blurb.replace(/\s+/g, ' ').slice(0, 155) : T('seo.book_desc', { title: b.title, n: here.length }));
+  // Titles and descriptions in the words people search with: the book, its author, and
+  // where it can be had (12 Nov 2026; was "title — author | Seferehov" and the blurb).
+  const short = (t, n) => (t.length <= n ? t : `${t.slice(0, n).replace(/\s+\S*$/, '')}…`);
+  const townOf = (x) => (x ? (lng === 'he' && x.pname_he) || x.pname : null);
+  const town = townOf(here.find((l) => l.pname)) ?? null;
+  const give = offers.find((o) => o.offer === 'give'), sale = offers.find((o) => o.offer !== 'give');
+  const offerTown = (o) => (o ? (lng === 'he' && o.place_he) || o.place || null : null);
+  const where = give ? T('seo.book_where_give', { town: offerTown(give) }) : here.length ? T('seo.book_where_lib', { town })
+    : sale ? T('seo.book_where_sale', { town: offerTown(sale) }) : null;
+  const name = T('seo.book_name', { title: short(b.title, 60), authors: short(authors, 30) });
+  const lead = T('seo.book_lead', { name: T('seo.book_name', { title: b.title, authors }), where, n: here.length });
+  const description = `${lead}${blurb ? ` ${blurb.replace(/\s+/g, ' ')}` : ''}`.slice(0, 155);
   const abs = (u) => (u?.startsWith('/') ? config.baseUrl + u : u);
+  const doubtful = (await doubtfulBooks([b.id])).has(Number(b.id));
   return {
-    title: `${name} | ${T('app.name')}`,
+    title: `${name}${where ? ` — ${where}` : ''} | ${T('app.name')}`,
     description,
+    noindex: doubtful,
     canonical: bookPath(b),
     lastmod: libs[0]?.created_at ?? b.details_at ?? b.created_at,
     html: `<article class="book-public">
@@ -621,7 +677,9 @@ export const SITEMAP_BOOKS_SQL = `
           AND (b.front_url IS NOT NULL OR b.cover_url IS NOT NULL OR b.description IS NOT NULL))`;
 
 async function sitemapBooks(part) {
-  const rows = await many(`${SITEMAP_BOOKS_SQL} ORDER BY b.id LIMIT $1 OFFSET $2`, [SITEMAP_CHUNK, (part - 1) * SITEMAP_CHUNK]);
+  const all = await many(`${SITEMAP_BOOKS_SQL} ORDER BY b.id LIMIT $1 OFFSET $2`, [SITEMAP_CHUNK, (part - 1) * SITEMAP_CHUNK]);
+  const doubtful = await doubtfulBooks(all.map((r) => r.id));
+  const rows = all.filter((r) => !doubtful.has(Number(r.id)));
   return rows.length ? urlset(rows.map((r) => urlEntry(bookPath(r), r.lastmod))) : null;
 }
 
