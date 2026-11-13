@@ -658,7 +658,7 @@ async function sitemapPages() {
     `SELECT u.id, u.screen_name, max(r.updated_at) AS lastmod FROM users u JOIN book_reviews r ON r.user_id = u.id AND NOT r.hidden
       WHERE u.screen_name IS NOT NULL GROUP BY u.id ORDER BY u.id`);
   return urlset([
-    urlEntry('/'), urlEntry('/about'), urlEntry('/comic').replace('</url>', `${comicImages('he').map((im) => `<image:image><image:loc>${config.baseUrl}${im.src}</image:loc></image:image>`).join('')}</url>`), urlEntry('/places'),
+    urlEntry('/'), urlEntry('/about'), urlEntry('/comic').replace('</url>', `${comicImages('he').map((im) => `<image:image><image:loc>${config.baseUrl}${im.src}</image:loc></image:image>`).join('')}</url>`), urlEntry('/places'), `  <url><loc>${config.baseUrl}/en</loc></url>`,
     ...readers.map((u) => urlEntry(readerPath(u), u.lastmod)),
     ...countries.map((c) => urlEntry(`/c/${c.cc.toLowerCase()}`)),
     ...places.map((p) => urlEntry(placePath(p), p.lastmod)),
