@@ -11,11 +11,12 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
 import pg from 'pg';
+import sharp from 'sharp';
 import { chromium } from 'playwright';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -68,6 +69,13 @@ async function seed() {
   S.scan = (await one(`INSERT INTO scans(user_id, location_id, status, source, media, started_at, finished_at)
     VALUES ($1, $2, 'done', 'photo', '[{"path":"0.img","type":"image"}]', now() - interval '5 minutes', now()) RETURNING id`, [S.reader, S.location])).id;
   await c.query(`INSERT INTO scan_items(scan_id, title, author, via, book_id, confidence, quality) VALUES ($1, 'Deep Work', 'Cal Newport', 'vision', $2, 85, 'medium')`, [S.scan, S.book2]);
+  // Two approved spines on a shelf photo, with no outline (for /admin/outlines).
+  mkdirSync(join(tmp, 'uploads/t'), { recursive: true });
+  await sharp({ create: { width: 600, height: 800, channels: 3, background: '#8a6d4b' } }).jpeg().toFile(join(tmp, 'uploads/t/scan-e2e-1_x.jpg'));
+  S.outline = [];
+  for (const title of ['Spine one', 'Spine two']) {
+    S.outline.push((await one(`INSERT INTO scan_items(scan_id, title, via, decision, frame_path) VALUES ($1, $2, 'vision', 'approved', 't/scan-e2e-1_x.jpg') RETURNING id`, [S.scan, title])).id);
+  }
   await c.end();
 }
 
@@ -154,7 +162,7 @@ const SCREENS = () => [
   { path: '/fixes', signedIn: true }, { path: '/review', admin: true }, { path: '/duplicates', admin: true },
   { path: '/duplicate-libraries', admin: true }, { path: '/admin', admin: true }, { path: '/admin#queue', admin: true },
   { path: '/admin#texts', admin: true }, { path: '/admin#readers', admin: true }, { path: '/admin#camera', admin: true },
-  { path: '/admin#stats', admin: true }, { path: '/admin#reviews', admin: true }, { path: '/admin/trace', admin: true },
+  { path: '/admin#stats', admin: true }, { path: '/admin#reviews', admin: true }, { path: '/admin/trace', admin: true }, { path: '/admin/outlines', admin: true },
 ].map((s) => (typeof s === 'string' ? { path: s } : s));
 
 const LOADING = ['טוען…', 'Loading…'];
@@ -214,6 +222,35 @@ for (const lang of ['he', 'en']) {
     });
   }
 }
+
+// The admin draws a spine's outline on its photo and saves it; the next book is marked not visible.
+test('admin draws a spine outline', { timeout: 120_000 }, async () => {
+  const context = await browser.newContext({ locale: 'en-US', serviceWorkers: 'block', viewport: { width: 1280, height: 800 } });
+  await context.addCookies([{ name: 'seferehov_session', value: S.adminToken, url: base }]);
+  const page = await context.newPage();
+  await page.goto(`${base}/admin/outlines`);
+  await page.getByText('Spine one').click();
+  await page.waitForURL(`**/admin/outlines/${S.outline[0]}`);
+  const box = await page.locator('.ol-canvas svg').boundingBox();
+  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.1);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.5, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.press(']');
+  await page.locator('#save').click();
+  await page.waitForURL(`**/admin/outlines/${S.outline[1]}`);
+  await page.locator('#hide').click();
+  await page.waitForURL('**/admin/outlines');
+  const c = new pg.Client(dbUrl);
+  await c.connect();
+  const rows = (await c.query('SELECT id, spot FROM scan_items WHERE id = ANY($1) ORDER BY id', [S.outline])).rows;
+  await c.end();
+  await context.close();
+  const [x, y] = [0, 1].map((k) => rows[0].spot.poly.reduce((a, p) => a + p[k], 0) / 4);
+  assert.ok(Math.abs(x - 0.25) < 0.02 && Math.abs(y - 0.3) < 0.02, JSON.stringify(rows[0].spot));
+  assert.equal(rows[0].spot.by, 'admin');
+  assert.equal(rows[1].spot.hidden, true);
+});
 
 test('the server logged no errors', () => {
   assert.deepEqual(serverErrors().map((l) => l.slice(0, 400)), []);

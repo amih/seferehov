@@ -715,3 +715,26 @@ details.steps summary { cursor: pointer; font-weight: 600; }
 .where-photo path.dim { fill: rgba(0, 0, 0, .5); }
 .where-photo polygon.me { fill: none; stroke: #ffd600; vector-effect: non-scaling-stroke; stroke-width: 3px; }
 .where-label input { flex: 1; min-width: 0; }
+
+/* /admin/outlines (admin, laptop): the shelf photo fills the window beside a side panel. */
+.ol-group { display: flex; gap: 16px; align-items: flex-start; }
+.ol-thumb { position: relative; line-height: 0; width: 160px; flex: none; }
+.ol-thumb img { width: 100%; height: auto; border-radius: 6px; }
+.ol-thumb svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.ol-thumb polygon { fill: rgba(234, 88, 12, .25); stroke: #ea580c; stroke-width: 2px; vector-effect: non-scaling-stroke; }
+.ol-edit { display: grid; grid-template-columns: 1fr 340px; gap: 16px; padding: 8px 16px;
+  height: calc(100vh - var(--top-h) - env(safe-area-inset-top) - 8px); box-sizing: border-box; }
+.ol-stage { overflow: auto; min-height: 0; background: #111; border-radius: 8px; }
+.ol-canvas { position: relative; line-height: 0; margin: 0 auto; }
+.ol-canvas img { width: 100%; height: auto; display: block; user-select: none; -webkit-user-drag: none; }
+.ol-canvas svg { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+.ol-canvas .ol-other { fill: rgba(56, 189, 248, .12); stroke: #38bdf8; stroke-width: 2px; vector-effect: non-scaling-stroke; }
+.ol-canvas .ol-other.hot { fill: rgba(234, 88, 12, .2); stroke: #ea580c; }
+.ol-canvas .ol-me { fill: rgba(255, 214, 0, .15); stroke: #ffd600; stroke-width: 3px; vector-effect: non-scaling-stroke; cursor: move; }
+.ol-canvas .ol-h { fill: #ffd600; stroke: #000; stroke-width: 1px; vector-effect: non-scaling-stroke; cursor: grab; }
+.ol-side { overflow: auto; min-height: 0; }
+.ol-side h1 { font-size: 1.3rem; margin: .3rem 0; }
+.ol-crop { max-width: 100%; max-height: 220px; border-radius: 6px; display: block; margin-bottom: 8px; }
+.ol-others { padding-inline-start: 1.2rem; }
+kbd { border: 1px solid #bbb; border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; font-size: .85em; }
+@media (max-width: 800px) { .ol-edit { grid-template-columns: 1fr; height: auto; } .ol-stage { height: 70vh; } }

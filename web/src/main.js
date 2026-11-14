@@ -35,6 +35,7 @@ import duplicatesView from './views/duplicates.js';
 import duplicateLibrariesView from './views/duplicate-libraries.js';
 import fixesView from './views/fixes.js';
 import traceView from './views/trace.js';
+import outlinesView from './views/outlines.js';
 import offersView from './views/offers.js';
 
 const routes = [
@@ -62,6 +63,7 @@ const routes = [
   [/^\/review$/, reviewView],
   [/^\/admin$/, adminView],
   [/^\/admin\/trace(?:\/([\w-]+))?$/, traceView],
+  [/^\/admin\/outlines(?:\/(\d+))?$/, outlinesView],
   [/^\/about$/, aboutView],
   [/^\/comic$/, comicView],
   [/^\/(places|c\/[a-z]{2}|p\/\d+(-[a-z0-9-]*)?|[br]\/\d+(-[^/]*)?)$/i, pageView],
