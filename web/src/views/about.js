@@ -21,6 +21,8 @@ export default function aboutView(root) {
     <p>${t('who.body')}</p>
     ${contactHtml()}
     <p><a class="btn" href="/settings">⚙️ ${t('settings.title')}</a></p>
+    <h2>${t('about.photos')}</h2>
+    <p class="small">${t('about.photos_body')}</p>
     <h2>${t('about.data')}</h2>
     <p class="small">${t('about.data_html')}</p>
     <p class="small">${t('who.footnote')}</p>
