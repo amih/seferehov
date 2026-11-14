@@ -6,8 +6,22 @@
 // is { hidden: true, by: 'admin', at }, so scripts/spots.js does not look for it again.
 import { one, many, q } from './db.js';
 import { requireUser } from './auth.js';
+import { config } from './config.js';
+import { readFile, stat } from 'node:fs/promises';
 
 const ADMIN = 3;
+
+// The lab's suggestions: { made, finder, items: { "<scan item id>": [{ poly, score, guess? }] } }.
+// Only shown; nothing is saved until the admin saves. Re-read when the file changes.
+let cache = { mtime: 0, data: null };
+async function suggestions() {
+  if (!config.outlineSuggestions) return null;
+  try {
+    const { mtimeMs } = await stat(config.outlineSuggestions);
+    if (mtimeMs !== cache.mtime) cache = { mtime: mtimeMs, data: JSON.parse(await readFile(config.outlineSuggestions, 'utf8')) };
+    return cache.data;
+  } catch { return null; }
+}
 const OVERLAP = 0.5; // two outlines on one photo overlap when their boxes' IoU is above this
 
 const TITLE = 'coalesce(gb.title, mb.title, b.title, i.title)';
@@ -52,13 +66,15 @@ export function overlapGroups(items) {
   return groups;
 }
 
-// Four corners, each [x, y] as a fraction of the photo.
+// Four corners, each [x, y] as a fraction of the photo; part of it must be on the photo.
 export function cleanPoly(poly) {
   if (!Array.isArray(poly) || poly.length !== 4) return null;
-  const out = poly.map((p) => (Array.isArray(p) && p.length === 2 && p.every(Number.isFinite) ? p.map((v) => Math.round(Math.min(1, Math.max(0, v)) * 10000) / 10000) : null));
+  // A spine cut by the photo's edge may have corners outside it (up to half a photo).
+  const out = poly.map((p) => (Array.isArray(p) && p.length === 2 && p.every(Number.isFinite) ? p.map((v) => Math.round(Math.min(1.5, Math.max(-0.5, v)) * 10000) / 10000) : null));
   if (out.includes(null)) return null;
   const [x1, y1, x2, y2] = box(out);
-  return x2 - x1 > 0.002 && y2 - y1 > 0.002 ? out : null;
+  const inside = Math.min(x2, 1) - Math.max(x1, 0) > 0.002 && Math.min(y2, 1) - Math.max(y1, 0) > 0.002;
+  return x2 - x1 > 0.002 && y2 - y1 > 0.002 && inside ? out : null;
 }
 
 const view = (r) => ({
@@ -77,7 +93,8 @@ export default async function outlineRoutes(app) {
       `SELECT ${ITEM} FROM scan_items i JOIN scans s ON s.id = i.scan_id ${JOINS}
         WHERE ${SHELF} AND i.decision = 'approved' AND i.spot->'poly' IS NOT NULL
         ORDER BY s.created_at, i.scan_id, i.frame_path, i.id`);
-    return { missing: missing.map(view), overlapping: overlapGroups(drawn).map((g) => g.map(view)) };
+    const sug = (await suggestions())?.items ?? {};
+    return { missing: missing.map((r) => ({ ...view(r), suggested: sug[r.id]?.length ?? 0 })), overlapping: overlapGroups(drawn).map((g) => g.map(view)) };
   });
 
   // One book's photo with every other outline on it.
@@ -88,7 +105,9 @@ export default async function outlineRoutes(app) {
       `SELECT ${ITEM} FROM scan_items i JOIN scans s ON s.id = i.scan_id ${JOINS}
         WHERE i.scan_id = $1 AND i.frame_path = $2 AND i.id <> $3 AND coalesce(i.decision, '') NOT IN ('declined', 'merged', 'skipped')
         ORDER BY i.id`, [it.scan_id, it.frame_path, it.id]);
-    return { item: view(it), others: others.map(view) };
+    const sug = await suggestions();
+    const mine = (sug?.items?.[it.id] ?? []).filter((x) => cleanPoly(x.poly));
+    return { item: view(it), others: others.map(view), suggestions: mine, finder: mine.length ? sug.finder : null };
   });
 
   app.post('/api/admin/outlines/:id', { preHandler: requireUser(ADMIN) }, async (req, reply) => {

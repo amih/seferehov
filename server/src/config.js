@@ -8,6 +8,8 @@ export const config = {
   baseUrl: (env.BASE_URL || 'http://localhost:5173').replace(/\/$/, ''),
   databaseUrl: env.DATABASE_URL || 'postgres://seferehov:seferehov@127.0.0.1:5470/seferehov',
   uploadDir: resolve(env.UPLOAD_DIR || './uploads'),
+  // Spine outlines the lab's spine finder suggests for /admin/outlines (a JSON file it writes).
+  outlineSuggestions: env.OUTLINE_SUGGESTIONS || '',
   webDist: resolve(env.WEB_DIST || '../web/dist'),
   adminEmails: (env.ADMIN_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   minClientBuild: Number(env.MIN_CLIENT_BUILD || 0),

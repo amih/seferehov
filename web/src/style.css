@@ -726,7 +726,10 @@ details.steps summary { cursor: pointer; font-weight: 600; }
   height: calc(100vh - var(--top-h) - env(safe-area-inset-top) - 8px); box-sizing: border-box; }
 .ol-stage { overflow: auto; min-height: 0; background: #111; border-radius: 8px; }
 .ol-canvas { position: relative; line-height: 0; margin: 0 auto; }
-.ol-canvas img { width: 100%; height: auto; display: block; user-select: none; -webkit-user-drag: none; }
+.ol-canvas img { position: absolute; display: block; user-select: none; -webkit-user-drag: none; }
+.ol-canvas .ol-edge { fill: none; stroke: rgba(255, 255, 255, .35); stroke-width: 1px; vector-effect: non-scaling-stroke; stroke-dasharray: 4 4; pointer-events: none; }
+.ol-canvas .ol-sug { fill: rgba(22, 163, 74, .12); stroke: #22c55e; stroke-width: 2px; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; cursor: pointer; }
+.ol-sugnote { background: #f0fdf4; border-radius: 6px; padding: 6px 8px; }
 .ol-canvas svg { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
 .ol-canvas .ol-other { fill: rgba(56, 189, 248, .12); stroke: #38bdf8; stroke-width: 2px; vector-effect: non-scaling-stroke; }
 .ol-canvas .ol-other.hot { fill: rgba(234, 88, 12, .2); stroke: #ea580c; }

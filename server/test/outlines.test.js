@@ -19,8 +19,10 @@ test('outlines: overlapping outlines are grouped per photo', () => {
   assert.deepEqual(groups.map((g) => g.map((x) => x.id).sort()), [[1, 2, 3]]);
 });
 
-test('outlines: a hand-drawn outline is four corners inside the photo', () => {
-  assert.deepEqual(cleanPoly([[-0.1, 0.2], [0.3, 0.2], [0.3, 1.2], [0, 0.9]]), [[0, 0.2], [0.3, 0.2], [0.3, 1], [0, 0.9]]);
+test('outlines: a hand-drawn outline is four corners, partly on the photo', () => {
+  assert.deepEqual(cleanPoly([[-0.1, 0.2], [0.3, 0.2], [0.3, 1.2], [0, 0.9]]), [[-0.1, 0.2], [0.3, 0.2], [0.3, 1.2], [0, 0.9]]);
+  assert.deepEqual(cleanPoly([[-0.9, 0.2], [0.3, 0.2], [0.3, 0.4], [-0.9, 0.4]]), [[-0.5, 0.2], [0.3, 0.2], [0.3, 0.4], [-0.5, 0.4]]);
+  assert.equal(cleanPoly([[1.1, 0.2], [1.3, 0.2], [1.3, 0.4], [1.1, 0.4]]), null);
   assert.equal(cleanPoly([[0, 0], [1, 1]]), null);
   assert.equal(cleanPoly([[0.5, 0.5], [0.5, 0.5], [0.5, 0.5], [0.5, 0.5]]), null);
   assert.equal(cleanPoly([[0, 0], [1, 0], ['x', 1], [0, 1]]), null);

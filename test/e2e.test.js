@@ -11,7 +11,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
@@ -73,9 +73,11 @@ async function seed() {
   mkdirSync(join(tmp, 'uploads/t'), { recursive: true });
   await sharp({ create: { width: 600, height: 800, channels: 3, background: '#8a6d4b' } }).jpeg().toFile(join(tmp, 'uploads/t/scan-e2e-1_x.jpg'));
   S.outline = [];
-  for (const title of ['Spine one', 'Spine two']) {
+  for (const title of ['Spine one', 'Spine two', 'Spine three']) {
     S.outline.push((await one(`INSERT INTO scan_items(scan_id, title, via, decision, frame_path) VALUES ($1, $2, 'vision', 'approved', 't/scan-e2e-1_x.jpg') RETURNING id`, [S.scan, title])).id);
   }
+  // The lab's suggestion for the second one.
+  writeFileSync(join(tmp, 'suggestions.json'), JSON.stringify({ finder: 'test finder', items: { [S.outline[1]]: [{ poly: [[0.5, 0.1], [0.6, 0.1], [0.6, 0.6], [0.5, 0.6]], score: 0.9 }] } }));
   await c.end();
 }
 
@@ -85,7 +87,7 @@ async function startServer() {
   const dead = 'http://127.0.0.1:9'; // nothing listens: the vision model and OCR are "down"
   const env = {
     ...process.env, PORT: String(port), HOST: '127.0.0.1', BASE_URL: base, DATABASE_URL: dbUrl,
-    WEB_DIST: join(ROOT, 'web/dist'), UPLOAD_DIR: join(tmp, 'uploads'), TRACE_DIR: join(tmp, 'trace'),
+    WEB_DIST: join(ROOT, 'web/dist'), OUTLINE_SUGGESTIONS: join(tmp, 'suggestions.json'), UPLOAD_DIR: join(tmp, 'uploads'), TRACE_DIR: join(tmp, 'trace'),
     OLLAMA_URL: dead, OCR_URL: dead, SEARCH_URL: '', SMTP_HOST: '', NOTIFY_ADMIN_MINUTES: '0', TRACE: '0',
     GOOGLE_CLIENT_ID: '', MATOMO_URL: '', NO_OUTSIDE: '1', SERVE_WEB: '1', ADMIN_EMAILS: 'admin@example.com', NODE_ENV: 'test',
   };
@@ -223,7 +225,8 @@ for (const lang of ['he', 'en']) {
   }
 }
 
-// The admin draws a spine's outline on its photo and saves it; the next book is marked not visible.
+// The admin draws a spine's outline on its photo, past the photo's edge, and saves it; takes
+// the lab's suggestion for the next with Enter; marks the third not visible.
 test('admin draws a spine outline', { timeout: 120_000 }, async () => {
   const context = await browser.newContext({ locale: 'en-US', serviceWorkers: 'block', viewport: { width: 1280, height: 800 } });
   await context.addCookies([{ name: 'seferehov_session', value: S.adminToken, url: base }]);
@@ -231,14 +234,17 @@ test('admin draws a spine outline', { timeout: 120_000 }, async () => {
   await page.goto(`${base}/admin/outlines`);
   await page.getByText('Spine one').click();
   await page.waitForURL(`**/admin/outlines/${S.outline[0]}`);
-  const box = await page.locator('.ol-canvas svg').boundingBox();
-  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.1);
+  const box = await page.locator('.ol-canvas img').boundingBox();
+  await page.mouse.move(box.x + box.width * 0.9, box.y + box.height * 0.1);
   await page.mouse.down();
-  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.5, { steps: 5 });
+  await page.mouse.move(box.x + box.width * 1.08, box.y + box.height * 0.5, { steps: 5 });
   await page.mouse.up();
   await page.keyboard.press(']');
   await page.locator('#save').click();
   await page.waitForURL(`**/admin/outlines/${S.outline[1]}`);
+  await page.locator('.ol-sugnote').waitFor();
+  await page.keyboard.press('Enter');
+  await page.waitForURL(`**/admin/outlines/${S.outline[2]}`);
   await page.locator('#hide').click();
   await page.waitForURL('**/admin/outlines');
   const c = new pg.Client(dbUrl);
@@ -246,10 +252,11 @@ test('admin draws a spine outline', { timeout: 120_000 }, async () => {
   const rows = (await c.query('SELECT id, spot FROM scan_items WHERE id = ANY($1) ORDER BY id', [S.outline])).rows;
   await c.end();
   await context.close();
-  const [x, y] = [0, 1].map((k) => rows[0].spot.poly.reduce((a, p) => a + p[k], 0) / 4);
-  assert.ok(Math.abs(x - 0.25) < 0.02 && Math.abs(y - 0.3) < 0.02, JSON.stringify(rows[0].spot));
+  const xs = rows[0].spot.poly.map((p) => p[0]);
+  assert.ok(Math.min(...xs) > 0.85 && Math.max(...xs) > 1.04, JSON.stringify(rows[0].spot));
   assert.equal(rows[0].spot.by, 'admin');
-  assert.equal(rows[1].spot.hidden, true);
+  assert.deepEqual(rows[1].spot.poly, [[0.5, 0.1], [0.6, 0.1], [0.6, 0.6], [0.5, 0.6]]);
+  assert.equal(rows[2].spot.hidden, true);
 });
 
 test('the server logged no errors', () => {

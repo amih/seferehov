@@ -38,18 +38,23 @@ async function list(root) {
         <ul>${g.map((x) => `<li><a href="/admin/outlines/${x.id}" dir="auto">${esc(x.title)}</a>${x.byAdmin ? ' <span class="muted small">(by hand)</span>' : ''}</li>`).join('')}</ul></div></div>`).join('')
       : '<p class="note">None.</p>'}
     <h2>Approved books with no outline (${d.missing.length})</h2>
-    ${d.missing.length ? `<div class="table-wrap"><table><thead><tr><th>Book</th><th>Photo</th><th>Scanned</th></tr></thead><tbody>
-      ${d.missing.map((x) => `<tr><td><a href="/admin/outlines/${x.id}" dir="auto">${esc(x.title)}</a></td><td>${esc(photoName(x))}</td><td>${new Date(x.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</td></tr>`).join('')}
+    ${d.missing.length ? `<div class="table-wrap"><table><thead><tr><th>Book</th><th>Photo</th><th>Suggested</th><th>Scanned</th></tr></thead><tbody>
+      ${d.missing.map((x) => `<tr><td><a href="/admin/outlines/${x.id}" dir="auto">${esc(x.title)}</a></td><td>${esc(photoName(x))}</td><td>${x.suggested ? `✓ ${x.suggested}` : ''}</td><td>${new Date(x.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</td></tr>`).join('')}
       </tbody></table></div>` : '<p class="note">Every approved book has an outline.</p>'}`;
 }
 
 async function editor(root, id) {
   root.innerHTML = '<section class="ol-edit" dir="ltr" lang="en"><p class="muted">Loading…</p></section>';
-  const { item, others } = await api(`/api/admin/outlines/${id}`);
+  const { item, others, suggestions = [], finder } = await api(`/api/admin/outlines/${id}`);
   const order = JSON.parse(sessionStorage.getItem(LIST) ?? '[]');
   const next = order[order.indexOf(id) + 1] ?? null;
-  let poly = item.poly ? item.poly.map((p) => [...p]) : null;
+  const copy = (q) => q.map((p) => [...p]);
+  // No outline yet and the finder has a guess: start from it, so approving is one key.
+  const guess = !item.poly && !item.hidden ? suggestions.find((x) => x.guess) ?? (suggestions.length === 1 ? suggestions[0] : null) : null;
+  const start = item.poly ?? guess?.poly ?? null;
+  let poly = start ? copy(start) : null;
   let zoom = 1;
+  const M = 0.15; // room around the photo, for spines cut by its edge
 
   root.querySelector('section').innerHTML = `
     <div class="ol-stage"><div class="ol-canvas"><img alt="shelf photo" src="${esc(item.photo)}"><svg aria-label="outlines"></svg></div></div>
@@ -59,7 +64,8 @@ async function editor(root, id) {
       <p class="muted small">Photo ${esc(photoName(item))}${item.book ? ` · <a href="/b/${item.book}" target="_blank">book page</a>` : ''}
         ${item.hidden ? ' · <b>marked not visible</b>' : item.byAdmin ? ' · outlined by hand' : item.poly ? ' · outlined by the app' : ' · <b>no outline</b>'}</p>
       ${item.crop ? `<p class="small">What the app cut out and read:</p><img class="ol-crop" src="${esc(item.crop)}" alt="">` : ''}
-      <p class="small">Drag on the photo to draw a box. Drag a corner to fit a leaning spine, drag inside to move it,
+      ${suggestions.length ? `<p class="small ol-sugnote">${guess ? '<b>Suggested outline (yellow): check it, fix it if needed, then <kbd>Enter</kbd>.</b> ' : ''}Dashed green: ${suggestions.length} spine${suggestions.length === 1 ? '' : 's'} ${esc(finder ?? 'the spine finder')} found where no other book is outlined. Click one to use it.</p>` : ''}
+      <p class="small">Drag on the photo to draw a box (it may go past the photo's edge). Drag a corner to fit a leaning spine, drag inside to move it,
         <kbd>[</kbd> <kbd>]</kbd> to turn it. Mouse wheel to zoom. <kbd>Enter</kbd> saves.</p>
       <p class="row"><button class="btn primary" id="save">✓ Save${next ? ' and next' : ''}</button>
         <button class="btn" id="hide">Not visible</button></p>
@@ -71,24 +77,29 @@ async function editor(root, id) {
   const img = canvas.querySelector('img'), svg = canvas.querySelector('svg');
   await (img.decode?.().catch(() => {}) ?? Promise.resolve());
   const W = img.naturalWidth || 1, H = img.naturalHeight || 1;
-  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('viewBox', `${-M * W} ${-M * H} ${W * (1 + 2 * M)} ${H * (1 + 2 * M)}`);
   svg.setAttribute('preserveAspectRatio', 'none');
-  const fit = () => { canvas.style.width = `${Math.min(stage.clientWidth, (stage.clientHeight * W) / H) * zoom}px`; };
+  const fit = () => {
+    const w = Math.min(stage.clientWidth / (1 + 2 * M), (stage.clientHeight / (1 + 2 * M)) * (W / H)) * zoom, h = (w * H) / W;
+    Object.assign(canvas.style, { width: `${w * (1 + 2 * M)}px`, height: `${h * (1 + 2 * M)}px` });
+    Object.assign(img.style, { width: `${w}px`, height: `${h}px`, left: `${M * w}px`, top: `${M * h}px` });
+  };
   fit();
 
   const px = (p) => [p[0] * W, p[1] * H];
   const hot = (o) => o.poly && poly && overlaps(o.poly, poly);
   function draw() {
     const r = Math.max(W, H) / 120; // handle size in photo pixels
-    svg.innerHTML = others.filter((o) => o.poly).map((o) => `<polygon class="ol-other${hot(o) ? ' hot' : ''}" data-id="${o.id}" points="${pts(o.poly.map(px))}"><title>${esc(o.title)}</title></polygon>`).join('')
+    svg.innerHTML = `<rect class="ol-edge" x="0" y="0" width="${W}" height="${H}"/>` + others.filter((o) => o.poly).map((o) => `<polygon class="ol-other${hot(o) ? ' hot' : ''}" data-id="${o.id}" points="${pts(o.poly.map(px))}"><title>${esc(o.title)}</title></polygon>`).join('')
+      + suggestions.map((x, i) => `<polygon class="ol-sug" data-s="${i}" points="${pts(x.poly.map(px))}"><title>${esc(finder ?? '')} ${x.score ?? ''}</title></polygon>`).join('')
       + (poly ? `<polygon class="ol-me" points="${pts(poly.map(px))}"/>${poly.map((p, i) => `<circle class="ol-h" data-i="${i}" cx="${p[0] * W}" cy="${p[1] * H}" r="${r / zoom}"/>`).join('')}` : '');
   }
   draw();
 
-  // Pointer → fraction of the photo (the SVG is scaled with the image, even when zoomed).
+  // Pointer → fraction of the photo (below 0 or above 1 past its edges, up to the margin).
   const at = (e) => {
-    const b = svg.getBoundingClientRect();
-    return [Math.min(1, Math.max(0, (e.clientX - b.left) / b.width)), Math.min(1, Math.max(0, (e.clientY - b.top) / b.height))];
+    const b = img.getBoundingClientRect(), lim = (v) => Math.min(1 + M, Math.max(-M, v));
+    return [lim((e.clientX - b.left) / b.width), lim((e.clientY - b.top) / b.height)];
   };
   let drag = null;
   svg.onpointerdown = (e) => {
@@ -96,6 +107,7 @@ async function editor(root, id) {
     const p = at(e);
     const h = e.target.closest('.ol-h');
     if (h) drag = { kind: 'corner', i: Number(h.dataset.i) };
+    else if (e.target.closest('.ol-sug')) { poly = copy(suggestions[Number(e.target.closest('.ol-sug').dataset.s)].poly); draw(); return; }
     else if (e.target.closest('.ol-me')) drag = { kind: 'move', from: p, start: poly.map((q) => [...q]) };
     else { drag = { kind: 'new', from: p }; poly = null; }
     svg.setPointerCapture(e.pointerId);
@@ -116,7 +128,7 @@ async function editor(root, id) {
   };
   svg.onpointerup = () => {
     // A click without a drag leaves no outline: keep the old one.
-    if (drag?.kind === 'new' && poly && Math.abs(poly[2][0] - poly[0][0]) < 0.003 && Math.abs(poly[2][1] - poly[0][1]) < 0.003) poly = item.poly ? item.poly.map((p) => [...p]) : null;
+    if (drag?.kind === 'new' && poly && Math.abs(poly[2][0] - poly[0][0]) < 0.003 && Math.abs(poly[2][1] - poly[0][1]) < 0.003) poly = start ? copy(start) : null;
     drag = null;
     draw();
   };
@@ -156,7 +168,7 @@ async function editor(root, id) {
   }
   root.querySelector('#save').onclick = () => (poly ? save({ poly }) : toast('Draw the outline first: drag on the photo'));
   root.querySelector('#hide').onclick = () => save({ hidden: true });
-  root.querySelector('#reset').onclick = () => { poly = item.poly ? item.poly.map((p) => [...p]) : null; draw(); };
+  root.querySelector('#reset').onclick = () => { poly = start ? copy(start) : null; draw(); };
   const skip = root.querySelector('#skip');
   if (skip) skip.onclick = go;
 
