@@ -1,7 +1,7 @@
 // Exact outlines for spines scanned before 8 Nov 2026, from the scan's trace: the cut-out the
 // book was read from is in the trace (its box and lean, on the photo the trace calls "photo N"),
 // so its outline is the same spotOf() the reading uses now. Replaces the outlines scripts/spots.js
-// guessed by title (spot.how = 'located-rough'), which are sometimes on another book.
+// guessed by title (spot.how = 'located' or 'located-rough'), which are sometimes on another book.
 //   node --env-file=../.env scripts/spots-from-trace.js           # what it would change
 //   node --env-file=../.env scripts/spots-from-trace.js --check   # recompute outlines the reading saved itself: how close?
 //   node --env-file=../.env scripts/spots-from-trace.js --write
@@ -16,7 +16,7 @@ const CHECK = process.argv.includes('--check'), WRITE = process.argv.includes('-
 const items = await many(`
   SELECT i.id, i.scan_id, i.frame_path, i.trace_at, i.spot, i.title FROM scan_items i
    WHERE i.trace_at IS NOT NULL AND i.frame_path IS NOT NULL AND coalesce(i.spot->>'by', '') <> 'admin'
-     AND ${CHECK ? `i.spot->'poly' IS NOT NULL AND i.spot->>'how' IS NULL` : `(i.spot IS NULL OR i.spot->>'how' = 'located-rough')`}
+     AND ${CHECK ? `i.spot->'poly' IS NOT NULL AND i.spot->>'how' IS NULL` : `(i.spot IS NULL OR i.spot->>'how' IN ('located-rough', 'located'))`}
    ORDER BY i.scan_id, i.id`);
 
 const traces = new Map();
