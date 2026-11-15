@@ -396,7 +396,7 @@ body::after { content: ''; position: fixed; z-index: 3000; left: 0; right: 0; bo
 .shelf-photo img { display: block; max-width: 100%; max-height: 80vh; border-radius: 8px; }
 .shelf-photo svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .shelf-photo polygon { fill: transparent; stroke: #ffd400; stroke-width: 2px; vector-effect: non-scaling-stroke; }
-.shelf-photo a:hover polygon, .shelf-photo a:focus polygon, .shelf-photo a:target polygon { fill: rgba(255, 212, 0, 0.3); }
+.shelf-photo a:hover polygon, .shelf-photo a:focus polygon, .shelf-photo a:target polygon, .shelf-photo a.lit polygon { fill: rgba(255, 212, 0, 0.3); }
 .shelf-thumbs { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 0; }
 .shelf-thumbs img { display: block; height: 120px; max-width: 200px; object-fit: cover; border-radius: 6px; }
 .shelf-thumbs figcaption { font-size: 0.8em; color: var(--muted, #666); }

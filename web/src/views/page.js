@@ -12,6 +12,9 @@ export default async function pageView(root) {
     const page = await api(`/api/pages?path=${encodeURIComponent(location.pathname)}&lang=${lang()}`);
     root.innerHTML = `<section class="page seo">${page.html}</section>`;
     document.title = page.title;
+    // A shelf photo opened from a book's page (#b<id>): light that book's outline. The page
+    // was redrawn, so CSS :target no longer points at it.
+    if (/^#b\d+$/.test(location.hash)) root.querySelector(location.hash)?.classList.add('lit');
     const book = location.pathname.match(/^\/b\/(\d+)/);
     if (book) reviewBox(root.querySelector('#review-box'), Number(book[1]), { onSaved: () => pageView(root) });
     if (book) fixBox(root.querySelector('#fix-box'), Number(book[1]), { onSaved: () => pageView(root) });
