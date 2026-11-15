@@ -152,8 +152,9 @@ export default async function queueView(root) {
       ${i.crop && i.frame ? `<p><a class="small" href="${esc(i.frame)}" target="_blank">${t('queue.whole_photo')}</a></p>` : ''}
       ${i.crop && i.crop_hidden ? `<p class="note small">${t('queue.crop_hidden')}</p>` : ''}
       ${i.code && !i.book_id && ['photo', 'video'].includes(i.source) ? `<p class="note small">${t('check.queue_hint')} <a href="/l/${i.code}/check">🔎 ${t('check.title')}</a></p>` : ''}
-      <div class="decide">
+      <div class="decide${i.crop ? ' four' : ''}">
         <button class="btn primary" data-d="approved">✓ ${t('queue.approve')}</button>
+        ${i.crop ? `<button class="btn primary" data-d="approved" data-flip="1" title="${esc(t('queue.approve_flip_title'))}">✓ 🙃 ${t('queue.approve_flip')}</button>` : ''}
         <button class="btn" data-d="later">⏸ ${t('queue.later')}</button>
         <button class="btn danger" data-d="declined">✕ ${t('queue.decline')}</button>
       </div>
@@ -170,6 +171,7 @@ export default async function queueView(root) {
       if (!b || Date.now() < readyAt) return;
       const decision = b.dataset.d;
       const body = { decision };
+      if (b.dataset.flip) body.flip = true;
       if (decision === 'approved') {
         const title = form.title.value.trim();
         const author = form.author.value.trim();
@@ -184,7 +186,7 @@ export default async function queueView(root) {
         setQueueCount(counts);
         if (decision === 'later') skipped.add(i.id);
         else items = items.filter((x) => x.id !== i.id);
-        lastDone = decision === 'later' ? null : { id: i.id, decision, title: body.title || shownTitle };
+        lastDone = decision === 'later' ? null : { id: i.id, decision: body.flip ? 'flipped' : decision, title: body.title || shownTitle };
         if (decision === 'approved' && r.status === 'pending') toast(t('loc.thanks_review'));
         render();
         window.scrollTo(0, 0);

@@ -1,5 +1,7 @@
 // The reader's approval queue: books read from their photos and videos, and barcodes
 // they scanned, wait here one by one until approved, declined or set aside for later.
+import { join } from 'node:path';
+import sharp from 'sharp';
 import { config } from './config.js';
 import { one, many, q, tx } from './db.js';
 import { requireUser } from './auth.js';
@@ -27,6 +29,18 @@ const ITEM_SQL = `
          COALESCE(i.confidence_why, CASE i.quality WHEN 'high' THEN 'catalogue' WHEN 'medium' THEN 'read' ELSE 'low' END) AS confidence_why
     FROM scan_items i JOIN scans s ON s.id = i.scan_id LEFT JOIN locations l ON l.id = s.location_id
     LEFT JOIN books b ON b.id = i.book_id`;
+
+// Turn a spine's cut-out 180°, into a new file (a new name, so no cached picture is shown).
+// A name the sharpener already made keeps its "_e…" ending, so it is not sharpened again.
+async function flipCrop(item) {
+  const from = item.crop_path;
+  const m = from.match(/^(.*?)(_e[a-z0-9]+)?(\.[a-z]+)$/i);
+  const to = `${m[1]}_r${Date.now().toString(36)}${m[2] ?? ''}${m[3]}`;
+  const img = sharp(join(config.uploadDir, from)).rotate(180);
+  await (m[3].toLowerCase() === '.webp' ? img.webp({ quality: 90 }) : img.jpeg({ quality: 90 })).toFile(join(config.uploadDir, to));
+  await q('UPDATE scan_items SET crop_path = $2, crop_unflipped = COALESCE(crop_unflipped, $3) WHERE id = $1', [item.id, to, from]);
+  return to;
+}
 
 const publicItem = ({ frame_path, crop_path, back_path, ...i }) => ({
   ...i, frame: frame_path && `/uploads/${frame_path}`, crop: crop_path && `/uploads/${crop_path}`, back: back_path && `/uploads/${back_path}`,
@@ -362,7 +376,7 @@ export default async function approvalRoutes(app) {
     preHandler: requireUser(),
     config: { rateLimit: { max: 600, timeWindow: '1 hour' } },
   }, async (req, reply) => {
-    const { decision, title, author } = req.body ?? {};
+    const { decision, title, author, flip } = req.body ?? {};
     if (!['approved', 'declined', 'later'].includes(decision)) return reply.code(400).send({ error: 'bad_request' });
     const item = await one(
       `SELECT i.* FROM scan_items i JOIN scans s ON s.id = i.scan_id
@@ -375,6 +389,9 @@ export default async function approvalRoutes(app) {
     if (decision === 'approved') {
       result = await approveItem(item, scan, req.user, { title, author });
       if (!result) return reply.code(422).send({ error: 'title_required' });
+      // "Approve, turned": the spine was upside down. Its cut-out is turned, so the book's pages
+      // show it the right way up; the scan's picture is kept (crop_unflipped) for undo.
+      if (flip === true && item.crop_path) await flipCrop(item);
     }
     // For the statistics: was the reading right? (declined = dropped)
     const outcome = decision === 'approved' ? (result.edited ? 'edited' : 'kept') : decision === 'declined' ? 'dropped' : null;
@@ -448,7 +465,8 @@ export default async function approvalRoutes(app) {
         if (m) await db.query('DELETE FROM photos WHERE id = ANY($1)', [[m.photo_id, m.back_photo_id].filter(Boolean)]);
       }
       await db.query(
-        `UPDATE scan_items SET decision = NULL, decided_at = NULL, outcome = NULL, sighting_id = NULL, my_book_id = NULL, auto = false WHERE id = $1`, [item.id]);
+        `UPDATE scan_items SET decision = NULL, decided_at = NULL, outcome = NULL, sighting_id = NULL, my_book_id = NULL, auto = false,
+                crop_path = COALESCE(crop_unflipped, crop_path), crop_unflipped = NULL WHERE id = $1`, [item.id]);
       await db.query(`UPDATE scans SET status = 'done' WHERE id = $1 AND status = 'confirmed'`, [item.scan_id]);
     });
     const back = await one(`${ITEM_SQL} WHERE i.id = $1`, [item.id]);

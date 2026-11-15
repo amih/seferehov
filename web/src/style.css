@@ -267,6 +267,7 @@ body:has(.decide) .install-banner, body:has(.scanner.live) .install-banner { dis
 .approve .q-low { color: #b3392f; }
 .decide { position: sticky; bottom: calc(8px + env(safe-area-inset-bottom)); display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; margin-top: 14px; padding: 8px; background: var(--paper); border-radius: 14px; box-shadow: 0 -2px 14px rgb(0 0 0 / .08); }
 .decide .btn { padding: 14px 6px; font-size: 1.05rem; }
+.decide.four { grid-template-columns: 1fr 1fr; }
 .btn.danger { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, var(--line)); }
 .menu a .count { margin-inline-start: auto; }
 
