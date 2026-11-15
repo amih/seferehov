@@ -12,7 +12,7 @@ import { initialStatus, awardSighting, award } from './moderation.js';
 import { POINTS } from './config.js';
 import { parseLatLon } from './util.js';
 import { readForm } from './multipart.js';
-import { normTitle, titleSimilarity } from './vision.js';
+import { normTitle, titleSimilarity, authorsAgree } from './vision.js';
 import { knownWords } from './hebfix.js';
 import { fixesToVote } from './fixes.js';
 import { queueWaits, keepForReview } from './scans.js';
@@ -160,11 +160,44 @@ export async function autoApproveSure(scan) {
   return items.length;
 }
 
+// A spine no catalogue matched, compared with the books already on that library's shelf
+// (a few dozen: a near title there is strong evidence). The best title must be close, its
+// author must not disagree with the one read, and no other book on the shelf may come near.
+// Returns the book or null. Thresholds tried on past decisions: server/scripts/shelf-match.js.
+export const SHELF_MATCH = { title: 0.85, titleNoAuthor: 0.92, margin: 0.15 };
+export function shelfMatch(item, present) {
+  if (!item.title || !present.length) return null;
+  // The author's name is sometimes read into the title ("Author + Title"): try it without.
+  const names = new Set(normTitle(item.author ?? '').split(' ').filter((w) => w.length >= 2));
+  const bare = normTitle(item.title).split(' ').filter((w) => !names.has(w)).join(' ');
+  const titles = bare && bare !== normTitle(item.title) ? [item.title, bare] : [item.title];
+  const scored = present.map((b) => ({ b, s: Math.max(...titles.map((t) => titleSimilarity(t, b.title))) })).sort((x, y) => y.s - x.s);
+  const [best, next] = scored;
+  if (next && best.s - next.s < SHELF_MATCH.margin) return null;
+  const read = item.author ? [item.author] : [];
+  const both = read.length && best.b.authors?.length;
+  if (both && !authorsAgree(best.b.authors, read)) return null;
+  return best.s >= (both ? SHELF_MATCH.title : SHELF_MATCH.titleNoAuthor) ? best.b : null;
+}
+
 // Shelf photos at a library: a book the photos found that is already on that library's
 // shelf needs no approval: it is marked seen now (unless this reader reported it seen in
-// the last few hours). Returns how many were confirmed.
+// the last few hours). A spine no catalogue matched counts too when its reading is near a
+// title already on that shelf (shelfMatch). Returns how many were confirmed.
 export async function autoConfirmKnown(scan) {
   if (!scan.location_id || scan.kind !== 'seen' || !['photo', 'video'].includes(scan.source)) return 0;
+  const unknown = await many(`SELECT * FROM scan_items WHERE scan_id = $1 AND decision IS NULL AND book_id IS NULL`, [scan.id]);
+  if (unknown.length) {
+    const present = await many(PRESENT_BOOKS_SQL, [scan.location_id]);
+    for (const item of unknown) {
+      const b = shelfMatch(item, present);
+      if (!b) continue;
+      await q('UPDATE scan_items SET book_id = $2, matched = true WHERE id = $1 AND book_id IS NULL', [item.id, b.id]);
+      await q(`INSERT INTO scan_item_evidence(item_id, stage, source, outcome, before, after, detail) VALUES ($1, 'correct', 'shelf', 'matched', $2, $3, $4)`,
+        [item.id, [item.title, item.author].filter(Boolean).join(' | '), [b.title, b.authors?.[0]].filter(Boolean).join(' | '),
+          JSON.stringify({ book_id: b.id })]).catch(() => {});
+    }
+  }
   const items = await many(
     `SELECT i.* FROM scan_items i
       WHERE i.scan_id = $2 AND i.decision IS NULL AND i.book_id IN (SELECT id FROM (${PRESENT_BOOKS_SQL}) p)`,
