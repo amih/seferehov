@@ -1,10 +1,10 @@
-// IndexNow: every 15 minutes, the book, library and town pages that changed since the last
+// IndexNow: every 15 minutes, the book, shelf-photo, library and town pages that changed since the last
 // push are sent to api.indexnow.org, which shares them with Bing, Yandex, Seznam, Naver and
 // others (Google does not take part; it reads the sitemap). Same pages as the sitemap: what
 // gets noindex there is not pushed here. The key file is served by seo.js at /<key>.txt.
 import { config } from './config.js';
 import { one, many, q } from './db.js';
-import { bookPath, doubtfulBooks, SITEMAP_BOOKS_SQL, LIB_INDEXED, LIB_LASTMOD } from './seo.js';
+import { bookPath, shelfPath, doubtfulBooks, SITEMAP_BOOKS_SQL, SHELVES_SQL, LIB_INDEXED, LIB_LASTMOD } from './seo.js';
 
 const EVERY_MS = 15 * 60_000;
 const BATCH = 10_000; // IndexNow's limit per request
@@ -16,10 +16,12 @@ async function changedUrls(since) {
   const libs = await many(
     `SELECT l.code, p.id AS pid, p.slug FROM locations l LEFT JOIN places p ON p.id = l.place_id
       WHERE l.status = 'approved' AND ${LIB_INDEXED} AND ${LIB_LASTMOD} > $1`, [since]);
+  const shelves = await many(`SELECT id FROM (${SHELVES_SQL}) x WHERE lastmod > $1`, [since]);
   const places = new Map(libs.filter((l) => l.pid).map((l) => [l.pid, `/p/${l.pid}-${l.slug}`]));
   return [
     ...books.filter((b) => !doubtful.has(Number(b.id))).map(bookPath),
     ...libs.map((l) => `/l/${l.code}`),
+    ...shelves.map((r) => shelfPath(r.id)),
     ...places.values(),
   ].map((p) => config.baseUrl + p);
 }

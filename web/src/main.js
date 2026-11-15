@@ -66,7 +66,7 @@ const routes = [
   [/^\/admin\/outlines(?:\/(\d+))?$/, outlinesView],
   [/^\/about$/, aboutView],
   [/^\/comic$/, comicView],
-  [/^\/(places|c\/[a-z]{2}|p\/\d+(-[a-z0-9-]*)?|[br]\/\d+(-[^/]*)?)$/i, pageView],
+  [/^\/(places|c\/[a-z]{2}|p\/\d+(-[a-z0-9-]*)?|[br]\/\d+(-[^/]*)?|s\/\d+)$/i, pageView],
 ];
 
 let main = document.getElementById('view');

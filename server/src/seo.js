@@ -10,6 +10,7 @@
 //   /b/:id-:slug  one book: its covers, the text printed on them, its codes, where it is,
 //                 and what readers wrote about it
 //   /r/:id-:slug  one reader: the books they read, rated and recommend
+//   /s/:id        one shelf photo: the books read off it, outlined and linked
 // Also /robots.txt and /sitemap.xml (+ /sitemaps/*.xml).
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -303,6 +304,7 @@ async function libraryPage(lng, T, code) {
       WHERE l2.status = 'approved' AND l2.id <> $1 AND ST_DWithin(l2.geom, $2::geography, 5000)
       ORDER BY EXISTS (SELECT 1 FROM sightings s WHERE s.location_id = l2.id AND s.status = 'approved') DESC,
                l2.geom::geometry <-> $2::geometry LIMIT 8`, [l.id, l.geom]);
+  const shelves = await shelvesOf('location_id = $1', [l.id], 12);
   const place = l.pid ? { id: l.pid, slug: l.pslug, name: l.pname, name_he: l.pname_he } : null;
   const pName = place ? placeName(place, lng) : null;
   const inPlace = pName ? T('seo.in', pName) : '';
@@ -322,6 +324,7 @@ async function libraryPage(lng, T, code) {
         · <a href="https://www.google.com/maps/dir/?api=1&amp;destination=${l.lat},${l.lon}">${T('loc.directions')}</a></p>
       <h2>${T('loc.shelf')} (${books.length})</h2>
       ${books.length ? bookList(books, lng) : `<p>${T('loc.no_books')}</p>`}
+      ${shelves.length ? `<h2>${T('seo.lib_shelves')}</h2>${shelfThumbs(shelves, T, lng, name)}` : ''}
       ${taken.length ? `<h2>${T('loc.taken_title')} (${taken.length})</h2>${bookList(taken, lng)}` : ''}
       ${nearby.length ? `<h2>${T('seo.nearby_libs')}</h2>${libList(nearby, T, lng)}` : ''}
       <hr><p class="small">${T('shelves.note_html')}</p>`,
@@ -410,6 +413,11 @@ async function bookPage(lng, T, id) {
      SELECT b.id, b.title, b.authors, b.year FROM present pr JOIN books b ON b.id = pr.book_id
       GROUP BY b.id ORDER BY max(pr.created_at) DESC LIMIT 24`, [id]);
   const hidden = await doubtfulBooks(neighbours.map((n) => n.id));
+  const shelves = await many(
+    `SELECT x.*, l.name FROM (${SHELVES_SQL}) x JOIN locations l ON l.id = x.location_id
+      WHERE x.frame_path IN (SELECT i.frame_path FROM scan_items i JOIN sightings s ON s.id = i.sighting_id AND s.status = 'approved'
+                              WHERE s.book_id = $1 AND i.decision = 'approved')
+      ORDER BY x.lastmod DESC LIMIT 6`, [id]);
   const shelfMates = neighbours.filter((n) => !hidden.has(Number(n.id))).slice(0, 12);
   const rated = reviews.filter((r) => r.rating);
   const avg = rated.length ? rated.reduce((a, r) => a + r.rating, 0) / rated.length : null;
@@ -476,6 +484,7 @@ async function bookPage(lng, T, id) {
         o.place ? ` · ${esc((lng === 'he' && o.place_he) || o.place)}` : ''} · <a href="${withLang(readerPath({ id: o.user_id, screen_name: o.screen_name }), lng)}">${esc(o.screen_name)}</a> · ${fmtDate(o.offered_at, lng)}
         ${o.offer_note ? `<br><span class="small" dir="auto">${esc(o.offer_note)}</span>` : ''}
         <br><button class="btn small" data-offer-contact="${o.id}" data-give="${o.offer === 'give' ? 1 : 0}">✉️ ${T(o.offer === 'give' ? 'offer.contact_give' : 'offer.contact_sale')}</button></li>`).join('')}</ul>` : ''}
+      ${shelves.length ? `<h2>${T('seo.book_shelves')}</h2>${shelfThumbs(shelves, T, lng, '', `#b${b.id}`)}` : ''}
       ${shelfMates.length ? `<h2>${T('seo.book_neighbours')}</h2>${bookList(shelfMates, lng)}` : ''}
       <h2>${T('seo.book_more')}</h2>
       <ul class="ext-links">${bookLinks(b).map(([n, u]) => `<li><a href="${esc(u)}" rel="noopener nofollow" target="_blank">${esc(n)}</a></li>`).join('')}</ul>
@@ -505,6 +514,99 @@ async function bookPage(lng, T, id) {
         ...(r.rating ? { reviewRating: { '@type': 'Rating', ratingValue: r.rating, bestRating: 5, worstRating: 1 } } : {}),
       })) } : {}),
     }],
+  };
+}
+
+// ---- shelf photos (15 Nov 2026): /s/<id>, id = the first scan item read off that photo
+// (scan_items.frame_path). A photo is shown once a book read off it was approved at an
+// approved library; the app shows the same photos on its library book view.
+export const shelfPath = (id) => `/s/${id}`;
+// One row per shelf photo with an approved book. $1 limits it (see the callers).
+const SHELVES_FROM = `
+    FROM scan_items i JOIN scans sc ON sc.id = i.scan_id
+    JOIN locations l ON l.id = sc.location_id AND l.status = 'approved'
+   WHERE i.frame_path IS NOT NULL AND sc.source IN ('photo', 'video')`;
+export const SHELVES_SQL = `
+  SELECT min(i.id) AS id, i.frame_path, min(l.id) AS location_id,
+         GREATEST(max(sc.created_at), max(i.decided_at)) AS lastmod
+    ${SHELVES_FROM}
+   GROUP BY i.frame_path
+  HAVING bool_or(i.decision = 'approved' AND i.sighting_id IS NOT NULL)`;
+// The approved books on one photo, with their outlines (0..1 of the photo's size).
+const SHELF_BOOKS_SQL = `
+  SELECT DISTINCT ON (b.id) b.id, b.title, b.authors, b.year, i.spot
+    FROM scan_items i JOIN sightings s ON s.id = i.sighting_id AND s.status = 'approved'
+    JOIN books b ON b.id = s.book_id
+   WHERE i.frame_path = $1 AND i.decision = 'approved'
+   ORDER BY b.id, (i.spot->'poly') IS NULL, i.id`;
+
+async function shelfBooks(framePath) {
+  const rows = await many(SHELF_BOOKS_SQL, [framePath]);
+  const doubtful = await doubtfulBooks(rows.map((r) => r.id));
+  return rows.filter((r) => !doubtful.has(Number(r.id)));
+}
+
+// Photos that a given book is in (for its page) or of a given library (for its page).
+const shelvesOf = (where, params, limit) => many(
+  `SELECT * FROM (${SHELVES_SQL}) x WHERE ${where} ORDER BY lastmod DESC LIMIT ${limit}`, params);
+
+// hash: "#b<book id>" from a book's page, so the shelf page outlines that book.
+function shelfThumbs(shelves, T, lng, name, hash = '') {
+  return `<ul class="shelf-thumbs">${shelves.map((sh) => `<li><figure><a href="${withLang(shelfPath(sh.id), lng)}${hash}">
+    <img src="/uploads/${esc(sh.frame_path)}" alt="${esc(T('seo.shelf_alt', { name: sh.name || name }))}" loading="lazy"></a>
+    <figcaption>${sh.name ? `${esc(sh.name)} · ` : ''}${fmtDate(sh.lastmod, lng)}</figcaption></figure></li>`).join('')}</ul>`;
+}
+
+async function shelfPage(lng, T, id) {
+  const it = await one('SELECT frame_path FROM scan_items WHERE id = $1 AND frame_path IS NOT NULL', [id]);
+  if (!it) return null;
+  const sh = (await many(`SELECT * FROM (${SHELVES_SQL}) x WHERE frame_path = $1`, [it.frame_path]))[0];
+  if (!sh) return null;
+  const l = await one(
+    `SELECT l.code, l.name, p.id AS pid, p.slug AS pslug, p.name AS pname, p.name_he AS pname_he, p.country
+       FROM locations l LEFT JOIN places p ON p.id = l.place_id WHERE l.id = $1`, [sh.location_id]);
+  const books = await shelfBooks(sh.frame_path);
+  const place = l.pid ? { id: l.pid, slug: l.pslug, name: l.pname, name_he: l.pname_he } : null;
+  const pName = place ? placeName(place, lng) : null;
+  const name = l.name || (pName ? T('seo.unnamed', { inPlace: T('seo.in', pName) }) : T('free_library'));
+  const date = fmtDate(sh.lastmod, lng);
+  const others = await shelvesOf('location_id = $1 AND id <> $2', [sh.location_id, sh.id], 12);
+  const img = `/uploads/${sh.frame_path}`;
+  const outlines = books.filter((b) => b.spot?.poly && !b.spot.hidden);
+  const lead = T('seo.shelf_lead', { books: T('seo.n_books', { n: books.length }), date });
+  const titles = books.slice(0, 4).map((b) => b.title).join(', ');
+  return {
+    title: `${T('seo.shelf_title', { name, date })} | ${T('app.name')}`,
+    description: `${lead} ${titles}`.slice(0, 155),
+    canonical: shelfPath(sh.id),
+    lastmod: sh.lastmod,
+    noindex: !books.length,
+    image: img,
+    imageAlt: T('seo.shelf_alt', { name }),
+    html: `<h1 dir="auto">${esc(T('seo.shelf_title', { name, date }))}</h1>
+      <p>${esc(lead)}</p>
+      <p class="muted small"><a href="${withLang(`/l/${l.code}`, lng)}">${esc(name)}</a>${place ? ` · <a href="${withLang(placePath(place), lng)}">${esc(pName)}</a>` : ''}</p>
+      <figure class="shelf-photo"><img src="${esc(img)}" alt="${esc(`${T('seo.shelf_alt', { name })}: ${books.map((b) => b.title).join(', ')}`)}">
+        ${outlines.length ? `<svg viewBox="0 0 1 1" preserveAspectRatio="none">${outlines.map((b) => `<a href="${withLang(bookPath(b), lng)}" id="b${b.id}"><title>${esc(b.title)}</title>
+          <polygon points="${b.spot.poly.map((p) => p.join(',')).join(' ')}"/></a>`).join('')}</svg>` : ''}</figure>
+      <h2>${T('seo.shelf_books')}</h2>${bookList(books, lng)}
+      ${others.length ? `<h2>${T('seo.shelf_more')}</h2>${shelfThumbs(others, T, lng, name)}` : ''}
+      <hr><p class="small">${T('shelves.note_html')}</p>`,
+    jsonld: [
+      ...(place ? [breadcrumbs([[T('app.name'), '/'], [countryName(l.country, lng), `/c/${l.country.toLowerCase()}`], [pName, placePath(place)], [name, `/l/${l.code}`], [date, shelfPath(sh.id)]])] : []),
+      {
+        '@context': 'https://schema.org',
+        '@type': 'ImageObject',
+        contentUrl: config.baseUrl + img,
+        url: config.baseUrl + shelfPath(sh.id),
+        name: T('seo.shelf_title', { name, date }),
+        caption: lead,
+        uploadDate: new Date(sh.lastmod).toISOString(),
+        contentLocation: { '@type': 'Place', name, url: `${config.baseUrl}/l/${l.code}` },
+        about: books.map((b) => ({ '@type': 'Book', name: b.title, url: config.baseUrl + bookPath(b),
+          ...(b.authors?.length ? { author: b.authors.map((a) => ({ '@type': 'Person', name: a })) } : {}) })),
+      },
+    ],
   };
 }
 
@@ -601,6 +703,7 @@ async function renderPath(path, lng) {
   if ((m = path.match(/^\/l\/([A-Za-z0-9]{4,10})$/))) return libraryPage(lng, T, m[1]);
   if ((m = path.match(/^\/b\/(\d+)(?:-[^/]*)?$/))) return bookPage(lng, T, Number(m[1]));
   if ((m = path.match(/^\/r\/(\d+)(?:-[^/]*)?$/))) return readerPage(lng, T, Number(m[1]));
+  if ((m = path.match(/^\/s\/(\d+)$/))) return shelfPage(lng, T, Number(m[1]));
   return undefined; // not a page we render: plain app shell
 }
 
@@ -642,8 +745,10 @@ function inject(html, path, lng, page) {
 async function sitemapIndex() {
   const { n } = await one(`SELECT count(*)::int AS n FROM locations l WHERE l.status = 'approved' AND ${LIB_INDEXED}`);
   const { n: nb } = await one(`SELECT count(*)::int AS n FROM (${SITEMAP_BOOKS_SQL}) x`);
+  const { n: ns } = await one(`SELECT count(*)::int AS n FROM (${SHELVES_SQL}) x`);
   const parts = ['pages', ...Array.from({ length: Math.ceil(n / SITEMAP_CHUNK) }, (_, i) => `libraries-${i + 1}`),
-    ...Array.from({ length: Math.ceil(nb / SITEMAP_CHUNK) }, (_, i) => `books-${i + 1}`)];
+    ...Array.from({ length: Math.ceil(nb / SITEMAP_CHUNK) }, (_, i) => `books-${i + 1}`),
+    ...Array.from({ length: Math.ceil(ns / SITEMAP_CHUNK) }, (_, i) => `shelves-${i + 1}`)];
   return `<?xml version="1.0" encoding="UTF-8"?>
 <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${parts.map((p) => `  <sitemap><loc>${config.baseUrl}/sitemaps/${p}.xml</loc></sitemap>`).join('\n')}
@@ -699,6 +804,15 @@ async function sitemapBooks(part) {
   return rows.length ? urlset(rows.map((r) => urlEntry(bookPath(r), r.lastmod))) : null;
 }
 
+// Shelf photos with a book worth a page, each with its picture for image search.
+async function sitemapShelves(part) {
+  const rows = await many(`${SHELVES_SQL} ORDER BY min(i.id) LIMIT $1 OFFSET $2`, [SITEMAP_CHUNK, (part - 1) * SITEMAP_CHUNK]);
+  const kept = [];
+  for (const r of rows) if ((await shelfBooks(r.frame_path)).length) kept.push(r);
+  return kept.length ? urlset(kept.map((r) => urlEntry(shelfPath(r.id), r.lastmod)
+    .replace('</url>', `<image:image><image:loc>${config.baseUrl}/uploads/${esc(r.frame_path)}</image:loc></image:image></url>`))) : null;
+}
+
 async function sitemapLibraries(part) {
   const rows = await many(
     `SELECT l.code, ${LIB_LASTMOD} AS lastmod FROM locations l
@@ -725,8 +839,9 @@ export default async function seoRoutes(app) {
   app.get('/sitemap.xml', async (req, reply) =>
     reply.type('application/xml').header('Cache-Control', 'public, max-age=3600').send(await cached('sm', sitemapIndex)));
   app.get('/sitemaps/:name', async (req, reply) => {
-    const m = req.params.name.match(/^(pages|(libraries|books)-(\d+))\.xml$/);
-    const xml = m && await cached(`sm:${m[1]}`, () => (m[2] === 'books' ? sitemapBooks(Number(m[3])) : m[2] ? sitemapLibraries(Number(m[3])) : sitemapPages()));
+    const m = req.params.name.match(/^(pages|(libraries|books|shelves)-(\d+))\.xml$/);
+    const build = { books: sitemapBooks, shelves: sitemapShelves, libraries: sitemapLibraries }[m?.[2]];
+    const xml = m && await cached(`sm:${m[1]}`, () => (build ? build(Number(m[3])) : sitemapPages()));
     if (!xml) return reply.code(404).send('Not found');
     return reply.type('application/xml').header('Cache-Control', 'public, max-age=3600').send(xml);
   });
@@ -735,7 +850,7 @@ export default async function seoRoutes(app) {
   app.get('/api/pages', async (req, reply) => {
     const path = String(req.query.path ?? '');
     const lng = req.query.lang === 'en' ? 'en' : 'he';
-    if (!/^\/(places|c\/[a-z]{2}|p\/\d+(-[a-z0-9-]*)?|[br]\/\d+(-[^/]*)?)$/i.test(path)) return reply.code(404).send({ error: 'not_found' });
+    if (!/^\/(places|c\/[a-z]{2}|p\/\d+(-[a-z0-9-]*)?|[br]\/\d+(-[^/]*)?|s\/\d+)$/i.test(path)) return reply.code(404).send({ error: 'not_found' });
     const page = await cached(`${lng}${path}`, () => renderPath(path, lng));
     if (!page) return reply.code(404).send({ error: 'not_found' });
     return { title: page.title, html: page.html };
