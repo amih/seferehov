@@ -35,6 +35,7 @@ import { uploadReceipts } from './receipts.js';
 import whereRoutes from './where.js';
 import { startWebQueue } from './webqueue.js';
 import { startJobs } from './jobs.js';
+import { startIndexNow } from './indexnow.js';
 import busyRoutes, { startBusyWatch } from './busy.js';
 
 const app = Fastify({ logger: true, trustProxy: '127.0.0.1', bodyLimit: 1024 * 1024 });
@@ -123,4 +124,5 @@ startWatchNotifier(app.log);
 startOcrWorker(app.log);
 startFixWorker(app.log);
 startJobs(app.log);
+startIndexNow(app.log);
 startBusyWatch(app.log);

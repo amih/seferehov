@@ -30,7 +30,7 @@ const LANGS = ['he', 'en'];
 // it: readers added, checked, edited or reported books there, or it is in Israel. The ~48k
 // untouched OpenStreetMap shelves abroad all read the same, so they get noindex and stay out
 // of the sitemap (Google folded them together as duplicates).
-const LIB_INDEXED = `(l.source = 'user' OR l.last_checked_at IS NOT NULL
+export const LIB_INDEXED = `(l.source = 'user' OR l.last_checked_at IS NOT NULL
   OR EXISTS (SELECT 1 FROM sightings s WHERE s.location_id = l.id AND s.status = 'approved')
   OR EXISTS (SELECT 1 FROM location_checks c WHERE c.location_id = l.id)
   OR EXISTS (SELECT 1 FROM location_edits e WHERE e.location_id = l.id AND e.status = 'approved')
@@ -396,6 +396,21 @@ async function bookPage(lng, T, id) {
   const photos = await many(BOOK_PHOTOS_SQL, [id]);
   const reviews = await many(BOOK_REVIEWS_SQL, [id]);
   const offers = await many(`${OFFERS_SQL} AND m.book_id = $1 ORDER BY m.offer, m.price NULLS FIRST LIMIT 30`, [id]);
+  // Other books now on the shelves this one was seen on: links from book to book, so a
+  // search engine that finds one book page finds the others (15 Nov 2026).
+  const neighbours = await many(
+    `WITH present AS (
+       SELECT * FROM (
+         SELECT DISTINCT ON (s.location_id, s.book_id) s.location_id, s.book_id, s.kind, s.created_at
+           FROM sightings s
+          WHERE s.status = 'approved' AND s.location_id IN (
+            SELECT location_id FROM sightings WHERE book_id = $1 AND status = 'approved')
+          ORDER BY s.location_id, s.book_id, s.created_at DESC) x
+        WHERE kind IN ('seen', 'added') AND book_id <> $1)
+     SELECT b.id, b.title, b.authors, b.year FROM present pr JOIN books b ON b.id = pr.book_id
+      GROUP BY b.id ORDER BY max(pr.created_at) DESC LIMIT 24`, [id]);
+  const hidden = await doubtfulBooks(neighbours.map((n) => n.id));
+  const shelfMates = neighbours.filter((n) => !hidden.has(Number(n.id))).slice(0, 12);
   const rated = reviews.filter((r) => r.rating);
   const avg = rated.length ? rated.reduce((a, r) => a + r.rating, 0) / rated.length : null;
   const written = reviews.filter((r) => hasText(r.answers));
@@ -461,6 +476,7 @@ async function bookPage(lng, T, id) {
         o.place ? ` · ${esc((lng === 'he' && o.place_he) || o.place)}` : ''} · <a href="${withLang(readerPath({ id: o.user_id, screen_name: o.screen_name }), lng)}">${esc(o.screen_name)}</a> · ${fmtDate(o.offered_at, lng)}
         ${o.offer_note ? `<br><span class="small" dir="auto">${esc(o.offer_note)}</span>` : ''}
         <br><button class="btn small" data-offer-contact="${o.id}" data-give="${o.offer === 'give' ? 1 : 0}">✉️ ${T(o.offer === 'give' ? 'offer.contact_give' : 'offer.contact_sale')}</button></li>`).join('')}</ul>` : ''}
+      ${shelfMates.length ? `<h2>${T('seo.book_neighbours')}</h2>${bookList(shelfMates, lng)}` : ''}
       <h2>${T('seo.book_more')}</h2>
       <ul class="ext-links">${bookLinks(b).map(([n, u]) => `<li><a href="${esc(u)}" rel="noopener nofollow" target="_blank">${esc(n)}</a></li>`).join('')}</ul>
       <hr><p class="small">${T('shelves.note_html')}</p></article>`,
@@ -643,7 +659,7 @@ ${entries.join('\n')}
 </urlset>`;
 
 // Last change of a library = its newest approved report, check or creation.
-const LIB_LASTMOD = `GREATEST(l.created_at, l.last_checked_at,
+export const LIB_LASTMOD = `GREATEST(l.created_at, l.last_checked_at,
   (SELECT max(s.created_at) FROM sightings s WHERE s.location_id = l.id AND s.status = 'approved'))`;
 
 async function sitemapPages() {
@@ -702,6 +718,9 @@ export async function renderShell(req) {
 export default async function seoRoutes(app) {
   app.get('/robots.txt', async (req, reply) => reply.type('text/plain').send(
     `User-agent: *\nDisallow: /api/\nDisallow: /me\nDisallow: /login\nDisallow: /review\nDisallow: /admin\nDisallow: /queue\nDisallow: /books\nDisallow: /scan/\nAllow: /api/locations/*/sign\n\nSitemap: ${config.baseUrl}/sitemap.xml\n`));
+
+  // IndexNow proves the site is ours by this file (src/indexnow.js).
+  if (config.indexNowKey) app.get(`/${config.indexNowKey}.txt`, async (req, reply) => reply.type('text/plain').send(config.indexNowKey));
 
   app.get('/sitemap.xml', async (req, reply) =>
     reply.type('application/xml').header('Cache-Control', 'public, max-age=3600').send(await cached('sm', sitemapIndex)));

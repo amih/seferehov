@@ -13,6 +13,9 @@ export const config = {
   webDist: resolve(env.WEB_DIST || '../web/dist'),
   adminEmails: (env.ADMIN_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   minClientBuild: Number(env.MIN_CLIENT_BUILD || 0),
+  // IndexNow (Bing, Yandex, Seznam…): changed book/library/town pages are pushed to search
+  // engines every 15 minutes. 8–128 hex chars of your choosing. Empty = off.
+  indexNowKey: /^[a-zA-Z0-9-]{8,128}$/.test(env.INDEXNOW_KEY || '') ? env.INDEXNOW_KEY : '',
   // Google Books API key (free, 1000 lookups/day). Optional but the keyless quota runs out.
   googleBooksKey: env.GOOGLE_BOOKS_API_KEY || '',
   trustThreshold: Number(env.TRUST_THRESHOLD || 5),
