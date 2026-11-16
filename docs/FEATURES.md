@@ -159,6 +159,7 @@ Every step is recorded as evidence and gives the item a confidence for the queue
 - A book's page shows **Where it is**: each shelf photo it was seen in, darkened except for its spine (outlined in yellow), the books to its left and right in the photo (or above and below, for a pile of books lying flat), and when.
 - Your own home scans: shown only to you. You can give a scan a place name ("living room, left bookcase"); every book from that photo shows it. A street library's photos: shown to anyone once the books were approved, with the library's name.
 - Spines scanned before 8 Nov 2026 were located afterwards by the vision model, by title (`scripts/spots.js`; a box, not the exact lean).
+- **Outlines redrawn by the lab's spine finder** (16 Nov 2026, `scripts/spots-from-yolo.js`, lab experiment 038): the lab's best finder (028: YOLO11n-OBB trained on the admin's checked answer keys) ran on the 100 shelf photos with approved books (24 ms a photo). Each book's outline was replaced by the finder's rectangle that overlaps it most, only when they overlap enough (IoU ≥ 0.45) and the rectangle is at least 0.75 of the old outline's length: 216 of 401 outlines, now turned with the spine and tight to it (`spot.by = 'yolo-028'`, the old outline kept in `spot.prev`). Hand-drawn outlines are never touched; the finder found all 15 of them. 53 of the 71 title-guessed boxes are still loose.
 
 ## Books for sale or to give away
 
