@@ -76,6 +76,24 @@ export async function maybeApply({ hidden = false } = {}) {
 
 export const isUpdateWaiting = () => waiting;
 
+// An address this version doesn't know may be a page added since it was loaded. If the
+// server runs a newer version, switch to it now (the reload opens the same address);
+// true when that is under way. Tried once per address, so a real wrong address still
+// shows "not found".
+export async function updateForUnknownPage() {
+  const key = `seferehov:triedUpdateFor:${location.pathname}`;
+  if (sessionStorage.getItem(key)) return false;
+  let server = null;
+  try { server = (await (await fetch('/version.json', { cache: 'no-store' })).json())?.version; } catch { return false; }
+  if (!server || server === __APP_VERSION__) return false;
+  sessionStorage.setItem(key, '1');
+  if (!reg) { location.reload(); return true; }
+  await reg.update().catch(() => {});
+  for (let i = 0; i < 40 && !reg.waiting; i++) await new Promise((r) => setTimeout(r, 250));
+  if (reg.waiting) { waiting = false; reg.waiting.postMessage({ type: 'SKIP_WAITING' }); } else location.reload();
+  return true;
+}
+
 // Last resort for a broken install: drop every cache and worker, reload.
 export async function hardReset() {
   for (const r of await navigator.serviceWorker?.getRegistrations() ?? []) await r.unregister();

@@ -1,5 +1,5 @@
 import './style.css';
-import { initUpdates, maybeApply } from './update.js';
+import { initUpdates, maybeApply, updateForUnknownPage } from './update.js';
 import { startQueue, onQueueChange, kick, unsentItems, retryNow, discard } from './queue.js';
 import { toast, choose, esc } from './ui.js';
 import { whyText } from './outbox-ui.js';
@@ -108,6 +108,10 @@ async function render() {
   main = fresh;
   window.scrollTo(0, 0);
   if (!view) {
+    // Perhaps a page added after this version was loaded: get the newest version first.
+    main.innerHTML = `<section class="page"><p class="muted">${t('loading')}</p></section>`;
+    if (await updateForUnknownPage()) return;
+    if (stale()) return;
     main.innerHTML = `<section class="page"><h1>${t('notfound.title')}</h1><p><a href="/">${t('back.map')}</a></p></section>`;
     return;
   }
