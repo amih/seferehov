@@ -8,6 +8,8 @@ import { captureShots, captureFiles } from '../capture.js';
 import { offerDialog, offerLine } from '../offers.js';
 import { rememberList } from '../pager.js';
 import { bookFacts, GENRES, LANGUAGES } from '../genres.js';
+import { setPublic } from '../invite.js';
+import { sendBooks } from './invite.js';
 
 // The reader's own books, scanned at home. Later, "I left it in a library" reports it there.
 // Adding is on its own screen (/books/add), so this one is just the list.
@@ -19,7 +21,7 @@ export default async function myBooksView(root) {
   <section class="page">
     <h1>${t('mybooks.title')}</h1>
     <p class="muted">${t('mybooks.lead')}</p>
-    <p class="row"><a class="btn primary" href="/books/add">${t('mybooks.add_btn')}</a><span id="queue-link"></span></p>
+    <p class="row"><a class="btn primary" href="/books/add">${t('mybooks.add_btn')}</a><a class="btn" href="/invite">💌 ${t('invite.menu')}</a><span id="queue-link"></span></p>
     <div id="lists"><p class="muted">${t('loading')}</p></div>
   </section>`;
 
@@ -66,12 +68,15 @@ export default async function myBooksView(root) {
         <li data-id="${r.id}"><a href="/books/${r.id}" data-book>${cover(r)}</a><div class="meta">
           <a class="title-link" href="/books/${r.id}" data-book><strong>${esc(r.title)}</strong></a><span class="muted">${esc((r.authors ?? []).join(', '))}</span>
           ${bookFacts(r) ? `<span class="small muted">${esc(bookFacts(r))}</span>` : ''}
-          ${offerLine(r)}
+          ${offerLine(r)}${r.public ? `<span class="small public-tag">${t('public.on')}</span>` : ''}
           <span class="row"><button class="btn small primary" data-place="${r.id}">📍 ${t('mybooks.left_it')}</button>
+          <button class="btn small" data-public="${r.id}" title="${esc(t('public.note'))}">${t(r.public ? 'public.hide' : 'public.make')}</button>
           <button class="btn small" data-offer="${r.id}">${r.offer ? `✎ ${t('offer.edit')}` : `🏷️ ${t('offer.btn')}`}</button>
           <button class="btn small" data-del="${r.id}" aria-label="${esc(t('mybooks.remove'))}">✕</button></span></div></li>`).join('')}</ul>`
         : `<p class="muted small">${t('mybooks.empty2')}</p>`}
       ${d.friends.length ? `<h2>${t('owner.friends_title')} <span class="count">${d.friends.length}</span></h2>
+      <p class="muted small">${t('invite.friends_lead')}</p>
+      <p class="row">${friendGroups(d.friends).map((f, i) => `<button class="btn small" data-send="${i}">${esc(t('invite.send_to', { name: f.friend_name || t('owner.a_friend'), n: f.n }))}</button>`).join('')}</p>
       <ul class="books">${d.friends.map((r) => `
         <li data-id="${r.id}"><a href="/books/${r.id}" data-book>${cover(r)}</a><div class="meta">
           <a class="title-link" href="/books/${r.id}" data-book><strong>${esc(r.title)}</strong></a><span class="muted">${esc((r.authors ?? []).join(', '))}</span>
@@ -97,7 +102,15 @@ export default async function myBooksView(root) {
   });
   $('#lists').addEventListener('click', async (e) => {
     const p = e.target.closest('[data-place]'), del = e.target.closest('[data-del]'), off = e.target.closest('[data-offer]');
-    if (off) {
+    const pub = e.target.closest('[data-public]'), send = e.target.closest('[data-send]');
+    if (send) {
+      await sendBooks(friendGroups(d.friends)[Number(send.dataset.send)]);
+    } else if (pub) {
+      const item = homeRows.find((r) => r.id === Number(pub.dataset.public));
+      if (!item) return;
+      const r = await setPublic(`/api/my-books/${item.id}/public`, !item.public);
+      if (r) { toast(t(r.public ? 'public.made' : 'public.hidden')); showLists(); }
+    } else if (off) {
       const item = homeRows.find((r) => r.id === Number(off.dataset.offer));
       if (item && await offerDialog(item)) showLists();
     } else if (p) {
@@ -115,6 +128,16 @@ export default async function myBooksView(root) {
   showLists();
 }
 
+// Friends' books (at the friend's home, not borrowed), by the name given to the friend.
+function friendGroups(rows) {
+  const by = new Map();
+  for (const r of rows.filter((x) => x.owner === 'friend')) {
+    const k = r.friend_name ?? '';
+    by.set(k, { friend_name: k, n: (by.get(k)?.n ?? 0) + 1 });
+  }
+  return [...by.values()];
+}
+
 // Adding books: one camera for everything (capture.js) — shelves, front covers, back
 // covers, in any order. The server sorts the photos and pairs the covers; every book
 // found waits in the approval queue, to confirm or fix.
@@ -130,6 +153,11 @@ export async function addMyBooksView(root) {
       <label class="big-btn"><span>🖼️</span><b>${t('capture.files')}</b><small>${t('capture.files_note')}</small>
         <input type="file" accept="image/*" multiple hidden id="files"></label>
     </div>
+    <form class="owner-pick"><p>${t('owner.q')}</p>
+      <p class="row"><label><input type="radio" name="owner" value="mine" checked> ${t('owner.mine')}</label>
+      <label><input type="radio" name="owner" value="friend"> ${t('owner.friend')}</label>
+      <label><input type="radio" name="owner" value="borrowed"> ${t('owner.borrowed')}</label></p>
+      <label class="friend-name" hidden>${t('owner.name')} <input name="friend_name" maxlength="80" placeholder="${esc(t('owner.name_ph'))}"></label></form>
     <p class="note">${t('mybooks.add_how')}</p>
     <p class="muted small">💡 ${t('mybooks.add_tips')}</p>
     <div class="shots" id="capture-panel" hidden></div>
@@ -140,7 +168,10 @@ export async function addMyBooksView(root) {
     queueLink.innerHTML = c.open + c.later || c.processing ? `<a class="btn" href="/queue">📥 ${t('queue.link', c)}</a>` : '';
   }).catch(() => {});
   showQueue();
-  const request = () => ({ owner: 'mine', lang: lang() });
+  // Whose books: mine, or a friend's (catalogued at their home, to send them later).
+  const pick = root.querySelector('.owner-pick');
+  pick.onchange = () => { pick.querySelector('.friend-name').hidden = pick.owner.value === 'mine'; };
+  const request = () => ({ owner: pick.owner.value, friend_name: pick.owner.value === 'mine' ? null : pick.friend_name.value.trim() || null, lang: lang() });
   root.querySelector('#files').onchange = async (e) => {
     const n = await captureFiles(e.target.files, request);
     e.target.value = '';

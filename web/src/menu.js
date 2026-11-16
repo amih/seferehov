@@ -30,6 +30,7 @@ async function open() {
     ['🌍', 'menu.places', '/places'],
     ...(me ? [['📥', 'todo.title', '/queue', 'todo', waiting]] : []),
     ...(me ? [['🔔', 'menu.watches', '/me#watches']] : []),
+    ...(me ? [['💌', 'invite.menu', '/invite']] : []),
     ...(me?.trust_level >= 3 ? [['📊', 'menu.admin', '/admin']] : []),
     ['📖', 'menu.comic', '/comic'],
     ['ℹ️', 'menu.about', '/about'],

@@ -394,6 +394,7 @@ async function bookPage(lng, T, id) {
         ORDER BY s.location_id, s.created_at DESC) x
       ORDER BY created_at DESC LIMIT 50`, [id]);
   const owned = await one('SELECT 1 FROM my_books WHERE book_id = $1 LIMIT 1', [id]);
+  const homes = await many(PUBLIC_HOMES_SQL, [id]);
   const reviewed = await one('SELECT 1 FROM book_reviews WHERE book_id = $1 AND NOT hidden LIMIT 1', [id]);
   if (!libs.length && !owned && !reviewed) return null; // only books readers reported or read have pages
   const photos = await many(BOOK_PHOTOS_SQL, [id]);
@@ -413,11 +414,14 @@ async function bookPage(lng, T, id) {
      SELECT b.id, b.title, b.authors, b.year FROM present pr JOIN books b ON b.id = pr.book_id
       GROUP BY b.id ORDER BY max(pr.created_at) DESC LIMIT 24`, [id]);
   const hidden = await doubtfulBooks(neighbours.map((n) => n.id));
-  const shelves = await many(
-    `SELECT x.*, l.name FROM (${SHELVES_SQL}) x JOIN locations l ON l.id = x.location_id
-      WHERE x.frame_path IN (SELECT i.frame_path FROM scan_items i JOIN sightings s ON s.id = i.sighting_id AND s.status = 'approved'
-                              WHERE s.book_id = $1 AND i.decision = 'approved')
-      ORDER BY x.lastmod DESC LIMIT 6`, [id]);
+  const shelves = (await many(
+    `SELECT x.*, l.name, u.screen_name FROM (${SHELVES_SQL}) x
+       LEFT JOIN locations l ON l.id = x.location_id LEFT JOIN users u ON u.id = x.user_id AND x.home
+      WHERE x.frame_path IN (SELECT i.frame_path FROM scan_items i
+                               LEFT JOIN sightings s ON s.id = i.sighting_id AND s.status = 'approved'
+                               LEFT JOIN my_books m ON m.id = i.my_book_id AND m.public
+                              WHERE i.decision = 'approved' AND (s.book_id = $1 OR m.book_id = $1))
+      ORDER BY x.lastmod DESC LIMIT 6`, [id])).map((sh) => ({ ...sh, name: sh.home ? T('seo.home_lib', { name: sh.screen_name }) : sh.name }));
   const shelfMates = neighbours.filter((n) => !hidden.has(Number(n.id))).slice(0, 12);
   const rated = reviews.filter((r) => r.rating);
   const avg = rated.length ? rated.reduce((a, r) => a + r.rating, 0) / rated.length : null;
@@ -439,8 +443,10 @@ async function bookPage(lng, T, id) {
   const town = townOf(here.find((l) => l.pname)) ?? null;
   const give = offers.find((o) => o.offer === 'give'), sale = offers.find((o) => o.offer !== 'give');
   const offerTown = (o) => (o ? (lng === 'he' && o.place_he) || o.place || null : null);
+  const homeTown = (h) => (h ? (lng === 'he' && h.pname_he) || h.pname || null : null);
   const where = give ? T('seo.book_where_give', { town: offerTown(give) }) : here.length ? T('seo.book_where_lib', { town })
-    : sale ? T('seo.book_where_sale', { town: offerTown(sale) }) : null;
+    : sale ? T('seo.book_where_sale', { town: offerTown(sale) })
+    : homes.length ? T('seo.book_where_home', { town: homeTown(homes.find((h) => h.pname)) }) : null;
   const name = T('seo.book_name', { title: short(b.title, 60), authors: short(authors, 30) });
   const lead = T('seo.book_lead', { name: T('seo.book_name', { title: b.title, authors }), where, n: here.length });
   const description = `${lead}${blurb ? ` ${blurb.replace(/\s+/g, ' ')}` : ''}`.slice(0, 155);
@@ -451,7 +457,7 @@ async function bookPage(lng, T, id) {
     description,
     noindex: doubtful,
     canonical: bookPath(b),
-    lastmod: libs[0]?.created_at ?? b.details_at ?? b.created_at,
+    lastmod: latest(libs[0]?.created_at, homes[0]?.public_at) ?? b.details_at ?? b.created_at,
     html: `<article class="book-public">
       <h1 dir="auto">${esc(b.title)}</h1>
       ${authors ? `<p class="lead" dir="auto">${esc(authors)}</p>` : ''}
@@ -478,7 +484,10 @@ async function bookPage(lng, T, id) {
       <h2>${T('seo.book_where')}</h2>
       ${here.length ? `<ul>${here.map((l) => `<li><a href="${withLang(`/l/${l.code}`, lng)}">${esc(l.name || T('free_library'))}</a>${
         l.pname ? ` · ${esc((lng === 'he' && l.pname_he) || l.pname)}` : ''} · ${T('seo.seen_on', { date: fmtDate(l.created_at, lng) })}</li>`).join('')}</ul>`
-        : `<p>${T('seo.book_nowhere')}</p>`}
+        : homes.length ? '' : `<p>${T('seo.book_nowhere')}</p>`}
+      ${homes.length ? `<ul class="homes">${homes.map((h) => `<li>${T('seo.on_shelf_of', {
+        name: `<a href="${withLang(readerPath({ id: h.user_id, screen_name: h.screen_name }), lng)}">${esc(h.screen_name)}</a>`,
+        town: homeTown(h) ? esc(homeTown(h)) : null })}</li>`).join('')}</ul>` : ''}
       ${offers.length ? `<h2>${T('offer.on_page')}</h2><ul class="offers">${offers.map((o) => `<li>
         <b>${o.offer === 'give' ? `🎁 ${T('offer.give')}` : `🏷️ ${T('offer.sale')} · ₪${o.price}`}</b>${o.condition ? ` · ${T(`offer.cond_${o.condition}`)}` : ''}${
         o.place ? ` · ${esc((lng === 'he' && o.place_he) || o.place)}` : ''} · <a href="${withLang(readerPath({ id: o.user_id, screen_name: o.screen_name }), lng)}">${esc(o.screen_name)}</a> · ${fmtDate(o.offered_at, lng)}
@@ -518,27 +527,46 @@ async function bookPage(lng, T, id) {
 }
 
 // ---- shelf photos (15 Nov 2026): /s/<id>, id = the first scan item read off that photo
-// (scan_items.frame_path). A photo is shown once a book read off it was approved at an
-// approved library; the app shows the same photos on its library book view.
+// (scan_items.frame_path). A street library's photo is shown once a book read off it was
+// approved at an approved library (the app shows the same photos on its library book
+// view). A home photo only when its reader made it public (scans.public, 16 Nov 2026), and
+// only with the books of theirs that are public: the reader's name and town, no address.
 export const shelfPath = (id) => `/s/${id}`;
-// One row per shelf photo with an approved book. $1 limits it (see the callers).
+// A book of the reader's own, shown in public.
+const PUBLIC_MY_BOOK = `m.public AND m.owner = 'mine' AND m.placed_at IS NULL`;
+// One row per shelf photo with a book to show.
 const SHELVES_FROM = `
     FROM scan_items i JOIN scans sc ON sc.id = i.scan_id
-    JOIN locations l ON l.id = sc.location_id AND l.status = 'approved'
-   WHERE i.frame_path IS NOT NULL AND sc.source IN ('photo', 'video')`;
+    LEFT JOIN locations l ON l.id = sc.location_id
+    LEFT JOIN my_books m ON m.id = i.my_book_id
+   WHERE i.frame_path IS NOT NULL AND sc.source IN ('photo', 'video')
+     AND ((sc.location_id IS NOT NULL AND l.status = 'approved')
+       OR (sc.location_id IS NULL AND sc.public AND sc.owner = 'mine'))`;
 export const SHELVES_SQL = `
-  SELECT min(i.id) AS id, i.frame_path, min(l.id) AS location_id,
-         GREATEST(max(sc.created_at), max(i.decided_at)) AS lastmod
+  SELECT min(i.id) AS id, i.frame_path, min(l.id) AS location_id, min(sc.user_id) AS user_id,
+         bool_or(sc.location_id IS NULL) AS home,
+         GREATEST(max(sc.created_at), max(i.decided_at), max(sc.public_at)) AS lastmod
     ${SHELVES_FROM}
    GROUP BY i.frame_path
-  HAVING bool_or(i.decision = 'approved' AND i.sighting_id IS NOT NULL)`;
+  HAVING bool_or(i.decision = 'approved' AND (i.sighting_id IS NOT NULL OR (${PUBLIC_MY_BOOK})))`;
 // The approved books on one photo, with their outlines (0..1 of the photo's size).
 const SHELF_BOOKS_SQL = `
   SELECT DISTINCT ON (b.id) b.id, b.title, b.authors, b.year, i.spot
-    FROM scan_items i JOIN sightings s ON s.id = i.sighting_id AND s.status = 'approved'
-    JOIN books b ON b.id = s.book_id
+    FROM scan_items i
+    LEFT JOIN sightings s ON s.id = i.sighting_id AND s.status = 'approved'
+    LEFT JOIN my_books m ON m.id = i.my_book_id AND ${PUBLIC_MY_BOOK}
+    JOIN books b ON b.id = coalesce(s.book_id, m.book_id)
    WHERE i.frame_path = $1 AND i.decision = 'approved'
    ORDER BY b.id, (i.spot->'poly') IS NULL, i.id`;
+// Readers who show a book on their shelves at home: screen name and town only.
+export const PUBLIC_HOMES_SQL = `
+  SELECT * FROM (
+    SELECT DISTINCT ON (u.id) u.id AS user_id, u.screen_name, p.name AS pname, p.name_he AS pname_he, m.public_at
+      FROM my_books m JOIN users u ON u.id = m.user_id LEFT JOIN places p ON p.id = u.home_place_id
+     WHERE m.book_id = $1 AND ${PUBLIC_MY_BOOK} AND u.screen_name IS NOT NULL
+     ORDER BY u.id, m.public_at DESC) x
+   ORDER BY public_at DESC LIMIT 20`;
+const latest = (...dates) => dates.filter(Boolean).sort((x, y) => new Date(y) - new Date(x))[0];
 
 async function shelfBooks(framePath) {
   const rows = await many(SHELF_BOOKS_SQL, [framePath]);
@@ -562,6 +590,7 @@ async function shelfPage(lng, T, id) {
   if (!it) return null;
   const sh = (await many(`SELECT * FROM (${SHELVES_SQL}) x WHERE frame_path = $1`, [it.frame_path]))[0];
   if (!sh) return null;
+  if (sh.home) return homeShelfPage(lng, T, sh);
   const l = await one(
     `SELECT l.code, l.name, p.id AS pid, p.slug AS pslug, p.name AS pname, p.name_he AS pname_he, p.country
        FROM locations l LEFT JOIN places p ON p.id = l.place_id WHERE l.id = $1`, [sh.location_id]);
@@ -572,7 +601,6 @@ async function shelfPage(lng, T, id) {
   const date = fmtDate(sh.lastmod, lng);
   const others = await shelvesOf('location_id = $1 AND id <> $2', [sh.location_id, sh.id], 12);
   const img = `/uploads/${sh.frame_path}`;
-  const outlines = books.filter((b) => b.spot?.poly && !b.spot.hidden);
   const lead = T('seo.shelf_lead', { books: T('seo.n_books', { n: books.length }), date });
   const titles = books.slice(0, 4).map((b) => b.title).join(', ');
   return {
@@ -586,9 +614,7 @@ async function shelfPage(lng, T, id) {
     html: `<h1 dir="auto">${esc(T('seo.shelf_title', { name, date }))}</h1>
       <p>${esc(lead)}</p>
       <p class="muted small"><a href="${withLang(`/l/${l.code}`, lng)}">${esc(name)}</a>${place ? ` · <a href="${withLang(placePath(place), lng)}">${esc(pName)}</a>` : ''}</p>
-      <figure class="shelf-photo"><img src="${esc(img)}" alt="${esc(`${T('seo.shelf_alt', { name })}: ${books.map((b) => b.title).join(', ')}`)}">
-        ${outlines.length ? `<svg viewBox="0 0 1 1" preserveAspectRatio="none">${outlines.map((b) => `<a href="${withLang(bookPath(b), lng)}" id="b${b.id}"><title>${esc(b.title)}</title>
-          <polygon points="${b.spot.poly.map((p) => p.join(',')).join(' ')}"/></a>`).join('')}</svg>` : ''}</figure>
+      ${shelfFigure(img, books, T('seo.shelf_alt', { name }), lng)}
       <h2>${T('seo.shelf_books')}</h2>${bookList(books, lng)}
       ${others.length ? `<h2>${T('seo.shelf_more')}</h2>${shelfThumbs(others, T, lng, name)}` : ''}
       <hr><p class="small">${T('shelves.note_html')}</p>`,
@@ -610,6 +636,55 @@ async function shelfPage(lng, T, id) {
   };
 }
 
+function shelfFigure(img, books, alt, lng) {
+  const outlines = books.filter((b) => b.spot?.poly && !b.spot.hidden);
+  return `<figure class="shelf-photo"><img src="${esc(img)}" alt="${esc(`${alt}: ${books.map((b) => b.title).join(', ')}`)}">
+    ${outlines.length ? `<svg viewBox="0 0 1 1" preserveAspectRatio="none">${outlines.map((b) => `<a href="${withLang(bookPath(b), lng)}" id="b${b.id}"><title>${esc(b.title)}</title>
+      <polygon points="${b.spot.poly.map((p) => p.join(',')).join(' ')}"/></a>`).join('')}</svg>` : ''}</figure>`;
+}
+
+// A shelf photo a reader made public at home: their screen name and town, no address.
+async function homeShelfPage(lng, T, sh) {
+  const u = await one(
+    `SELECT u.id, u.screen_name, p.name AS pname, p.name_he AS pname_he FROM users u LEFT JOIN places p ON p.id = u.home_place_id
+      WHERE u.id = $1 AND u.screen_name IS NOT NULL`, [sh.user_id]);
+  if (!u) return null;
+  const books = await shelfBooks(sh.frame_path);
+  const name = T('seo.home_lib', { name: u.screen_name });
+  const town = (lng === 'he' && u.pname_he) || u.pname;
+  const date = fmtDate(sh.lastmod, lng);
+  const others = await shelvesOf('location_id IS NULL AND user_id = $1 AND id <> $2', [u.id, sh.id], 12);
+  const img = `/uploads/${sh.frame_path}`;
+  const lead = T('seo.shelf_lead', { books: T('seo.n_books', { n: books.length }), date });
+  return {
+    title: `${T('seo.shelf_title', { name, date })} | ${T('app.name')}`,
+    description: `${lead} ${books.slice(0, 4).map((b) => b.title).join(', ')}`.slice(0, 155),
+    canonical: shelfPath(sh.id),
+    lastmod: sh.lastmod,
+    noindex: !books.length,
+    image: img,
+    imageAlt: T('seo.shelf_alt', { name }),
+    html: `<h1 dir="auto">${esc(T('seo.shelf_title', { name, date }))}</h1>
+      <p>${esc(lead)}</p>
+      <p class="muted small"><a href="${withLang(readerPath(u), lng)}">${esc(u.screen_name)}</a>${town ? ` · ${esc(town)}` : ''}</p>
+      ${shelfFigure(img, books, T('seo.shelf_alt', { name }), lng)}
+      <h2>${T('seo.shelf_books')}</h2>${bookList(books, lng)}
+      ${others.length ? `<h2>${T('seo.shelf_more')}</h2>${shelfThumbs(others, T, lng, name)}` : ''}
+      <hr><p class="small">${T('shelves.note_html')}</p>`,
+    jsonld: [{
+      '@context': 'https://schema.org',
+      '@type': 'ImageObject',
+      contentUrl: config.baseUrl + img,
+      url: config.baseUrl + shelfPath(sh.id),
+      name: T('seo.shelf_title', { name, date }),
+      caption: lead,
+      uploadDate: new Date(sh.lastmod).toISOString(),
+      author: { '@type': 'Person', name: u.screen_name, url: config.baseUrl + readerPath(u) },
+      about: books.map((b) => ({ '@type': 'Book', name: b.title, url: config.baseUrl + bookPath(b) })),
+    }],
+  };
+}
+
 async function readerPage(lng, T, id) {
   const u = await one(
     `SELECT id, screen_name, created_at, (SELECT COALESCE(sum(points), 0)::int FROM karma_events WHERE user_id = users.id) AS karma
@@ -617,6 +692,14 @@ async function readerPage(lng, T, id) {
   if (!u) return null;
   const { level } = levelOf(u.karma);
   const rows = await many(READER_REVIEWS_SQL, [id]);
+  // Books the reader shows on their shelves at home (16 Nov 2026).
+  const shown = await many(
+    `SELECT b.id, b.title, b.authors, b.year, m.public_at FROM my_books m JOIN books b ON b.id = m.book_id
+      WHERE m.user_id = $1 AND ${PUBLIC_MY_BOOK} ORDER BY m.public_at DESC LIMIT 500`, [id]);
+  const unsure = await doubtfulBooks(shown.map((b) => b.id));
+  const onShelves = shown.filter((b) => !unsure.has(Number(b.id)));
+  const photos = await shelvesOf('location_id IS NULL AND user_id = $1', [id], 12);
+  const town = await one('SELECT p.name, p.name_he FROM users u JOIN places p ON p.id = u.home_place_id WHERE u.id = $1', [id]);
   const recommended = rows.filter((r) => r.rating >= 4);
   const others = rows.filter((r) => !(r.rating >= 4));
   const item = (r) => `<li><a href="${withLang(bookPath({ id: r.book_id, title: r.title }), lng)}" dir="auto"><strong>${esc(r.title)}</strong></a>${
@@ -627,13 +710,17 @@ async function readerPage(lng, T, id) {
     title: `${T('reader.title', { name })} | ${T('app.name')}`,
     description: T('reader.desc', { name, n: rows.length, rec: recommended.length }),
     canonical: readerPath(u),
-    noindex: !rows.length, // nothing to read there yet
-    lastmod: rows[0]?.updated_at,
+    noindex: !rows.length && !onShelves.length, // nothing to read there yet
+    lastmod: latest(rows[0]?.updated_at, shown[0]?.public_at),
     html: `<h1 dir="auto">${esc(T('reader.title', { name }))}</h1>
       <p class="level-line">${level.badge} ${T(`level.${level.key}`)}</p>
       <p>${rows.length ? T('reader.lead', { n: rows.length, rec: recommended.length }) : T('reader.none')}</p>
       ${recommended.length ? `<h2>${T('reader.recommends')}</h2><ul class="reader-books">${recommended.map(item).join('')}</ul>` : ''}
       ${others.length ? `<h2>${T('reader.also_read')}</h2><ul class="reader-books">${others.map(item).join('')}</ul>` : ''}
+      ${onShelves.length ? `<h2 dir="auto">${esc(T('reader.shelves', { name }))}</h2>
+        ${town ? `<p class="muted small">${esc((lng === 'he' && town.name_he) || town.name)}</p>` : ''}
+        ${photos.length ? shelfThumbs(photos, T, lng, T('seo.home_lib', { name })) : ''}
+        ${bookList(onShelves, lng)}` : ''}
       <hr><p class="small">${T('shelves.note_html')}</p>`,
     jsonld: [{
       '@context': 'https://schema.org',
@@ -776,7 +863,9 @@ async function sitemapPages() {
     `SELECT DISTINCT p.country AS cc FROM locations l JOIN places p ON p.id = l.place_id
       WHERE l.status = 'approved' AND ${LIB_INDEXED} ORDER BY 1`);
   const readers = await many(
-    `SELECT u.id, u.screen_name, max(r.updated_at) AS lastmod FROM users u JOIN book_reviews r ON r.user_id = u.id AND NOT r.hidden
+    `SELECT u.id, u.screen_name, max(x.at) AS lastmod FROM users u JOIN (
+       SELECT user_id, updated_at AS at FROM book_reviews WHERE NOT hidden
+       UNION ALL SELECT m.user_id, m.public_at FROM my_books m WHERE ${PUBLIC_MY_BOOK}) x ON x.user_id = u.id
       WHERE u.screen_name IS NOT NULL GROUP BY u.id ORDER BY u.id`);
   return urlset([
     urlEntry('/'), urlEntry('/about'), urlEntry('/comic').replace('</url>', `${comicImages('he').map((im) => `<image:image><image:loc>${config.baseUrl}${im.src}</image:loc></image:image>`).join('')}</url>`), urlEntry('/places'), `  <url><loc>${config.baseUrl}/en</loc></url>`,
@@ -789,11 +878,14 @@ async function sitemapPages() {
 // Books with something to show: a library holding it, its covers, or a blurb.
 export const SITEMAP_BOOKS_SQL = `
   SELECT b.id, b.title, GREATEST(b.created_at, b.details_at,
-         (SELECT max(s.created_at) FROM sightings s WHERE s.book_id = b.id AND s.status = 'approved')) AS lastmod
+         (SELECT max(s.created_at) FROM sightings s WHERE s.book_id = b.id AND s.status = 'approved'),
+         (SELECT max(m.public_at) FROM my_books m WHERE m.book_id = b.id AND ${PUBLIC_MY_BOOK})) AS lastmod
     FROM books b
    WHERE EXISTS (SELECT 1 FROM sightings s JOIN locations l ON l.id = s.location_id
                   WHERE s.book_id = b.id AND s.status = 'approved' AND l.status = 'approved')
       OR EXISTS (SELECT 1 FROM book_reviews r WHERE r.book_id = b.id AND NOT r.hidden)
+      OR EXISTS (SELECT 1 FROM my_books m JOIN users u ON u.id = m.user_id
+                  WHERE m.book_id = b.id AND ${PUBLIC_MY_BOOK} AND u.screen_name IS NOT NULL)
       OR (EXISTS (SELECT 1 FROM my_books m WHERE m.book_id = b.id)
           AND (b.front_url IS NOT NULL OR b.cover_url IS NOT NULL OR b.description IS NOT NULL))`;
 

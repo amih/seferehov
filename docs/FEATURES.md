@@ -150,7 +150,8 @@ Every step is recorded as evidence and gives the item a confidence for the queue
 
 - Books scanned at home stay private. Shelf photos or covers taken from My books become the reader's own books.
 - **"I left it in a library"**: one tap reports the book as added to that library.
-- Books of friends, or borrowed from friends, can be kept apart from the reader's own.
+- Books of friends, or borrowed from friends, can be kept apart from the reader's own: when adding books, the reader picks whose they are (mine, a friend's at the friend's home, borrowed) and the friend's name.
+- **Public books and shelves** (16 Nov 2026): the home library is private by default. Any of the reader's own books (not a friend's or borrowed one) can be made public from My books, and a whole home shelf photo from a book's "Where is it?" box (`PUT /api/scans/<id>/public`), which makes every book of theirs approved off that photo public with it. A public book shows on the book's page ("On <screen name>'s shelf in <town>"), on the reader's page `/r/<id>` ("On <name>'s shelves", with their public shelf photos), and a public shelf photo gets its own `/s/<id>` page with the reader's name and town instead of a library. Only the screen name and the town are ever shown, never an address. The town is the reader's `users.home_place_id` (the same one the offer form remembers); the app asks for it the first time something is made public. A book whose only copies are public home copies gets a page and a sitemap entry like a library book (its `lastmod` includes when it was made public); private home scans stay out of shelf pages, the sitemap and IndexNow.
 - With more than 5 books, the list can be filtered by words, genre and language, and sorted by when added, title, author or year.
 
 ### Where is it? (from 8 Nov 2026)
@@ -160,6 +161,12 @@ Every step is recorded as evidence and gives the item a confidence for the queue
 - Your own home scans: shown only to you. You can give a scan a place name ("living room, left bookcase"); every book from that photo shows it. A street library's photos: shown to anyone once the books were approved, with the library's name.
 - Spines scanned before 8 Nov 2026 were located afterwards by the vision model, by title (`scripts/spots.js`; a box, not the exact lean).
 - **Outlines redrawn by the lab's spine finder** (16 Nov 2026, `scripts/spots-from-yolo.js`, lab experiment 038): the lab's best finder (028: YOLO11n-OBB trained on the admin's checked answer keys) ran on the 100 shelf photos with approved books (24 ms a photo). Each book's outline was replaced by the finder's rectangle that overlaps it most, only when they overlap enough (IoU ≥ 0.45) and the rectangle is at least 0.75 of the old outline's length: 216 of 401 outlines, now turned with the spine and tight to it (`spot.by = 'yolo-028'`, the old outline kept in `spot.prev`). Hand-drawn outlines are never touched; the finder found all 15 of them. 53 of the 71 title-guessed boxes are still loose.
+
+## Inviting friends (16 Nov 2026)
+
+- **Invite a friend** (☰ menu and My books → `/invite`): the reader's own link, `https://seferehov.com/?i=<code>`, the same every time, sent with the phone's share sheet (WhatsApp, SMS, e-mail; on a computer: copy, WhatsApp, SMS and e-mail links). A new account made after opening the link counts as that reader's invitee (`users.invited_by`). No invite-only gate and no limit on invites.
+- **Sending a friend their books**: books catalogued at a friend's home (owner "a friend's", by the friend's name) get "📨 Send to <name>" in My books and on `/invite`. It makes a one-time link (`invites` with `handover`, the books in `invite_books`, valid 60 days) that is also an invite. The friend sees "<reader> catalogued N books from your library" with titles and covers only, signs in or signs up, and takes them with one tap (or declines). The books move to the friend's My books, private; they leave the sender's list.
+- The inviter gets 100 points once per invitee: at the invitee's first contribution (their first points, `rewardInviter` in `server/src/moderation.js`), or when they take the books.
 
 ## Books for sale or to give away
 

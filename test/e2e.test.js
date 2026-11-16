@@ -64,6 +64,15 @@ async function seed() {
   S.sighting = (await one(`INSERT INTO sightings(book_id, location_id, user_id, kind, status) VALUES ($1, $2, $3, 'seen', 'approved') RETURNING id`, [S.book, S.location, S.reader])).id;
   await c.query(`INSERT INTO sightings(book_id, location_id, user_id, kind, status) VALUES ($1, $2, $3, 'seen', 'pending')`, [S.book2, S.location, S.reader]);
   S.myBook = (await one(`INSERT INTO my_books(user_id, book_id) VALUES ($1, $2) RETURNING id`, [S.reader, S.book2])).id;
+  // A town, a public home book, and books catalogued at a friend's home sent with an invite link.
+  await c.query(`INSERT INTO places(id, name, name_he, slug, country, geom) VALUES (293397, 'Tel Aviv', 'תל אביב', 'tel-aviv', 'IL', ST_SetSRID(ST_MakePoint(34.78, 32.08), 4326))`);
+  await c.query('UPDATE users SET home_place_id = 293397 WHERE id = $1', [S.reader]);
+  S.book3 = (await one(`INSERT INTO books(title, authors, source) VALUES ('Home shelf book', ARRAY['Some Author'], 'test') RETURNING id`)).id;
+  await c.query(`INSERT INTO my_books(user_id, book_id, public, public_at) VALUES ($1, $2, true, now())`, [S.reader, S.book3]);
+  const friendBook = (await one(`INSERT INTO my_books(user_id, book_id, owner, friend_name) VALUES ($1, $2, 'friend', 'Dana') RETURNING id`, [S.reader, S.book])).id;
+  S.invite = 'e2eHandover01';
+  const inv = (await one(`INSERT INTO invites(code, user_id, handover, friend_name, expires_at) VALUES ($1, $2, true, 'Dana', now() + interval '60 days') RETURNING id`, [S.invite, S.reader])).id;
+  await c.query('INSERT INTO invite_books(invite_id, my_book_id) VALUES ($1, $2)', [inv, friendBook]);
   // A read scan with one book waiting for the reader's approval. (No scan in line: the real
   // scan worker would try to read its photo.)
   S.scan = (await one(`INSERT INTO scans(user_id, location_id, status, source, media, started_at, finished_at)
@@ -138,6 +147,7 @@ const EXTRA = () => [
   `/api/locations?bbox=34.7,32.0,34.9,32.2&zoom=14&px=800`, `/api/books/search?q=deep`, `/api/books/search?q=אני`,
   `/api/books/lookup?isbn=9789650000001`, `/api/places/search?q=tel`, `/api/libraries/need-help?lat=32.08&lon=34.78`,
   `/api/locations/${S.code}/books/${S.book}`, `/b/${S.book}`, `/l/${S.code}`, `/places`, '/c/il', '/sitemap.xml',
+  `/api/invites/${S.invite}`, `/b/${S.book3}`, `/r/${S.reader}`, '/sitemaps/books-1.xml', '/sitemaps/pages.xml', '/sitemaps/shelves-1.xml',
 ];
 
 for (const who of ['visitor', 'reader', 'admin']) {
@@ -160,6 +170,7 @@ const SCREENS = () => [
   { path: '/queue', signedIn: true }, { path: `/scan/${S.scan}`, signedIn: true },
   { path: '/books', signedIn: true }, { path: `/books/${S.myBook}`, signedIn: true }, { path: '/books/add', signedIn: true, camera: true },
   { path: '/offers', signedIn: true }, { path: '/me', signedIn: true }, { path: '/settings', signedIn: true },
+  { path: '/invite', signedIn: true }, `/invite/${S.invite}`, { path: `/invite/${S.invite}`, admin: true }, `/b/${S.book3}`, `/r/${S.reader}`,
   { path: '/add', signedIn: true }, { path: `/l/${S.code}/edit`, signedIn: true }, { path: `/l/${S.code}/add`, signedIn: true, camera: true },
   { path: '/fixes', signedIn: true }, { path: '/review', admin: true }, { path: '/duplicates', admin: true },
   { path: '/duplicate-libraries', admin: true }, { path: '/admin', admin: true }, { path: '/admin#queue', admin: true },
@@ -261,4 +272,43 @@ test('admin draws a spine outline', { timeout: 120_000 }, async () => {
 
 test('the server logged no errors', () => {
   assert.deepEqual(serverErrors().map((l) => l.slice(0, 400)), []);
+});
+
+test('public home book: on its page and in the sitemap, with the town and no address', async () => {
+  const page = await (await fetch(`${base}/b/${S.book3}`)).text();
+  assert.match(page, /Reader/);
+  assert.match(page, /תל אביב/);
+  const books = await (await fetch(`${base}/sitemaps/books-1.xml`)).text();
+  assert.ok(books.includes(`/b/${S.book3}`), 'public home book in the sitemap');
+  const reader = await (await fetch(`${base}/r/${S.reader}`)).text();
+  assert.match(reader, /Home shelf book/);
+});
+
+test('handover: the friend sees the books, takes them, and the inviter gets the points', async () => {
+  const c = new pg.Client(dbUrl);
+  await c.connect();
+  try {
+    const friend = (await c.query(`INSERT INTO users(email, screen_name) VALUES ('dana@example.com', 'Dana') RETURNING id`)).rows[0].id;
+    const token = randomBytes(24).toString('hex');
+    await c.query(`INSERT INTO sessions(token_hash, user_id, expires_at) VALUES ($1, $2, now() + interval '1 day')`,
+      [createHash('sha256').update(token).digest(), friend]);
+    const cookie = `seferehov_session=${token}`;
+    const seen = await (await fetch(`${base}/api/invites/${S.invite}`)).json();
+    assert.equal(seen.handover, true);
+    assert.equal(seen.from, 'Reader');
+    assert.equal(seen.books.length, 1);
+    const own = await fetch(`${base}/api/invites/${S.invite}/accept`, { method: 'POST', headers: { cookie: `seferehov_session=${S.readerToken}` } });
+    assert.equal(own.status, 400, 'the inviter cannot take their own handover');
+    const res = await fetch(`${base}/api/invites/${S.invite}/accept`, { method: 'POST', headers: { cookie } });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).moved, 1);
+    const mine = (await c.query(`SELECT owner, friend_name, public FROM my_books WHERE user_id = $1 AND book_id = $2`, [friend, S.book])).rows;
+    assert.deepEqual(mine, [{ owner: 'mine', friend_name: null, public: false }]);
+    const left = (await c.query(`SELECT 1 FROM my_books WHERE user_id = $1 AND owner = 'friend'`, [S.reader])).rowCount;
+    assert.equal(left, 0, 'the inviter no longer has the friend\'s books');
+    const pts = (await c.query(`SELECT points FROM karma_events WHERE user_id = $1 AND reason = 'invite'`, [S.reader])).rows;
+    assert.equal(pts.length, 1);
+    const again = await fetch(`${base}/api/invites/${S.invite}/accept`, { method: 'POST', headers: { cookie } });
+    assert.equal(again.status, 409, 'a handover is taken once');
+  } finally { await c.end(); }
 });

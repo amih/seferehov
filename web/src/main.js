@@ -25,6 +25,8 @@ import settingsView from './views/settings.js';
 import shelfCheckView from './views/shelf-check.js';
 import editLocationView from './views/edit-location.js';
 import pageView from './views/page.js';
+import inviteView, { invitedView } from './views/invite.js';
+import { rememberInvite, joinInvite } from './invite.js';
 import { initMenu } from './menu.js';
 import { todoCounts, queueCount, queueCountStale } from './todo.js';
 import './install.js';
@@ -53,6 +55,8 @@ const routes = [
   [/^\/books\/add$/, addMyBooksView],
   [/^\/books\/(\d+)$/, myBookView],
   [/^\/offers$/, offersView],
+  [/^\/invite$/, inviteView],
+  [/^\/invite\/([A-Za-z0-9_-]{8,32})$/, invitedView],
   [/^\/duplicates$/, duplicatesView],
   [/^\/duplicate-libraries$/, duplicateLibrariesView],
   [/^\/fixes$/, fixesView],
@@ -90,6 +94,7 @@ async function render() {
   // phone's copy after 1.5 s).
   const me = await Promise.race([getMe(), new Promise((r) => setTimeout(() => r(null), 3000))]);
   if (stale()) return;
+  if (me?.screen_name) joinInvite(); // came through a friend's invite link (once)
   if (me && !me.screen_name && !['/me', '/about', '/comic'].includes(path)) {
     sessionStorage.setItem('seferehov:next', location.pathname + location.search);
     history.replaceState(history.state, '', '/me?welcome=1');
@@ -212,5 +217,11 @@ addEventListener('unhandledrejection', (e) => report(String(e.reason?.message ??
 initUpdates();
 startQueue();
 document.getElementById('app-version').textContent = __APP_VERSION__;
+// An invite link (/?i=<code>) opens the invite: who sent it, and the books if any.
+const inviteCode = new URLSearchParams(location.search).get('i');
+if (inviteCode && location.pathname === '/') {
+  rememberInvite(inviteCode);
+  history.replaceState(null, '', `/invite/${encodeURIComponent(inviteCode)}`);
+}
 mapUnderneath();
 render();

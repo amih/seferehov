@@ -4,6 +4,7 @@
 // a street library's photos to anyone, once the books were approved.
 import { one, many, q } from './db.js';
 import { currentUser, requireUser } from './auth.js';
+import { hasPublicName } from './mybooks.js';
 
 const center = (poly) => [poly.reduce((a, p) => a + p[0], 0) / poly.length, poly.reduce((a, p) => a + p[1], 0) / poly.length];
 const extent = (poly) => {
@@ -27,7 +28,7 @@ export function neighboursOf(me, others) {
 }
 
 const SEEN_SQL = `
-  SELECT i.id, i.scan_id, i.frame_path, i.crop_path, i.spot, s.created_at, s.label, s.user_id, s.location_id, s.owner,
+  SELECT i.id, i.scan_id, i.frame_path, i.crop_path, i.spot, s.created_at, s.label, s.user_id, s.location_id, s.owner, s.public,
          l.name AS location_name, l.code AS location_code
     FROM scan_items i JOIN scans s ON s.id = i.scan_id
     LEFT JOIN sightings g ON g.id = i.sighting_id
@@ -36,7 +37,8 @@ const SEEN_SQL = `
    WHERE (i.book_id = $1 OR g.book_id = $1 OR m.book_id = $1)
      AND i.frame_path IS NOT NULL AND i.via = 'vision' AND s.source IN ('photo', 'video')
      AND coalesce(i.decision, '') NOT IN ('declined', 'merged', 'skipped')
-     AND (s.user_id = $2 OR (s.location_id IS NOT NULL AND s.owner IS NULL AND i.decision = 'approved'))
+     AND (s.user_id = $2 OR (s.location_id IS NOT NULL AND s.owner IS NULL AND i.decision = 'approved')
+          OR (s.location_id IS NULL AND s.public AND s.owner = 'mine' AND i.decision = 'approved' AND m.public))
    ORDER BY s.created_at DESC LIMIT 10`;
 
 const SIBLINGS_SQL = `
@@ -59,11 +61,27 @@ export default async function whereRoutes(app) {
         item: r.id, scan: r.scan_id, at: r.created_at, mine: !!user && r.user_id === user.id,
         photo: `/uploads/${r.frame_path}`, crop: r.crop_path ? `/uploads/${r.crop_path}` : null,
         poly: r.spot?.poly ?? null, label: r.label ?? null,
+        public: !r.location_id && r.owner === 'mine' ? r.public : null, // null: no choice (a library, a friend's)
         location: r.location_id && !r.owner ? { name: r.location_name, code: r.location_code } : null,
         neighbours: r.spot?.poly ? neighboursOf(r.spot, sibs) : null,
       });
     }
     return { seen: out };
+  });
+
+  // A home shelf photo in public (or private again): the photo gets its page, and every
+  // book of mine approved off it is made public (or private) with it.
+  app.put('/api/scans/:id/public', { preHandler: requireUser() }, async (req, reply) => {
+    const on = req.body?.public === true;
+    const s = await one(`SELECT id, user_id, location_id, owner FROM scans WHERE id = $1`, [req.params.id]).catch(() => null);
+    if (!s || s.user_id !== req.user.id || s.location_id || s.owner !== 'mine') return reply.code(404).send({ error: 'not found' });
+    if (on && !await hasPublicName(req.user.id)) return reply.code(409).send({ error: 'town_required' });
+    await q('UPDATE scans SET public = $2, public_at = CASE WHEN $2 THEN now() ELSE public_at END WHERE id = $1', [s.id, on]);
+    const r = await q(
+      `UPDATE my_books SET public = $3, public_at = CASE WHEN $3 THEN now() ELSE public_at END
+        WHERE user_id = $2 AND owner = 'mine' AND placed_at IS NULL
+          AND id IN (SELECT my_book_id FROM scan_items WHERE scan_id = $1 AND decision = 'approved')`, [s.id, req.user.id, on]);
+    return { public: on, books: r.rowCount };
   });
 
   // The reader names the place a scan was taken; every book of that scan shows it.

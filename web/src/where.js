@@ -4,6 +4,7 @@
 import { api } from './api.js';
 import { esc, timeAgo, toast } from './ui.js';
 import { t } from './i18n.js';
+import { setPublic } from './invite.js';
 
 const pts = (poly) => poly.map(([x, y]) => `${x},${y}`).join(' ');
 
@@ -39,7 +40,17 @@ export async function whereBox(el, bookId) {
       ${neighboursLine(s.neighbours)}
       ${s.mine && !s.location ? `<form class="row where-label"><input name="label" maxlength="80" dir="auto" value="${esc(s.label ?? '')}" placeholder="${esc(t('where.label_ph'))}">
         <button class="btn small">${t('where.label_save')}</button></form>` : ''}
+      ${s.mine && s.public != null ? `<p class="row"><button class="btn small" data-shelf-public title="${esc(t('public.note'))}">${t(s.public ? 'public.shelf_hide' : 'public.shelf_make')}</button>${s.public ? ` <span class="small public-tag">${t('public.on')}</span>` : ''}</p>` : ''}
     </div>`).join('')}`;
+  el.querySelectorAll('[data-shelf-public]').forEach((b) => {
+    b.onclick = async () => {
+      const s = seen[Number(b.closest('.where').dataset.i)];
+      const r = await setPublic(`/api/scans/${s.scan}/public`, !s.public);
+      if (!r) return;
+      toast(r.public ? t('public.shelf_on', { n: r.books }) : t('public.shelf_off'));
+      whereBox(el, bookId);
+    };
+  });
   el.querySelectorAll('.where-label').forEach((f) => {
     f.onsubmit = async (e) => {
       e.preventDefault();
