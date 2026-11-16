@@ -73,6 +73,11 @@ async function seed() {
   S.invite = 'e2eHandover01';
   const inv = (await one(`INSERT INTO invites(code, user_id, handover, friend_name, expires_at) VALUES ($1, $2, true, 'Dana', now() + interval '60 days') RETURNING id`, [S.invite, S.reader])).id;
   await c.query('INSERT INTO invite_books(invite_id, my_book_id) VALUES ($1, $2)', [inv, friendBook]);
+  // The shelf photo taken at Dana's home, with that book on it (approved), and a cover photo.
+  S.friendScan = (await one(`INSERT INTO scans(user_id, status, source, owner, friend_name, media) VALUES ($1, 'confirmed', 'photo', 'friend', 'Dana', '[]') RETURNING id`, [S.reader])).id;
+  await c.query(`INSERT INTO scan_items(scan_id, title, via, book_id, decision, my_book_id, frame_path) VALUES ($1, 'אני הורג', 'vision', $2, 'approved', $3, 't/friend.jpg')`, [S.friendScan, S.book, friendBook]);
+  S.friendCover = (await one(`INSERT INTO photos(user_id, kind, path, thumb_path) VALUES ($1, 'cover', 't/fc.jpg', 't/fc.jpg') RETURNING id`, [S.reader])).id;
+  await c.query('UPDATE my_books SET photo_id = $2 WHERE id = $1', [friendBook, S.friendCover]);
   // A read scan with one book waiting for the reader's approval. (No scan in line: the real
   // scan worker would try to read its photo.)
   S.scan = (await one(`INSERT INTO scans(user_id, location_id, status, source, media, started_at, finished_at)
@@ -301,7 +306,12 @@ test('handover: the friend sees the books, takes them, and the inviter gets the 
     assert.equal(own.status, 400, 'the inviter cannot take their own handover');
     const res = await fetch(`${base}/api/invites/${S.invite}/accept`, { method: 'POST', headers: { cookie } });
     assert.equal(res.status, 200);
-    assert.equal((await res.json()).moved, 1);
+    assert.deepEqual(await res.json(), { moved: 1, photos: 1 });
+    const scan = (await c.query('SELECT user_id::int, owner, friend_name FROM scans WHERE id = $1', [S.friendScan])).rows[0];
+    assert.deepEqual(scan, { user_id: Number(friend), owner: 'mine', friend_name: null }, 'the shelf photo moved to the friend');
+    const link = (await c.query('SELECT m.user_id::int FROM scan_items i JOIN my_books m ON m.id = i.my_book_id WHERE i.scan_id = $1', [S.friendScan])).rows;
+    assert.deepEqual(link, [{ user_id: Number(friend) }], 'the book keeps its spot on the photo');
+    assert.equal((await c.query('SELECT user_id::int FROM photos WHERE id = $1', [S.friendCover])).rows[0].user_id, Number(friend), 'the cover photo moved');
     const mine = (await c.query(`SELECT owner, friend_name, public FROM my_books WHERE user_id = $1 AND book_id = $2`, [friend, S.book])).rows;
     assert.deepEqual(mine, [{ owner: 'mine', friend_name: null, public: false }]);
     const left = (await c.query(`SELECT 1 FROM my_books WHERE user_id = $1 AND owner = 'friend'`, [S.reader])).rowCount;

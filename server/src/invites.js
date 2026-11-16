@@ -120,16 +120,33 @@ export default async function inviteRoutes(app) {
         `UPDATE my_books m SET user_id = $3, owner = 'mine', friend_name = NULL, public = false, public_at = NULL,
                 offer = NULL, price = NULL, condition = NULL, offer_note = NULL, offered_at = NULL, offer_place_id = NULL
            FROM invite_books ib
-          WHERE ib.invite_id = $1 AND ib.my_book_id = m.id AND m.user_id = $2 AND m.owner = 'friend' AND m.placed_at IS NULL`,
+          WHERE ib.invite_id = $1 AND ib.my_book_id = m.id AND m.user_id = $2 AND m.owner = 'friend' AND m.placed_at IS NULL
+          RETURNING m.id, m.photo_id, m.back_photo_id`,
         [inv.id, inv.user_id, req.user.id]);
-      // The inviter's queue no longer adds to those books (they are the friend's now).
-      await db.query('UPDATE scan_items SET my_book_id = NULL WHERE my_book_id IN (SELECT my_book_id FROM invite_books WHERE invite_id = $1)', [inv.id]);
+      const ids = r.rows.map((m) => m.id);
+      // Their cover photos go with them.
+      await db.query('UPDATE photos SET user_id = $2 WHERE id = ANY($1::uuid[]) AND user_id = $3',
+        [r.rows.flatMap((m) => [m.photo_id, m.back_photo_id]).filter(Boolean), req.user.id, inv.user_id]);
+      // So do the shelf photos taken at the friend's home: a home scan of the inviter's whose
+      // approved books are all among the books taken (a photo of the friend's shelf), with its
+      // books' outlines, so the friend's "Where is it?" shows them. Books on it not yet approved
+      // go to the friend's queue. A photo that also holds books not sent stays with the inviter.
+      const scans = await db.query(
+        `UPDATE scans s SET user_id = $2, owner = 'mine', friend_name = NULL, public = false, public_at = NULL
+          WHERE s.user_id = $3 AND s.location_id IS NULL
+            AND EXISTS (SELECT 1 FROM scan_items i WHERE i.scan_id = s.id AND i.my_book_id = ANY($1::bigint[]))
+            AND NOT EXISTS (SELECT 1 FROM scan_items i WHERE i.scan_id = s.id AND i.decision = 'approved'
+                             AND (i.my_book_id IS NULL OR NOT i.my_book_id = ANY($1::bigint[])))
+          RETURNING s.id`, [ids, req.user.id, inv.user_id]);
+      // On a photo that stays with the inviter, the books taken lose the link to it.
+      await db.query(`UPDATE scan_items SET my_book_id = NULL WHERE my_book_id = ANY($1::bigint[]) AND NOT scan_id = ANY($2::uuid[])`,
+        [ids, scans.rows.map((x) => x.id)]);
       await db.query(`UPDATE users SET invited_by = COALESCE(invited_by, $2) WHERE id = $1 AND id <> $2`, [req.user.id, inv.user_id]);
       await rewardInviter(db, req.user.id);
-      return r.rowCount;
+      return { books: r.rowCount, photos: scans.rowCount };
     });
     if (moved === null) return reply.code(409).send({ error: 'accepted' });
-    return { moved };
+    return { moved: moved.books, photos: moved.photos };
   });
 
   app.post('/api/invites/:code/decline', { preHandler: requireUser() }, async (req, reply) => {
