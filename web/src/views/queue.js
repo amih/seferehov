@@ -152,9 +152,10 @@ export default async function queueView(root) {
       ${i.crop && i.frame ? `<p><a class="small" href="${esc(i.frame)}" target="_blank">${t('queue.whole_photo')}</a></p>` : ''}
       ${i.crop && i.crop_hidden ? `<p class="note small">${t('queue.crop_hidden')}</p>` : ''}
       ${i.code && !i.book_id && ['photo', 'video'].includes(i.source) ? `<p class="note small">${t('check.queue_hint')} <a href="/l/${i.code}/check">🔎 ${t('check.title')}</a></p>` : ''}
-      <div class="decide${i.crop ? ' five' : ''}">
+      <div class="decide${i.crop ? ' six' : ''}">
         <button class="btn primary" data-d="approved">✓ ${t('queue.approve')}</button>
-        ${i.crop ? `<button class="btn primary" data-d="approved" data-flip="1" title="${esc(t('queue.approve_flip_title'))}">✓ 🙃 ${t('queue.approve_flip')}</button>` : ''}
+        ${i.crop ? `<button class="btn primary" data-d="approved" data-flip="1" title="${esc(t('queue.approve_flip_title'))}">✓ 🙃 ${t('queue.approve_flip')}</button>
+        <button class="btn primary" data-d="approved" data-across="1" title="${esc(t('queue.approve_across_title'))}">✓ ↔ ${t('queue.approve_across')}</button>` : ''}
         <button class="btn" data-d="later">⏸ ${t('queue.later')}</button>
         ${i.crop ? `<button class="btn danger" data-d="declined" data-why="reading" title="${esc(t('queue.decline_reading_title'))}">✕ ${t('queue.decline_reading')}</button>
         <button class="btn danger" data-d="declined" data-why="cutout" title="${esc(t('queue.decline_cutout_title'))}">✕ ${t('queue.decline_cutout')}</button>`
@@ -174,6 +175,7 @@ export default async function queueView(root) {
       const decision = b.dataset.d;
       const body = { decision };
       if (b.dataset.flip) body.flip = true;
+      if (b.dataset.across) body.across = true;
       if (b.dataset.why) body.why = b.dataset.why;
       if (decision === 'approved') {
         const title = form.title.value.trim();

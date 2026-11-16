@@ -409,7 +409,7 @@ export default async function approvalRoutes(app) {
     preHandler: requireUser(),
     config: { rateLimit: { max: 600, timeWindow: '1 hour' } },
   }, async (req, reply) => {
-    const { decision, title, author, flip, why } = req.body ?? {};
+    const { decision, title, author, flip, across, why } = req.body ?? {};
     if (!['approved', 'declined', 'later'].includes(decision)) return reply.code(400).send({ error: 'bad_request' });
     const item = await one(
       `SELECT i.* FROM scan_items i JOIN scans s ON s.id = i.scan_id
@@ -429,9 +429,11 @@ export default async function approvalRoutes(app) {
     // For the statistics: was the reading right? (declined = dropped)
     const outcome = decision === 'approved' ? (result.edited ? 'edited' : 'kept') : decision === 'declined' ? 'dropped' : null;
     await q(
-      `UPDATE scan_items SET decision = $2, decided_at = now(), outcome = $3, sighting_id = $4, my_book_id = $5, decline_why = $6 WHERE id = $1`,
+      `UPDATE scan_items SET decision = $2, decided_at = now(), outcome = $3, sighting_id = $4, my_book_id = $5, decline_why = $6,
+                text_across = $7 WHERE id = $1`,
       [item.id, decision, outcome, result?.sighting?.id ?? null, result?.myBookId ?? null,
-        decision === 'declined' && ['reading', 'cutout'].includes(why) ? why : null],
+        decision === 'declined' && ['reading', 'cutout'].includes(why) ? why : null,
+        decision === 'approved' && across === true && !!item.crop_path],
     );
     // The reader's answer, for scoring the sources that read and corrected it.
     if (outcome) {
@@ -500,7 +502,7 @@ export default async function approvalRoutes(app) {
       }
       await db.query(
         `UPDATE scan_items SET decision = NULL, decided_at = NULL, outcome = NULL, sighting_id = NULL, my_book_id = NULL, auto = false,
-                crop_path = COALESCE(crop_unflipped, crop_path), crop_unflipped = NULL, decline_why = NULL WHERE id = $1`, [item.id]);
+                crop_path = COALESCE(crop_unflipped, crop_path), crop_unflipped = NULL, decline_why = NULL, text_across = false WHERE id = $1`, [item.id]);
       await db.query(`UPDATE scans SET status = 'done' WHERE id = $1 AND status = 'confirmed'`, [item.scan_id]);
     });
     const back = await one(`${ITEM_SQL} WHERE i.id = $1`, [item.id]);
