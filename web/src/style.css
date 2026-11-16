@@ -756,3 +756,17 @@ kbd { border: 1px solid #bbb; border-bottom-width: 2px; border-radius: 4px; padd
 .public-tag { color: var(--accent, #2e7d32); }
 .share-url { width: 100%; font-family: monospace; }
 .owner-pick .row label { display: inline-flex; gap: 4px; align-items: center; }
+
+/* /admin/spine-check: one cut-out at a time, large, with its shelf photo */
+.sc { max-width: 1100px; }
+.sc-top { display: flex; justify-content: space-between; margin-bottom: 8px; }
+.sc-crop { background: #222; border-radius: 8px; padding: 8px; text-align: center; }
+.sc-crop img { max-width: 100%; max-height: 38vh; object-fit: contain; image-rendering: auto; }
+.sc-answers { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 8px; margin: 10px 0; }
+.sc-answers .btn { text-align: start; }
+.sc-answers .sc-guess { outline: 3px solid #e0b000; }
+.sc-answers kbd { font-weight: 700; margin-inline-end: 6px; }
+.sc-photo { position: relative; display: inline-block; max-width: 100%; }
+.sc-photo img { display: block; max-width: 100%; max-height: 50vh; }
+.sc-photo svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.sc-photo polygon { fill: rgba(255, 220, 0, .12); stroke: #ffd400; vector-effect: non-scaling-stroke; stroke-width: 3px; }

@@ -10,6 +10,8 @@ export const config = {
   uploadDir: resolve(env.UPLOAD_DIR || './uploads'),
   // Spine outlines the lab's spine finder suggests for /admin/outlines (a JSON file it writes).
   outlineSuggestions: env.OUTLINE_SUGGESTIONS || '',
+  // The cut-outs the lab asks the admin to tag on /admin/spine-check (a JSON file it writes).
+  spineCheck: env.SPINE_CHECK || '',
   webDist: resolve(env.WEB_DIST || '../web/dist'),
   adminEmails: (env.ADMIN_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   minClientBuild: Number(env.MIN_CLIENT_BUILD || 0),
