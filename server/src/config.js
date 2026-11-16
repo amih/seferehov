@@ -87,6 +87,7 @@ export const POINTS = {
   coverFront: 30, // the first photo of a book's front cover (it had no picture of it)
   coverBack: 40, // the first photo of a book's back cover (its blurb, its barcode)
   fix: 5, // a correction to a book, once it is live
+  invite: 100, // a reader you invited made their first contribution, or accepted the books you catalogued for them
   fixKept: 5, // ... and again when nobody undid it for FIX_KEEP_DAYS
   fixVote: 2, // a vote on another reader's correction
 };

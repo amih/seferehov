@@ -11,7 +11,7 @@ import { parseLatLon } from './util.js';
 import { bookDetails, missingParts } from './details.js';
 
 const LIST_SQL = `
-  SELECT m.id, m.created_at, m.placed_at, m.owner, m.friend_name, m.offer, m.price, m.condition, m.offer_note,
+  SELECT m.id, m.created_at, m.placed_at, m.owner, m.friend_name, m.public, m.offer, m.price, m.condition, m.offer_note,
          m.offer_place_id, op.name AS offer_place, op.name_he AS offer_place_he, b.id AS book_id, b.isbn13, b.title, b.authors, b.year, b.genre, b.language,
          COALESCE(b.front_url, b.cover_url) AS cover_url, p.path, p.thumb_path,
          l.code, l.name AS location_name, s.status AS sighting_status
@@ -27,6 +27,11 @@ export const ownerOf = (f) => {
   const owner = ['friend', 'borrowed'].includes(f.owner) ? f.owner : 'mine';
   return { owner, friendName: owner === 'mine' ? null : String(f.friend_name ?? '').trim().slice(0, 80) || null };
 };
+
+// A reader can show books in public once they have a screen name and a town.
+export async function hasPublicName(userId) {
+  return !!await one('SELECT 1 FROM users WHERE id = $1 AND screen_name IS NOT NULL AND home_place_id IS NOT NULL', [userId]);
+}
 
 export default async function myBookRoutes(app) {
   app.get('/api/my-books', { preHandler: requireUser() }, async (req) => {
@@ -119,6 +124,17 @@ export default async function myBookRoutes(app) {
     const sighting = await recordSighting({ user: req.user, loc, book, kind: 'added', distance, photoId: m.photo_id, backPhotoId: m.back_photo_id });
     await q('UPDATE my_books SET placed_at = now(), location_id = $2, sighting_id = $3 WHERE id = $1', [m.id, loc.id, sighting.id]);
     return { sighting, code: loc.code };
+  });
+
+  // Show one of my own books in public (my reader page, the book's page), or hide it again.
+  // Public needs a town (shown instead of an address): 409 town_required asks for it.
+  app.put('/api/my-books/:id/public', { preHandler: requireUser() }, async (req, reply) => {
+    const on = req.body?.public === true;
+    const m = await one(`SELECT id FROM my_books WHERE id = $1 AND user_id = $2 AND placed_at IS NULL AND owner = 'mine'`, [Number(req.params.id), req.user.id]);
+    if (!m) return reply.code(404).send({ error: 'not_found' });
+    if (on && !await hasPublicName(req.user.id)) return reply.code(409).send({ error: 'town_required' });
+    await q('UPDATE my_books SET public = $2, public_at = CASE WHEN $2 THEN now() ELSE public_at END WHERE id = $1', [m.id, on]);
+    return { public: on };
   });
 
   app.delete('/api/my-books/:id', { preHandler: requireUser() }, async (req) => {

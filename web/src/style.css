@@ -752,3 +752,8 @@ details.steps summary { cursor: pointer; font-weight: 600; }
 .ol-others { padding-inline-start: 1.2rem; }
 kbd { border: 1px solid #bbb; border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; font-size: .85em; }
 @media (max-width: 800px) { .ol-edit { grid-template-columns: 1fr; height: auto; } .ol-stage { height: 70vh; } }
+
+/* Public home books and shelves; invite links (16 Nov 2026). */
+.public-tag { color: var(--accent, #2e7d32); }
+.share-url { width: 100%; font-family: monospace; }
+.owner-pick .row label { display: inline-flex; gap: 4px; align-items: center; }

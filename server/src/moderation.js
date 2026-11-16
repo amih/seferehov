@@ -17,6 +17,7 @@ export function locationStatus(user) {
 // Admins get a tenth: they need no encouragement, and readers should lead the board.
 export async function award(db, { userId, points, reason, refType, refId, by = null }) {
   if (!userId) return;
+  if (reason !== 'invite' && points > 0) await rewardInviter(db, userId);
   const { today, admin } = (await db.query(
     `SELECT COALESCE((SELECT sum(points) FROM karma_events WHERE user_id = $1 AND created_at > date_trunc('day', now())), 0)::int AS today,
             (SELECT trust_level >= 3 FROM users WHERE id = $1) AS admin`, [userId])).rows[0];
@@ -67,3 +68,12 @@ export async function audit(userId, action, refType, refId, detail = null) {
     [userId, action, refType, refId, detail]);
 }
 
+
+// The reader who invited this one gets points once: at the new reader's first contribution
+// (their first points), or when they accept the books the inviter catalogued for them.
+export async function rewardInviter(db, userId) {
+  const r = (await db.query(
+    `SELECT invited_by FROM users u WHERE id = $1 AND invited_by IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM karma_events k WHERE k.reason = 'invite' AND k.ref_type = 'user' AND k.ref_id = $1)`, [userId])).rows[0];
+  if (r) await award(db, { userId: r.invited_by, points: POINTS.invite, reason: 'invite', refType: 'user', refId: userId });
+}

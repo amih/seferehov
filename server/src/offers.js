@@ -65,6 +65,14 @@ export default async function offerRoutes(app) {
     place: await one(`SELECT p.id, p.name, p.name_he FROM users u JOIN places p ON p.id = u.home_place_id WHERE u.id = $1`, [req.user.id]),
   }));
 
+  // The reader's town, chosen for public books and shelves (and offers' default).
+  app.put('/api/me/home-place', { preHandler: requireUser() }, async (req, reply) => {
+    const place = await one('SELECT id, name, name_he FROM places WHERE id = $1', [Number(req.body?.place_id) || 0]);
+    if (!place) return reply.code(400).send({ error: 'place_required' });
+    await q('UPDATE users SET home_place_id = $2 WHERE id = $1', [req.user.id, place.id]);
+    return { place };
+  });
+
   // Books offered lately, anywhere or in one town.
   app.get('/api/offers', async (req) => {
     const place = Number(req.query.place) || null;
