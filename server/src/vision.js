@@ -938,13 +938,51 @@ export async function spineCut(jpeg, lines) {
   return { crop, info };
 }
 
+// The spine cutter (spines/spine_server.py, lab experiment 051): a small YOLO model draws a
+// turned rectangle around every spine, and each spine is cut out straight along its own
+// rectangle. null when the service is off or down.
+async function cutSpines(upright) {
+  if (!config.spinesUrl) return null;
+  try {
+    const res = await fetch(`${config.spinesUrl}/cut`, { method: 'POST', body: upright, headers: { 'content-type': 'image/jpeg' }, signal: AbortSignal.timeout(60_000) });
+    return res.ok ? await res.json() : null;
+  } catch { return null; }
+}
+
+// Spine by spine, cut by the spine cutter: each cut-out is read as before (readCrop). Its
+// outline on the photo is the cutter's rectangle.
+async function readSpinesCut(cutRes, W, H, upright) {
+  const spines = cutRes.spines.slice(0, MAX_SPINES * 2);
+  await step('spine-cutter', {
+    note: `the spine cutter (YOLO, lab 051) found ${cutRes.spines.length} spines in ${cutRes.ms} ms; ${cutRes.dropped_edge} cut off by the photo's edge left out`,
+    W, H, spines: spines.map((s) => ({ poly: s.poly, conf: s.conf })),
+  }, { image: upright });
+  const books = [];
+  for (const [k, s] of spines.entries()) {
+    const img = Buffer.from(s.jpeg, 'base64');
+    const pts = s.poly.map(([x, y]) => [x * W, y * H]);
+    const box = [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])), Math.max(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1]))];
+    const place = { tilt: 0, box };
+    const b = await scope(`cut-out ${k + 1}`, async () => {
+      await step('cut-out', { from: 'spine cutter', w: s.w, h: s.h, poly: s.poly, conf: s.conf }, { image: img });
+      return readCrop(img, s.w, s.h, null, { split: true });
+    });
+    for (const x of [].concat(b ?? [])) if (x.verified !== false) books.push({ ...x, place, spot: { poly: s.poly.map(([x2, y2]) => [Math.round(x2 * 1000) / 1000, Math.round(y2 * 1000) / 1000]), by: 'yolo-051' } });
+  }
+  return books;
+}
+
 // Books on a public shelf lean, and an upright box around a leaning spine takes in its
-// neighbours too. So: measure the lean inside every box, group boxes that lean the
-// same way, turn the whole photo upright for each group and find the spines again —
-// standing straight, each one gets a box of its own. Then read spine by spine.
+// neighbours too. The spine cutter cuts each spine along its own lean. Without it: measure
+// the lean inside every box the vision model drew, group boxes that lean the same way, turn
+// the whole photo upright for each group and find the spines again — standing straight,
+// each one gets a box of its own. Then read spine by spine.
 async function readSpines(buffer) {
   const { data: upright, info } = await sharp(buffer).rotate().toBuffer({ resolveWithObject: true });
   const { width: W, height: H } = info;
+  const cutRes = await cutSpines(await sharp(upright).jpeg({ quality: 95 }).toBuffer());
+  if (cutRes?.spines) return mergeSameSpine(await readSpinesCut(cutRes, W, H, upright));
+  if (config.spinesUrl) await step('spine-cutter', { note: 'the spine cutter did not answer: the vision model finds the spines' });
   const boxes = (await detect(upright, W, H)).slice(0, MAX_SPINES);
   for (const b of boxes) b.tilt = await dominantTilt(await cut(upright, W, H, b, 4));
   await step('detect', {
@@ -1000,8 +1038,12 @@ async function readSpines(buffer) {
     // The outline kept is the spine's own band of the cut-out (split bands have none: the box).
     for (const x of [].concat(b ?? [])) if (x.verified !== false) books.push({ ...x, place, spot: spotOf({ tilt: place.tilt, box: narrowed(place.box, area, x.across) }, W, H) });
   }
-  // Boxes overlap, so one spine can be read from two cut-outs: alike readings from cut-outs
-  // that overlap are one book.
+  return mergeSameSpine(books);
+}
+
+// Boxes overlap, so one spine can be read from two cut-outs: alike readings from cut-outs
+// that overlap are one book.
+async function mergeSameSpine(books) {
   const kept = [];
   for (const b of books) {
     const twin = kept.find((o) => o.place.tilt === b.place.tilt && o.place.box[0] < b.place.box[2] && b.place.box[0] < o.place.box[2]

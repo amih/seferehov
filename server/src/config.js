@@ -38,6 +38,10 @@ export const config = {
   searchUrl: (env.SEARCH_URL ?? 'http://127.0.0.1:8895').replace(/\/$/, ''),
   // Surya OCR service (ocr/surya_server.py) for Hebrew cover text.
   ocrUrl: (env.OCR_URL || 'http://127.0.0.1:3872').replace(/\/$/, ''),
+  // Spine cutter (spines/spine_server.py, the lab's YOLO model 051): cuts every spine out of a
+  // shelf photo in a fraction of a second. Empty, or the service down: the vision model finds
+  // the spines (the way before 18 Nov 2026).
+  spinesUrl: (env.SPINES_URL ?? 'http://127.0.0.1:3876').replace(/\/$/, ''),
   // Real-ESRGAN (realesrgan-ncnn-vulkan, its models/ beside it) sharpens cover photos
   // for showing. Unset = covers are shown as taken.
   enhanceBin: env.ENHANCE_BIN || '',

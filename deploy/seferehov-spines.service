@@ -1,0 +1,20 @@
+# Spine cutter (spines/spine_server.py, YOLO11n-OBB from lab experiment 051). Install:
+#   python3 -m venv APP_DIR-spines-venv && APP_DIR-spines-venv/bin/pip install -r APP_DIR/spines/requirements.txt
+#   copy the weights to APP_DIR/spines/models/spines-051.pt (not in git)
+#   copy to /etc/systemd/system/ (replace APP_USER/APP_DIR), systemctl enable --now seferehov-spines
+[Unit]
+Description=Seferehov spine cutter (YOLO)
+After=network.target
+
+[Service]
+User=APP_USER
+WorkingDirectory=APP_DIR/spines
+Environment=OMP_NUM_THREADS=8 SPINES_PORT=3876
+ExecStart=APP_DIR-spines-venv/bin/python spine_server.py
+CPUQuota=800%
+Nice=5
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

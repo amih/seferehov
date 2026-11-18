@@ -8,3 +8,4 @@ uploads/
 server/scan-keep/
 __pycache__/
 server/scan-trace/
+spines/models/
