@@ -74,7 +74,9 @@ It runs at https://seferehov.com. Hebrew is the default (right to left); English
 
 ## Reading the photos (on the server)
 
-- **Shelf photos**: the local vision model (Qwen3-VL 8B) finds each spine, straightens the photo by the spines' lean, cuts out each spine, and reads it. A second reader (Surya OCR) reads the same cut-out. A reading is kept when the two agree. Readings of the same spine in different photos are merged by similarity, and the most frequent spelling wins.
+- **Shelf photos**: a small spine finder (YOLO, since 18 Nov 2026) finds each spine and cuts it out along its own lean; the local vision model (Qwen3-VL 8B) reads it. A second reader (Surya OCR) reads the same cut-out. A reading is kept when the two agree. Readings of the same spine in different photos are merged by similarity, and the most frequent spelling wins.
+  - **The spine cutter** (`spines/spine_server.py`, service `seferehov-spines` on port 3876, `SPINES_URL`; 18 Nov 2026): the lab's YOLO11n-OBB model 051 (2.66 million weights, 5.7 MB, trained on the admin's checked shelf photos and 3,000 synthetic shelves with covers) finds every spine as a turned rectangle in about 0.1 s on the CPU, and each is cut out along its own axes with 4% added at both ends. A box touching the photo's edge is kept only if what shows is still spine-shaped (long side at least 4 times the short side); squarer stubs are dropped. On the lab's 55 checked test spines it cut 45 cleanly (the vision model's boxes: 15). On the 9 test photos, the app read 49 of 58 approved books with it (with the vision model's boxes: 46), in 5.6 minutes a photo instead of 8.1 (lab experiment 052). Step "spine-cutter" in the trace; outlines saved with `spot.by = 'yolo-051'`.
+  - If the spine cutter is not answering (stopped, crashed, an error, or no answer in 60 s), the scan falls back to the vision model finding the spines, as before, and the trace says why. The admins get an email ("Seferehov: the spine cutter is not answering", with the reason and the commands to check it), at most once a day.
   - Shelf photos arrive at the camera's full size (2160×3840 from the live camera, JPEG encoded once); a spine is only 100–200 px wide, so every pixel counts.
   - A blurred photo (sharpness — variance of the Laplacian at 1200 px — under 250; measured: under ~150 nothing was read, from ~475 most spines were) is skipped when the scan has a sharp photo.
   - Which way up: the way where the model and Surya agree; when Surya's lines match both ways (it reads upside-down print too), the way the model read something wins.
@@ -271,7 +273,7 @@ Everything runs on one home server:
 | Memory | 251 GB |
 | GPU | NVIDIA GeForce GTX 1080, 8 GB (from 2016) |
 | Disks | 1.8 TB NVMe (1.5 TB free) for the app; a separate hard disk for the nightly backup |
-| Software | Node 22 + Fastify API, PostgreSQL 16 + PostGIS (Docker), nginx, Ollama (vision model on the GPU), Surya OCR (on the CPU), hspell |
+| Software | Node 22 + Fastify API, PostgreSQL 16 + PostGIS (Docker), nginx, Ollama (vision model on the GPU), Surya OCR (on the CPU), the YOLO spine cutter (PyTorch, on the CPU), hspell |
 
 The same server also runs other services. The GPU is shared with other occasional jobs through [gpu-queue](https://github.com/amih/gpu-queue) (since 8 Nov 2026): every program that uses the card waits its turn there, and the card is emptied before it passes from one program to another. Seferehov's photo reading and cover sharpening run at normal priority: a page where someone is waiting goes first, and bulk background work goes after. A photo may wait a few minutes while another program uses the card, so the reading time-out is 10 minutes (`VISION_TIMEOUT_MS`).
 
@@ -282,10 +284,10 @@ The GPU reads one scan at a time; others wait in a queue (covers first, then rea
 | Scan | Time |
 |---|---|
 | One book's front and back covers | about 1 minute |
-| One shelf photo | about 9 minutes (7–14): about 45 vision-model calls of about 9 s, and Surya OCR on the CPU taking about as long |
-| A visit to a library (about 8 shelf photos, about 8 books each) | about 75 minutes |
+| One shelf photo | about 6 minutes (3.5–9; 9 minutes before the YOLO spine cutter of 18 Nov 2026): about 50 vision-model calls for reading, none for finding spines, and Surya OCR on the CPU |
+| A visit to a library (about 8 shelf photos, about 8 books each) | about 45 minutes |
 
-So in 24 hours of non-stop work, with no other program using the card, the server reads about **160 shelf photos (about 1,250 books), or about 20 library visits**. More than that every day and the queue grows without end.
+So in 24 hours of non-stop work, with no other program using the card, the server reads about **250 shelf photos (about 2,000 books), or about 30 library visits**. More than that every day and the queue grows without end.
 
 | Load | What happens |
 |---|---|
