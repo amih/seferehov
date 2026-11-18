@@ -4,6 +4,7 @@ import { readBarcodes } from 'zxing-wasm/reader';
 import { config } from './config.js';
 import { normalizeIsbn, normalizeDanacode } from './util.js';
 import { here, scope, step } from './trace.js';
+import { sendMail } from './mail.js';
 
 // One line per book is far more reliable with small local models than JSON.
 const PROMPT = `Read the book spines and covers in this photo. Write one line per distinct book, in the format:
@@ -941,12 +942,35 @@ export async function spineCut(jpeg, lines) {
 // The spine cutter (spines/spine_server.py, lab experiment 051): a small YOLO model draws a
 // turned rectangle around every spine, and each spine is cut out straight along its own
 // rectangle. null when the service is off or down.
-async function cutSpines(upright) {
+export async function cutSpines(upright) {
   if (!config.spinesUrl) return null;
+  let why;
   try {
     const res = await fetch(`${config.spinesUrl}/cut`, { method: 'POST', body: upright, headers: { 'content-type': 'image/jpeg' }, signal: AbortSignal.timeout(60_000) });
-    return res.ok ? await res.json() : null;
-  } catch { return null; }
+    if (res.ok) return await res.json();
+    why = `it answered with an error (HTTP ${res.status}): ${(await res.text().catch(() => '')).slice(0, 200)}`;
+  } catch (err) {
+    why = err?.name === 'TimeoutError' ? 'it did not answer within 60 seconds'
+      : err?.cause?.code === 'ECONNREFUSED' ? 'it is not running (connection refused)'
+        : err?.cause?.code === 'UND_ERR_SOCKET' ? 'the connection broke (it may have crashed or restarted)' : `it failed: ${err?.cause?.code ?? err?.message ?? err}`;
+  }
+  await cutterDown(why);
+  return { down: why };
+}
+
+// The admins get an email when a scan falls back to the vision model's boxes: at most one a
+// day (counted from the server's start), so a cutter that stays down is noticed.
+let cutterMailedAt = 0;
+async function cutterDown(why) {
+  if (!config.adminEmails.length || Date.now() - cutterMailedAt < 24 * 3600_000) return;
+  cutterMailedAt = Date.now();
+  const text = `The spine cutter (${config.spinesUrl}) did not cut a shelf photo at ${new Date().toISOString()}: ${why}.
+
+Shelf photos are still read, but the vision model finds the spines instead: minutes per photo instead of seconds, and worse cut-outs. This email comes at most once a day while it lasts.
+
+On the server: systemctl status seferehov-spines; journalctl -u seferehov-spines -n 50`;
+  const log = { info: (o, m) => console.log(m ?? o), error: (o, m) => console.error(m ?? o) };
+  for (const to of config.adminEmails) await sendMail({ to, subject: 'Seferehov: the spine cutter is not answering', text }, log).catch((err) => console.error('cutter mail failed', err));
 }
 
 // Spine by spine, cut by the spine cutter: each cut-out is read as before (readCrop). Its
@@ -982,7 +1006,7 @@ async function readSpines(buffer) {
   const { width: W, height: H } = info;
   const cutRes = await cutSpines(await sharp(upright).jpeg({ quality: 95 }).toBuffer());
   if (cutRes?.spines) return mergeSameSpine(await readSpinesCut(cutRes, W, H, upright));
-  if (config.spinesUrl) await step('spine-cutter', { note: 'the spine cutter did not answer: the vision model finds the spines' });
+  if (cutRes?.down) await step('spine-cutter', { note: `the spine cutter did not cut this photo (${cutRes.down}): the vision model finds the spines` });
   const boxes = (await detect(upright, W, H)).slice(0, MAX_SPINES);
   for (const b of boxes) b.tilt = await dominantTilt(await cut(upright, W, H, b, 4));
   await step('detect', {
