@@ -10,7 +10,7 @@ import { lookupIsbn, lookupTitle, findOrCreateBook } from './books.js';
 import { readBooks, sharpness, BLURRY, readCover, readCoverText, readIsbnBarcodes, normTitle, titleSimilarity, coverAgrees, authorsAgree } from './vision.js';
 import { pickFrames } from './frames.js';
 import { webCheck, purgeSearchCache, blurbSearch } from './websearch.js';
-import { localCheck, swapIfReversed } from './refindex.js';
+import { localCheck, swapIfReversed, closeToRead } from './refindex.js';
 import { titleByAuthor } from './coverfix.js';
 import { enqueueWeb } from './webqueue.js';
 import { cropCover } from './covers.js';
@@ -777,6 +777,8 @@ export async function processScan(scan, { dry = false } = {}) {
     const isbn = item.isbn;
     const ev = (item.evidence = []);
     const asRead = item.title ?? null;
+    // A catalogue record or an index title far from what was read is another book (lab 055).
+    const far = (title, authors, read = asRead) => item.via === 'vision' && !closeToRead(read, title, authors);
     ev.push({ stage: 'read', source: item.via === 'barcode' ? 'barcode' : item.verified ? 'vision+ocr' : 'vision', outcome: 'as_read',
       after: asRead ?? isbn ?? null, detail: { author: item.author ?? null, frames: item.frames ? [...item.frames].map((x) => x + 1) : undefined, verified: item.verified ?? null, quality: item.quality ?? null } });
     // Cover blurbs read as titles ("INTERNATIONAL BEST SELLER", "OVER 10,000,000 COPIES SOLD").
@@ -807,6 +809,7 @@ export async function processScan(scan, { dry = false } = {}) {
       if (book) break;
       const r = await lookupTitle(title, item.author, ctx).catch(() => ({}));
       await verify(title, r);
+      if (r.book && far(r.book.title, r.book.authors, title)) { ev.push({ stage: 'verify', source: 'close-to-read', outcome: 'too_far', before: title, after: r.book.title }); continue; }
       book = r.book ?? null;
       lookupId = r.lookupId ?? lookupId;
       if (book && title !== item.title) {
@@ -819,6 +822,10 @@ export async function processScan(scan, { dry = false } = {}) {
     let indexed = false;
     if (!book && item.via === 'vision' && item.title) {
       const L = await localCheck(item.title, item.author).catch((err) => ({ match: null, outcome: `error: ${err.message}`, candidates: [] }));
+      if (L.match && far(L.match.title, [L.match.author])) {
+        ev.push({ stage: 'verify', source: 'close-to-read', outcome: 'too_far', before: asRead, after: L.match.title });
+        Object.assign(L, { match: null, outcome: L.author ? 'author_corrected' : 'unknown' });
+      }
       const src = L.match?.source ?? L.authorSource;
       ev.push({ stage: 'correct', source: src ? `index:${src}` : 'index', outcome: L.outcome, before: [item.title, item.author].filter(Boolean).join(' | '),
         after: L.match ? [L.match.title, L.match.author].filter(Boolean).join(' | ') : L.author ? [item.title, L.author].join(' | ') : null,
@@ -828,8 +835,8 @@ export async function processScan(scan, { dry = false } = {}) {
         if (L.match?.author || L.author) item.author = L.match?.author ?? L.author;
         const r = await lookupTitle(item.title, item.author, ctx).catch(() => ({}));
         await verify(item.title, r);
-        book = r.book ?? null;
-        lookupId = r.lookupId ?? lookupId;
+        if (r.book && far(r.book.title, r.book.authors)) ev.push({ stage: 'verify', source: 'close-to-read', outcome: 'too_far', before: asRead, after: r.book.title });
+        else { book = r.book ?? null; lookupId = r.lookupId ?? lookupId; }
       }
     }
     if (!book && !indexed && item.via === 'vision' && item.title) {

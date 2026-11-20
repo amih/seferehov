@@ -21,6 +21,19 @@ const SHORT = 8;
 const EXPLAINED = 0.6; // share of the spine's words found in the candidate's title + author
 
 const letters = (s) => normTitle(s).replace(/ /g, '').length;
+
+// A correction (a catalogue record or an index title) is taken for a spine only when it is
+// close to what was read: the read title 80%+ alike to the record's main title, or 3/4+ of the
+// read title's words in the record's title and authors (the read title may be the author's
+// name, the two read the wrong way round). Lab 055, 20 Nov 2026, 6 readers x 413 approved spines:
+// the catalogue step fixed 31 titles and broke 12; with this rule it fixes 29 and breaks 5
+// ("המטרה בצל עץ" by איציק פלג is not his "המסע בצל המטרה"; "אחרי מוות" is not "ילד" by אמיר אור).
+const READ_ALIKE = 0.8, READ_KEPT = 0.75;
+export function closeToRead(read, title, authors = []) {
+  if (!read || !title) return true;
+  return titleSimilarity(read, title.split(':')[0]) >= READ_ALIKE
+    || wordsKept(read, [title, ...(authors ?? [])].filter(Boolean).join(' ')) >= READ_KEPT;
+}
 // The reading and its parts: "סנדר שיר • מורה מדליה" → itself, "סנדר שיר", "מורה מדליה".
 const partsOf = (s) => [...new Set([s, ...s.split(/\s+[•·|/–-]\s+|\s*:\s*/)].map((x) => x.trim()).filter((x) => letters(x) >= 3))];
 // "הרקב – טרילוגיית טבעות העורבים" → "הרקב" (the spine usually shows only the main title).
