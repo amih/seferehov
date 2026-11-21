@@ -1,0 +1,4 @@
+# Hebrew PaddleOCR service (ocr/paddle_server.py): ONNX on the CPU.
+paddleocr-hebrew @ git+https://github.com/RivoksLab/paddleocr-hebrew@ac9f27d383c2d2d5580156652b4fa1a34ab90ac9
+onnxruntime>=1.17
+huggingface_hub

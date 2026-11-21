@@ -308,13 +308,13 @@ async function surya(buffer) {
 }
 // { text, lines, boxes: [{ text, bbox: [x1, y1, x2, y2], confidence }] } in the pixels
 // of the picture as sent (upright, at most 2400 px).
-export async function suryaRead(buffer) {
+export async function suryaRead(buffer, { url = config.ocrUrl, engine = 'surya' } = {}) {
   const jpeg = await sharp(buffer).rotate().resize(2400, 2400, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 92 }).toBuffer();
   const t0 = Date.now();
-  const res = await fetch(`${config.ocrUrl}/ocr`, { method: 'POST', body: jpeg, signal: AbortSignal.timeout(300_000) });
+  const res = await fetch(`${url}/ocr`, { method: 'POST', body: jpeg, signal: AbortSignal.timeout(300_000) });
   if (!res.ok) throw new Error(`ocr ${res.status}`);
   const out = await res.json();
-  await step('ocr', { engine: 'surya', text: out.text ?? '', lines: out.boxes?.map((b) => ({ text: b.text, confidence: b.confidence, bbox: b.bbox })) ?? [], ms: Date.now() - t0 }, { image: jpeg }, { side: 1000 });
+  await step('ocr', { engine, text: out.text ?? '', lines: out.boxes?.map((b) => ({ text: b.text, confidence: b.confidence, bbox: b.bbox })) ?? [], ms: Date.now() - t0 }, { image: jpeg }, { side: 1000 });
   return out;
 }
 
@@ -574,6 +574,7 @@ export async function tesseractWords(jpeg) {
 }
 const UPRIGHT_MARGIN = 0.2;
 
+
 // One cut-out from a shelf photo: which way up it is, what it says, and a tight
 // picture of just that one book. The vision model reads it both ways up, Surya OCR
 // reads it both ways up, and the way where the two agree is the right one: each of
@@ -585,21 +586,34 @@ const UPRIGHT_MARGIN = 0.2;
 // (verified: null). title: the book we are looking for (findSpine), read by the
 // vision model elsewhere.
 const ORIENT_OK = 0.5;
-export async function readCrop(img, w, h, title = null, { split = false, ownLines = true } = {}) {
+export async function readCrop(img, w, h, title = null, opts = {}) {
   const spine = h > w * 1.3;
   const angles = spine ? [270, 90] : [0, 180];
+  const paddle = !!config.spineOcrUrl;
   const tries = await Promise.all(angles.map(async (angle) => {
     const jpeg = await sharp(img).rotate(angle).resize(1280, 1280, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 90 }).toBuffer();
     const [read, ocr] = await Promise.all([
       generate(jpeg, SPINE_PROMPT, 80).then((line) => (/^NONE\b/i.test(line.trim()) ? null : parseBooks(line.trim().split('\n')[0])[0] ?? null)),
-      suryaRead(jpeg).catch(() => null),
+      paddle ? suryaRead(jpeg, { url: config.spineOcrUrl, engine: 'paddle-hebrew' }).catch(() => null) : suryaRead(jpeg).catch(() => null),
     ]);
     return { angle, jpeg, read, ocr };
   }));
+  const out = await judgeCrop(tries, spine, w >= 2.5 * h, title, opts);
+  if (!paddle || [].concat(out ?? []).some((b) => b.verified)) return out;
+  // The Hebrew PaddleOCR did not confirm the reading either way up (or is down): Surya checks
+  // the same readings again. The two confirm different spines: lab 055 (207 spines turned on
+  // their side) kept the title right on 78% with PaddleOCR alone, 80% with Surya alone, 83%
+  // with PaddleOCR then Surya, 27% faster than Surya alone (Surya ran for 1 spine in 8).
+  await step('crop-read', { note: 'the Hebrew PaddleOCR did not confirm the reading: Surya checks it again' });
+  const again = await Promise.all(tries.map(async (x) => ({ angle: x.angle, jpeg: x.jpeg, read: x.read, ocr: await suryaRead(x.jpeg).catch(() => null) })));
+  return judgeCrop(again, spine, w >= 2.5 * h, title, opts);
+}
+
+async function judgeCrop(tries, spine, flat, title, { split = false, ownLines = true } = {}) {
   if (tries.some((x) => !x.ocr?.boxes)) {
-    // Surya is down: the vision model's reading alone, the clearer one.
+    // The OCR is down: the vision model's reading alone, the clearer one.
     const ok = tries.filter((x) => x.read).sort((a, b) => (a.read.quality === 'low') - (b.read.quality === 'low'))[0];
-    await step('crop-read', { note: 'Surya is down: the vision model alone', verdict: ok ? 'kept (unverified)' : 'nothing read', angle: ok?.angle ?? null, title: ok?.read?.title ?? null });
+    await step('crop-read', { note: 'the OCR is down: the vision model alone', verdict: ok ? 'kept (unverified)' : 'nothing read', angle: ok?.angle ?? null, title: ok?.read?.title ?? null });
     return ok ? { ...ok.read, crop: ok.jpeg, verified: null, at: here() } : null;
   }
   for (const x of tries) {
@@ -677,7 +691,7 @@ export async function readCrop(img, w, h, title = null, { split = false, ownLine
   }
   let crop = best.jpeg, cutInfo = null;
   // A book lying flat shows its spine as a long level strip: cut and straightened the same way.
-  if (spine || w >= 2.5 * h) ({ crop, info: cutInfo } = await spineCut(best.jpeg, lines));
+  if (spine || flat) ({ crop, info: cutInfo } = await spineCut(best.jpeg, lines));
   if (cutInfo) await step('spine-cut', { note: 'this spine turned level for its own lean; its edges found as straight lines at any angle; the neighbour beyond them painted grey', ...cutInfo }, { image: best.jpeg, crop });
   await report('kept', { crop });
   return { ...(best.read ?? { title, author: null, isbn: null, quality: 'medium' }), crop, verified: true, at: here(), across: await acrossOf(best, lines) };

@@ -38,6 +38,10 @@ export const config = {
   searchUrl: (env.SEARCH_URL ?? 'http://127.0.0.1:8895').replace(/\/$/, ''),
   // Surya OCR service (ocr/surya_server.py) for Hebrew cover text.
   ocrUrl: (env.OCR_URL || 'http://127.0.0.1:3872').replace(/\/$/, ''),
+  // OCR that checks the vision model's reading of each spine cut-out first (readCrop): PaddleOCR
+  // trained for Hebrew (ocr/paddle_server.py); Surya (OCR_URL) only when it does not confirm the
+  // reading. Empty: Surya alone.
+  spineOcrUrl: (env.SPINE_OCR_URL ?? 'http://127.0.0.1:3878').replace(/\/$/, '') || null,
   // Spine cutter (spines/spine_server.py, the lab's YOLO model 051): cuts every spine out of a
   // shelf photo in a fraction of a second. Empty, or the service down: the vision model finds
   // the spines (the way before 18 Nov 2026).

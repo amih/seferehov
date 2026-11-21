@@ -1,0 +1,20 @@
+# Hebrew PaddleOCR that checks each spine cut-out (ocr/paddle_server.py; SPINE_OCR_URL). Install:
+#   python3 -m venv APP_DIR-ocr-paddle-venv && APP_DIR-ocr-paddle-venv/bin/pip install -r APP_DIR/ocr/requirements-paddle.txt
+#   (the model, Rivok/paddleocr-hebrew revision 61efd83, ~400 MB, is downloaded on the first start)
+#   copy to /etc/systemd/system/ (replace APP_USER/APP_DIR), systemctl enable --now seferehov-ocr-paddle
+[Unit]
+Description=Seferehov spine OCR (Hebrew PaddleOCR)
+After=network.target
+
+[Service]
+User=APP_USER
+WorkingDirectory=APP_DIR/ocr
+Environment=OCR_PORT=3878 OCR_THREADS=16 PADDLE_HEB_REV=61efd8336f99e64eb9f1451a34eeefaa0012b00a
+ExecStart=APP_DIR-ocr-paddle-venv/bin/python paddle_server.py
+CPUQuota=1600%
+Nice=10
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

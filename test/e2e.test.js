@@ -102,7 +102,7 @@ async function startServer() {
   const env = {
     ...process.env, PORT: String(port), HOST: '127.0.0.1', BASE_URL: base, DATABASE_URL: dbUrl,
     WEB_DIST: join(ROOT, 'web/dist'), OUTLINE_SUGGESTIONS: join(tmp, 'suggestions.json'), UPLOAD_DIR: join(tmp, 'uploads'), TRACE_DIR: join(tmp, 'trace'),
-    OLLAMA_URL: dead, OCR_URL: dead, SEARCH_URL: '', SMTP_HOST: '', NOTIFY_ADMIN_MINUTES: '0', TRACE: '0',
+    OLLAMA_URL: dead, OCR_URL: dead, SPINE_OCR_URL: dead, SEARCH_URL: '', SMTP_HOST: '', NOTIFY_ADMIN_MINUTES: '0', TRACE: '0',
     GOOGLE_CLIENT_ID: '', MATOMO_URL: '', NO_OUTSIDE: '1', SERVE_WEB: '1', ADMIN_EMAILS: 'admin@example.com', NODE_ENV: 'test',
   };
   execFileSync('node', ['src/migrate.js'], { cwd: join(ROOT, 'server'), env, stdio: 'ignore' });
