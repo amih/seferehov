@@ -90,6 +90,14 @@ async function distanceTo(locId, pos) {
 }
 
 export default async function locationRoutes(app) {
+  // The libraries nearest a point (the one camera's first guess, web/src/capture.js), nearest first.
+  app.get('/api/locations/near', { config: { rateLimit: { max: 120, timeWindow: '1 hour' } } }, async (req, reply) => {
+    const pos = parseLatLon(req.query.lat, req.query.lon);
+    if (!pos) return reply.code(400).send({ error: 'bad_request' });
+    const { librariesNear } = await import('./situation.js');
+    return { libraries: (await librariesNear(pos.lat, pos.lon)).map(({ code, name, m }) => ({ code, name, m })) };
+  });
+
   app.get('/api/locations', async (req, reply) => {
     const bbox = String(req.query.bbox ?? '').split(',').map(Number);
     if (bbox.length !== 4 || bbox.some((n) => !Number.isFinite(n))) {
@@ -220,26 +228,8 @@ export default async function locationRoutes(app) {
     const status = privacy.flagged ? 'pending' : locationStatus(req.user);
     const restricted = fields.restricted === '1' || fields.restricted === true;
 
-    const loc = await tx(async (db) => {
-      let row;
-      for (let attempt = 0; !row; attempt++) {
-        try {
-          row = (await db.query(
-            `INSERT INTO locations(code, name, description, geom, status, restricted, photo_id, created_by, last_checked_at, privacy_flag)
-             VALUES ($1, $2, $3, ST_MakePoint($4, $5)::geography, $6, $7, $8, $9, now(), $10)
-             RETURNING id, code, status`,
-            [shortCode(), name, description, pos.lon, pos.lat, status, restricted, photo?.id ?? null, req.user.id,
-             privacy.flagged ? { reason: privacy.reason, snippets: privacy.snippets } : null],
-          )).rows[0];
-        } catch (err) {
-          if (err.code !== '23505' || attempt > 5) throw err; // code collision → retry
-        }
-      }
-      if (status === 'approved') {
-        await award(db, { userId: req.user.id, points: POINTS.location, reason: 'new_location', refType: 'location', refId: row.id });
-      }
-      return row;
-    });
+    const loc = await insertLocation(req.user, pos, { name, description, status, restricted, photoId: photo?.id ?? null,
+      privacyFlag: privacy.flagged ? { reason: privacy.reason, snippets: privacy.snippets } : null });
     return { location: { code: loc.code, status: loc.status } };
   });
 
@@ -413,6 +403,41 @@ export default async function locationRoutes(app) {
               (SELECT count(*) FROM books)::int AS books,
               (SELECT count(*) FROM sightings WHERE status = 'approved')::int AS sightings`));
   });
+}
+
+async function insertLocation(user, pos, { name = null, description = null, status, restricted = false, photoId = null, privacyFlag = null }) {
+  return tx(async (db) => {
+    let row;
+    for (let attempt = 0; !row; attempt++) {
+      try {
+        row = (await db.query(
+          `INSERT INTO locations(code, name, description, geom, status, restricted, photo_id, created_by, last_checked_at, privacy_flag)
+           VALUES ($1, $2, $3, ST_MakePoint($4, $5)::geography, $6, $7, $8, $9, now(), $10)
+           RETURNING id, code, status`,
+          [shortCode(), name, description, pos.lon, pos.lat, status, restricted, photoId, user.id, privacyFlag],
+        )).rows[0];
+      } catch (err) {
+        if (err.code !== '23505' || attempt > 5) throw err; // code collision → retry
+      }
+    }
+    if (status === 'approved') {
+      await award(db, { userId: user.id, points: POINTS.location, reason: 'new_location', refType: 'location', refId: row.id });
+    }
+    return row;
+  });
+}
+
+// A new library from the one camera (the reader answered "a new public library here"): the
+// usual review applies; another library within DUPLICATE_RADIUS_M is { error: 'nearby_exists' }.
+export async function createLocation(user, pos, { name = null } = {}) {
+  const dup = await one(
+    `SELECT code, name FROM locations WHERE status <> 'rejected' AND ST_DWithin(geom, ST_MakePoint($1, $2)::geography, $3)
+      ORDER BY geom <-> ST_MakePoint($1, $2)::geography LIMIT 1`, [pos.lon, pos.lat, DUPLICATE_RADIUS_M]);
+  if (dup) return { error: 'nearby_exists', location: dup };
+  name = String(name ?? '').trim().slice(0, 120) || null;
+  const privacy = name ? await checkPrivate(name, null) : { flagged: false };
+  return insertLocation(user, pos, { name, status: privacy.flagged ? 'pending' : locationStatus(user),
+    privacyFlag: privacy.flagged ? { reason: privacy.reason, snippets: privacy.snippets } : null });
 }
 
 export const splitAuthors = (s) => String(s ?? '').split(/[,;&]/).map((a) => a.trim()).filter(Boolean).slice(0, 10);

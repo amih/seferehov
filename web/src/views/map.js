@@ -3,9 +3,11 @@ import 'leaflet/dist/leaflet.css';
 import 'leaflet.markercluster';
 import 'leaflet.markercluster/dist/MarkerCluster.css';
 import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
-import { api } from '../api.js';
+import { api, getMe } from '../api.js';
 import { esc, getPosition, toast } from '../ui.js';
-import { t, isRtl } from '../i18n.js';
+import { t, isRtl, lang } from '../i18n.js';
+import { navigate } from '../nav.js';
+import { captureShots, captureFiles } from '../capture.js';
 
 const VIEW_KEY = 'seferehov:mapView';
 export const COMIC_KEY = 'seferehov:comicSeen'; // set when the comic was opened or the hint closed
@@ -38,7 +40,10 @@ export default function mapView(root, _, query) {
   root.innerHTML = `
     <div id="map"></div>
     <button class="fab-locate" title="${t('map.locate')}" aria-label="${t('map.locate')}">◎</button>
-    <div class="fab-row"><a class="fab-add" href="/add">${t('map.add')}</a><a class="fab-search" href="/search">${t('map.search')}</a></div>`;
+    <div class="fab-row"><button class="fab-cam" aria-label="${esc(t('map.camera'))}">📸 ${t('map.camera')}</button><a class="fab-search" href="/search">${t('map.search')}</a></div>
+    <div class="cam-sheet" hidden><button class="sheet-x" aria-label="${esc(t('menu.close'))}">✕</button>
+      <div class="shots" id="capture-panel" hidden></div>
+      <input type="file" accept="image/*" multiple hidden id="cam-files"></div>`;
   // Newcomers get one line pointing to the comic, until they open it or close the line.
   let seen = true;
   try { seen = !!localStorage.getItem(COMIC_KEY); } catch {}
@@ -140,5 +145,24 @@ export default function mapView(root, _, query) {
   };
   if (!start) locate(false);
 
-  return () => { removed = true; map.remove(); };
+  // One camera for everything (docs/ONE_CAMERA_PLAN.md): no question first. The phone's hints go
+  // with the photos and the server guesses where they were taken; the reader checks it in the queue.
+  const sheet = root.querySelector('.cam-sheet');
+  const request = () => ({ lang: lang() });
+  const cam = captureShots({ panel: sheet.querySelector('#capture-panel'), request, guess: true, screen: 'map' });
+  root.querySelector('.fab-cam').onclick = async () => {
+    if (!await getMe()) return navigate('/login?next=/');
+    sheet.hidden = false;
+    if (!await cam.start()) sheet.querySelector('#cam-files').click();
+  };
+  sheet.querySelector('#cam-files').onchange = async (e) => {
+    const pos = await getPosition({ timeout: 8000 }).catch(() => null);
+    const n = await captureFiles(e.target.files, () => ({ lang: lang(), guess: '1', hints: JSON.stringify(pos ? { lat: pos.lat, lon: pos.lon, acc: Math.round(pos.accuracy) } : {}) }));
+    e.target.value = '';
+    if (n) toast(t('capture.sent_guess', { n }));
+    sheet.hidden = true;
+  };
+  sheet.querySelector('.sheet-x').onclick = async () => { await cam.stop(); sheet.hidden = true; };
+
+  return () => { removed = true; cam.stop(false); map.remove(); };
 }

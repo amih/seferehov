@@ -84,8 +84,9 @@ body.full #view { position: fixed; top: calc(var(--top-h) + env(safe-area-inset-
 .mini-map { direction: ltr; }
 .leaflet-popup-content { text-align: start; }
 .fab-row { position: absolute; z-index: 500; left: 16px; bottom: calc(26px + env(safe-area-inset-bottom)); display: flex; gap: 10px; }
-.fab-add, .fab-search, .fab-locate { box-shadow: 0 3px 12px rgb(0 0 0 / .25); border: 0; cursor: pointer; text-decoration: none; font-weight: 700; padding: 13px 18px; border-radius: 99px; }
-.fab-add { background: var(--wood); color: #fff; }
+.fab-add, .fab-cam, .fab-search, .fab-locate { box-shadow: 0 3px 12px rgb(0 0 0 / .25); border: 0; cursor: pointer; text-decoration: none; font-weight: 700; padding: 13px 18px; border-radius: 99px; }
+.fab-add, .fab-cam { background: var(--wood); color: #fff; }
+.fab-cam { font-size: 1.05rem; }
 .fab-search { background: var(--card); color: var(--ink); }
 body:has(#install-banner) .fab-row, body:has(#install-banner) .fab-locate { bottom: calc(120px + env(safe-area-inset-bottom)); }
 .fab-locate { position: absolute; z-index: 500; padding: 0; }
@@ -770,3 +771,15 @@ kbd { border: 1px solid #bbb; border-bottom-width: 2px; border-radius: 4px; padd
 .sc-photo img { display: block; max-width: 100%; max-height: 50vh; }
 .sc-photo svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .sc-photo polygon { fill: rgba(255, 220, 0, .12); stroke: #ffd400; vector-effect: non-scaling-stroke; stroke-width: 3px; }
+
+/* The one camera on the map (docs/ONE_CAMERA_PLAN.md): a sheet over the map. */
+.cam-sheet { position: fixed; inset: 0; z-index: 1200; background: var(--bg, #fff); overflow-y: auto; padding: 12px 12px calc(16px + env(safe-area-inset-bottom)); }
+.cam-sheet .sheet-x { position: sticky; top: 0; float: inline-end; z-index: 2; border: 0; border-radius: 99px; padding: 8px 12px; background: var(--card); font-size: 1.1rem; }
+.shot-where { position: absolute; top: 8px; inset-inline: 56px; margin: 0; padding: 6px 10px; border-radius: 99px; background: rgb(0 0 0 / .55); color: #fff; font-size: .9rem; text-align: center; }
+/* Where were these photos taken: the queue's card. */
+.sit { border: 2px solid var(--line, #ddd); border-radius: 12px; padding: 10px 12px; margin: 10px 0; background: var(--card); }
+.sit.ask { border-color: var(--wood); }
+.sit h2 { font-size: 1.1rem; margin: 0 0 4px; }
+.sit .why { margin: 2px 0 8px; }
+.sit .opts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.sit input { margin-top: 6px; }

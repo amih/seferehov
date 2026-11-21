@@ -1,4 +1,6 @@
 import { esc, shrinkImage } from './ui.js';
+import { startHints, rememberSession } from './hints.js';
+import { api } from './api.js';
 import { t } from './i18n.js';
 import { cameraLog } from './camlog.js';
 import { enqueue, kick, onItem, unsentItems } from './queue.js';
@@ -43,7 +45,11 @@ const sessionId = () => crypto.randomUUID?.() ?? 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxx
   return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
 });
 
-export function captureShots({ panel, request, onEnd, screen = 'library' }) {
+// guess: opened from the map, with no library or owner: the phone's hints go with the photos and
+// the server guesses where they were taken (server/src/situation.js).
+export function captureShots({ panel, request: given, onEnd, screen = 'library', guess = false }) {
+  let hints = null, whereTimer = null, whereAt = null;
+  const request = () => (guess ? { ...given(), guess: '1', hints: JSON.stringify(hints?.snapshot() ?? {}) } : given());
   let stream = null, video = null, timer = null, log = null, sid = null, opened = 0;
   const small = document.createElement('canvas');
   const ctx = small.getContext('2d', { willReadFrequently: true });
@@ -75,7 +81,7 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
     panel.hidden = false;
     panel.innerHTML = `<h2 class="shot-title">${t('capture.title')}</h2>
       <div class="shot-live burst"><video muted playsinline></video><div class="shot-flash"></div>
-        <p class="shot-hint" hidden></p>
+        <p class="shot-hint" hidden></p>${guess ? '<p class="shot-where" hidden></p>' : ''}
         <div class="burst-meter" data-state="hold"><span class="burst-bar"><i></i></span><b></b></div>
         <button class="shot-x" data-capture="end" aria-label="${t('capture.stop')}">✕</button>
         <button class="btn primary shot-stop on-cam" data-capture="end">■ ${t('capture.stop')} · <span class="burst-count">0</span></button></div>
@@ -94,6 +100,7 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
       video.srcObject = stream;
       await video.play();
       log.opened(stream.getVideoTracks()[0], video, askedAt);
+      if (guess) { hints = startHints(stream.getVideoTracks()[0]); whereTimer = setInterval(showWhere, 4000); }
     } catch (err) {
       log.failed(err);
       await stop();
@@ -260,8 +267,29 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
   // how: true = ✕ or Done; 'hidden' = screen off or another app; false = the screen is
   // closed. The log goes first (a hidden page may be frozen at any await), then the
   // photos still being saved, then the "n photos" note to the server.
+  // The phone's first guess of where the reader is, at the top of the camera (the server decides).
+  async function showWhere() {
+    const el = panel.querySelector('.shot-where');
+    if (!el || !hints) return;
+    const h = hints.snapshot();
+    let text = null;
+    if (h.nearHome) text = `🏠 ${t('camwhere.home')}`;
+    else if (h.lat != null) {
+      if (!whereAt || metresMoved(whereAt, h) > 30) {
+        whereAt = { lat: h.lat, lon: h.lon, libs: await api(`/api/locations/near?lat=${h.lat}&lon=${h.lon}`).then((r) => r.libraries).catch(() => null) };
+      }
+      const lib = whereAt.libs?.[0];
+      text = lib && lib.m <= 80 ? `📍 ${t('camwhere.near', { name: lib.name || t('free_library'), m: lib.m })}`
+        : h.net === 'wifi' || h.acc > 40 ? `🏠 ${t('camwhere.home_maybe')}` : `📍 ${t('camwhere.new')}`;
+    }
+    el.hidden = !text;
+    if (text) el.textContent = text;
+  }
+  const metresMoved = (a, b) => Math.hypot((a.lat - b.lat) * 111000, (a.lon - b.lon) * 111000 * Math.cos(a.lat * Math.PI / 180));
+
   async function stop(how = true) {
     const running = !!stream, n = taken, id = sid;
+    clearInterval(whereTimer);
     clearInterval(timer);
     document.removeEventListener('visibilitychange', onHidden);
     removeEventListener('devicemotion', onMotion);
@@ -280,11 +308,12 @@ export function captureShots({ panel, request, onEnd, screen = 'library' }) {
     await saving;
     let end = null;
     if (n) end = await enqueue(`/api/captures/${id}/end`, { ...request(), n }, {}, 'capture-end', { keepFailed: false }).catch(() => null);
+    if (hints) { rememberSession(id, hints.fix); hints.stop(); hints = null; }
     kick();
     if (how === false) return;
     panel.hidden = !n;
     panel.innerHTML = n ? `${how === 'hidden' ? `<p class="shot-done">${t('burst.closed_hidden')}</p>` : ''}
-      <p class="shot-done shot-progress"></p><p class="shot-done">${t('capture.sent', { n })} <a href="/queue">${t('capture.queue')}</a></p>` : '';
+      <p class="shot-done shot-progress"></p><p class="shot-done">${t(guess ? 'capture.sent_guess' : 'capture.sent', { n })} <a href="/queue">${t('capture.queue')}</a></p>` : '';
     if (n) follow(ids, end, panel.querySelector('.shot-progress'));
     onEnd?.(n);
   }

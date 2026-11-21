@@ -5,6 +5,35 @@ import { t } from '../i18n.js';
 import { ownerLabel } from '../mybooks.js';
 import { todoTabs, setQueueCount } from '../todo.js';
 import { stepsBox, attachSteps } from '../steps.js';
+import { learnHome } from '../hints.js';
+
+// Photos from the map's camera: where the server thinks they were taken, how sure it is and why
+// (server/src/situation.js). ask: the reader answers before the books; else a line with "Change".
+function situationHtml(sit, ask, open) {
+  const g = sit.guess ?? {};
+  const c = g.confidence ?? 0;
+  const level = c >= 75 ? 'high' : c >= 45 ? 'mid' : 'low';
+  const mark = { high: '🟢', mid: '🟡', low: '🔴' }[level];
+  const title = g.kind === 'home' ? `🏠 ${t('sit.home')}` : g.kind === 'library' ? `📍 ${esc(t('sit.library', { name: g.location?.name || t('free_library') }))}` : `➕ ${t('sit.new_library')}`;
+  const why = (g.why ?? []).slice(0, 4).map((w) => esc(t(`sit.why.${w.k}`, { v: w.v }))).filter(Boolean).join(' · ');
+  const head = `<h2>${ask ? `${t('sit.ask', { n: sit.n })}<br>` : ''}${title}</h2>
+    <p class="small why"><span aria-hidden="true">${mark}</span> ${c}%${why ? ` · ${why}` : ''}</p>`;
+  if (!ask && !open) return `<div class="sit sure">${head}<button class="btn small" data-sit-open>${t('sit.change')}</button></div>`;
+  const libs = (g.candidates ?? []).filter((l) => g.kind !== 'library' || l.code !== g.location?.code);
+  const opts = [
+    g.kind !== 'new_library' && ask ? `<button class="btn primary" data-sit="right">✓ ${t('sit.right')}</button>` : '',
+    g.kind === 'new_library' ? `<button class="btn primary" data-sit="new_library">✓ ${t('sit.yes_new')}</button>` : '',
+    ...libs.map((l) => `<button class="btn" data-sit="library" data-code="${esc(l.code)}">📍 ${esc(l.name || t('free_library'))} (${l.m} ${t('sit.m')})</button>`),
+    g.kind !== 'new_library' ? `<button class="btn" data-sit="new_library">➕ ${t('sit.opt_new')}</button>` : '',
+    g.kind !== 'home' ? `<button class="btn" data-sit="home">🏠 ${t('sit.opt_home')}</button>` : '',
+    `<button class="btn" data-sit="friend">👥 ${t('sit.opt_friend')}</button>`,
+  ].filter(Boolean).join('');
+  return `<div class="sit ${ask ? 'ask' : 'sure'}" data-session="${esc(sit.session)}">${head}
+    ${ask ? '' : `<p class="small">${t('sit.change_how')}</p>`}
+    <div class="opts">${opts}</div>
+    <input name="sit-name" dir="auto" maxlength="120" placeholder="${esc(t('sit.new_name'))}" ${g.kind === 'new_library' ? '' : 'hidden'}>
+    <input name="sit-friend" dir="auto" maxlength="80" placeholder="${esc(t('sit.friend_name'))}" hidden></div>`;
+}
 
 // Books waiting for the reader's approval, from all their photos, videos and barcodes:
 // one at a time, with a large picture. Approve, decline, or set aside for later. The last
@@ -26,6 +55,8 @@ export default async function queueView(root) {
   let items = [];
   let counts = { open: 0, later: 0, processing: 0 };
   let processing = [];
+  let situations = [];
+  let sitOpen = false; // "Change" pressed on a sure guess
   const skipped = new Set(); // set aside in this visit: not shown again until the next one
   let current = null;
   let timer = null;
@@ -37,6 +68,7 @@ export default async function queueView(root) {
     const r = await api('/api/queue');
     items = r.items;
     processing = r.processing;
+    situations = r.situations ?? [];
     counts = r;
     setQueueCount(r);
   }
@@ -113,8 +145,53 @@ export default async function queueView(root) {
     if (h) h.innerHTML = header();
   }
 
+  const sitOf = (i) => (i?.situation ? situations.find((x) => x.session === i.session) : null);
+
+  // The reader's answer to "where were these taken?" (or the sure guess changed).
+  async function answerSituation(sit, body) {
+    try {
+      const r = await api(`/api/captures/${sit.session}/situation`, { method: 'POST', json: body });
+      if (r.kind === 'home') learnHome(sit.session);
+      sitOpen = false;
+      toast(t('sit.thanks'));
+      await load();
+      render();
+      window.scrollTo(0, 0);
+    } catch (err) {
+      toast(err.body?.error === 'already_approved' ? t('sit.already') : err.body?.error === 'nearby_exists' ? t('sit.nearby', { name: err.body?.location?.name || t('free_library') })
+        : err.body?.error === 'location_required' ? t('sit.need_place') : err.message);
+      root.querySelectorAll('[data-sit]').forEach((x) => { x.disabled = false; });
+    }
+  }
+  root.addEventListener('click', (e) => {
+    if (e.target.closest('[data-sit-open]')) { sitOpen = true; render(); return; }
+    const b = e.target.closest('[data-sit]');
+    const box = b?.closest('.sit');
+    const sit = box && situations.find((x) => x.session === box.dataset.session);
+    if (!sit) return;
+    const kind = b.dataset.sit;
+    const name = box.querySelector('[name=sit-name]'), friend = box.querySelector('[name=sit-friend]');
+    if (kind === 'new_library' && name.hidden) { name.hidden = false; name.focus(); return; }
+    if (kind === 'friend' && friend.hidden) { friend.hidden = false; friend.focus(); return; }
+    b.disabled = true;
+    answerSituation(sit, { kind, code: b.dataset.code, name: name.value.trim() || undefined, friend_name: friend.value.trim() || undefined });
+  });
+
   function render() {
     current = next();
+    // From the map's camera, unsure where: the question comes before its books.
+    const ask = current?.situation === 'ask' ? sitOf(current) : null;
+    if (ask) {
+      root.innerHTML = `
+      <section class="page">
+        ${todoTabs('mine')}
+        <h1>${t('queue.title')}</h1>
+        <div id="qhead">${header()}</div>
+        ${situationHtml(ask, true, true)}
+        ${recentLink()}
+      </section>`;
+      return;
+    }
     if (!current) {
       root.innerHTML = `
       <section class="page">
@@ -137,6 +214,7 @@ export default async function queueView(root) {
       ${todoTabs('mine')}
       <h1>${t('queue.title')}</h1>
       <div id="qhead">${header()}</div>
+      ${sitOf(i) ? situationHtml(sitOf(i), false, sitOpen) : ''}
       <p class="muted small">${(i.sources?.length ? i.sources : [i.source]).map((x) => esc(t(`queue.from_${x}`))).join(' + ')} · ${i.code ? `<a href="/l/${i.code}">${esc(i.location_name || t('free_library'))}</a>` : `<a href="/books">${t('queue.my_books')}</a>${i.owner && i.owner !== 'mine' ? ` · ${ownerLabel(i)}` : ''}`}${i.decision === 'later' ? ` · ${t('queue.was_later')}` : ''}</p>
       ${big ? `<a href="${esc(i.frame || big)}" target="_blank" class="big-pic ${i.crop ? 'crop' : ''}"><img src="${esc(big)}" alt="${t('scan.photo_of')}"></a>` : ''}
       <div class="approve-book">
@@ -187,6 +265,11 @@ export default async function queueView(root) {
       root.querySelectorAll('.decide button').forEach((x) => { x.disabled = true; });
       try {
         const r = await api(`/api/queue/${i.id}`, { method: 'POST', json: body });
+        // Approving a book of a sure guess accepted the guess (server/src/approvals.js).
+        if (decision === 'approved' && i.situation === 'sure') {
+          if (sitOf(i)?.guess?.kind === 'home') learnHome(i.session);
+          await load().catch(() => {});
+        }
         counts = { ...counts, ...r };
         setQueueCount(counts);
         if (decision === 'later') skipped.add(i.id);
@@ -196,6 +279,7 @@ export default async function queueView(root) {
         render();
         window.scrollTo(0, 0);
       } catch (err) {
+        if (err.body?.error === 'situation_first') { await load().catch(() => {}); render(); return; }
         toast(err.message);
         root.querySelectorAll('.decide button').forEach((x) => { x.disabled = false; });
       }

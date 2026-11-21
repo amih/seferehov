@@ -118,7 +118,7 @@ export default async function scanRoutes(app) {
   app.get('/api/scans/ready', { preHandler: requireUser() }, async (req) => ({
     scans: await many(
       `SELECT s.id, l.code FROM scans s JOIN locations l ON l.id = s.location_id
-        WHERE s.user_id = $1 AND s.status = 'done' AND s.source <> 'cover' AND s.finished_at > now() - interval '3 days'
+        WHERE s.user_id = $1 AND s.status = 'done' AND s.source <> 'cover' AND s.situation IS NULL AND s.finished_at > now() - interval '3 days'
         ORDER BY s.finished_at DESC LIMIT 5`,
       [req.user.id],
     ),
@@ -163,6 +163,7 @@ export default async function scanRoutes(app) {
     const scan = await ownScan(req);
     if (!scan) return reply.code(404).send({ error: 'not_found' });
     if (scan.status !== 'done') return reply.code(409).send({ error: 'not_ready' });
+    if (scan.situation) return reply.code(409).send({ error: 'situation_first', session: scan.capture_id });
     const picks = Array.isArray(req.body?.items) ? req.body.items.slice(0, 100) : [];
     const kind = req.body?.kind === 'added' ? 'added' : scan.kind;
     const rows = await many('SELECT * FROM scan_items WHERE scan_id = $1', [scan.id]);
@@ -294,7 +295,7 @@ async function emailFinished() {
       WHERE s.user_id = u.id AND s.notified_at IS NULL AND s.source <> 'cover'
         AND s.status IN ('done','confirmed','failed') AND s.finished_at < now() - interval '2 minutes'
         AND s.finished_at > now() - interval '1 day'
-      RETURNING s.id, s.status, s.lang, u.email, (SELECT code FROM locations WHERE id = s.location_id) AS code,
+      RETURNING s.id, s.status, s.lang, u.email, (SELECT code FROM locations WHERE id = s.location_id AND s.situation IS NULL) AS code,
                 (SELECT count(*)::int FROM scan_items i WHERE i.scan_id = s.id) AS n`,
   );
   for (const r of rows) {
@@ -343,11 +344,14 @@ async function runScan(scan) {
     await withTrace(scan.id, { scan: scan.id, source: scan.source, kind: scan.kind, user_id: scan.user_id, location_id: scan.location_id, created_at: scan.created_at },
       () => processScan(scan));
     await q(`UPDATE scans SET status = 'done', finished_at = now() WHERE id = $1`, [scan.id]);
-    await autoConfirmKnown(scan).catch((err) => log.warn({ err, scan: scan.id }, 'auto confirm'));
+    // Where the photos were taken is still a guess (the one camera on the map): nothing is
+    // confirmed or approved on its own until the reader accepts or corrects it (capture.js).
+    const settled = !(await one('SELECT situation FROM scans WHERE id = $1', [scan.id]))?.situation;
+    if (settled) await autoConfirmKnown(scan).catch((err) => log.warn({ err, scan: scan.id }, 'auto confirm'));
     await mergeDuplicates(scan.user_id).catch((err) => log.warn({ err, scan: scan.id }, 'merge duplicates'));
     await skipMisreads(scan.user_id).catch((err) => log.warn({ err, scan: scan.id }, 'skip misreads'));
-    await autoApproveSure(scan).catch((err) => log.warn({ err, scan: scan.id }, 'auto approve'));
-    if (scan.location_id) {
+    if (settled) await autoApproveSure(scan).catch((err) => log.warn({ err, scan: scan.id }, 'auto approve'));
+    if (settled && scan.location_id) {
       const twin = await absorbOsmTwin(scan.location_id).catch((err) => log.warn({ err, scan: scan.id }, 'osm twin'));
       if (twin) log.info({ scan: scan.id, location: scan.location_id, osm: twin.id, metres: twin.metres }, 'OpenStreetMap twin merged into the library');
     }

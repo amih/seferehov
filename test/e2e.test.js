@@ -10,7 +10,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -320,5 +320,70 @@ test('handover: the friend sees the books, takes them, and the inviter gets the 
     assert.equal(pts.length, 1);
     const again = await fetch(`${base}/api/invites/${S.invite}/accept`, { method: 'POST', headers: { cookie } });
     assert.equal(again.status, 409, 'a handover is taken once');
+  } finally { await c.end(); }
+});
+
+test('one camera from the map: the guess is asked, answered "at home", then "a new library"', async () => {
+  const c = new pg.Client(dbUrl);
+  await c.connect();
+  const cookie = `seferehov_session=${S.readerToken}`;
+  const post = (p, json) => fetch(base + p, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify(json) });
+  try {
+    // A session from the map, sorted and read: the server guessed the test library, unsure.
+    const sid = randomUUID();
+    const guess = { kind: 'library', location: { id: S.location, code: S.code, name: 'Test library', m: 60 }, confidence: 60,
+      why: [{ k: 'near_lib', v: 60, side: 'out' }, { k: 'wifi', side: 'home' }], candidates: [{ id: S.location, code: S.code, name: 'Test library', m: 60 }] };
+    await c.query(`INSERT INTO capture_sessions(id, user_id, guessed, hints, guess, location_id, distance_m, status)
+      VALUES ($1, $2, true, '{"lat":32.0805,"lon":34.7805,"acc":30,"net":"wifi"}', $3, $4, 60, 'done')`, [sid, S.reader, guess, S.location]);
+    const scan = (await c.query(`INSERT INTO scans(user_id, location_id, status, source, media, capture_id, situation, finished_at)
+      VALUES ($1, $2, 'done', 'photo', '[]', $3, 'ask', now()) RETURNING id`, [S.reader, S.location, sid])).rows[0].id;
+    const item = (await c.query(`INSERT INTO scan_items(scan_id, title, via, confidence, quality) VALUES ($1, 'Map camera book', 'vision', 99, 'high') RETURNING id`, [scan])).rows[0].id;
+
+    const q = await (await fetch(`${base}/api/queue`, { headers: { cookie } })).json();
+    const sit = q.situations.find((x) => x.session === sid);
+    assert.ok(sit && sit.ask && sit.n === 1, 'the queue has the question');
+    assert.equal(q.items.find((x) => String(x.id) === String(item))?.situation, 'ask', JSON.stringify(q.items.map((x) => [x.id, x.situation])));
+    assert.equal((await post(`/api/queue/${item}`, { decision: 'approved' })).status, 409, 'no approval before the answer');
+    // The queue screen shows the question, in both languages, without errors.
+    for (const lang of ['he', 'en']) {
+      const context = await browser.newContext({ locale: lang === 'he' ? 'he-IL' : 'en-US', serviceWorkers: 'block', viewport: { width: 400, height: 800 } });
+      await context.addCookies([{ name: 'seferehov_session', value: S.readerToken, url: base }]);
+      await context.addInitScript((l) => { try { localStorage.setItem('seferehov:lang', l); } catch { /* */ } }, lang);
+      assert.deepEqual(await openScreen(context, { path: '/queue' }), []);
+      const page = await context.newPage();
+      await page.goto(`${base}/queue`);
+      const card = page.locator('.sit.ask');
+      await card.waitFor({ timeout: 10_000 });
+      assert.match(await card.innerText(), lang === 'he' ? /איפה צולם הספר הזה/ : /Where was this book photographed\?/);
+      assert.equal(await card.locator('[data-sit="library"]').count(), 0, 'the guessed library is not offered twice');
+      assert.equal(await card.locator('[data-sit="right"]').count(), 1);
+      await context.close();
+    }
+
+    const home = await post(`/api/captures/${sid}/situation`, { kind: 'home' });
+    assert.equal(home.status, 200);
+    const s1 = (await c.query('SELECT location_id, owner, situation FROM scans WHERE id = $1', [scan])).rows[0];
+    assert.deepEqual(s1, { location_id: null, owner: 'mine', situation: null });
+    const h1 = (await c.query('SELECT hints FROM capture_sessions WHERE id = $1', [sid])).rows[0].hints;
+    assert.equal(h1.lat, undefined, 'no coordinates of a home are kept');
+    const q2 = await (await fetch(`${base}/api/queue`, { headers: { cookie } })).json();
+    assert.ok(!q2.situations.some((x) => x.session === sid), 'answered: no more question');
+
+    // Another session, outdoors with no known library: the answer creates the library.
+    const sid2 = randomUUID();
+    await c.query(`INSERT INTO capture_sessions(id, user_id, guessed, hints, guess, status)
+      VALUES ($1, $2, true, '{"lat":32.09,"lon":34.79,"acc":5}', '{"kind":"new_library","confidence":70,"why":[],"candidates":[]}', 'done')`, [sid2, S.reader]);
+    const scan2 = (await c.query(`INSERT INTO scans(user_id, status, source, media, capture_id, situation, finished_at)
+      VALUES ($1, 'done', 'photo', '[]', $2, 'ask', now()) RETURNING id`, [S.reader, sid2])).rows[0].id;
+    await c.query(`INSERT INTO scan_items(scan_id, title, via) VALUES ($1, 'Box book', 'vision')`, [scan2]);
+    const right = await post(`/api/captures/${sid2}/situation`, { kind: 'right' });
+    assert.equal(right.status, 422, 'a new library is never taken without the reader saying so');
+    const made = await post(`/api/captures/${sid2}/situation`, { kind: 'new_library', name: 'Corner box' });
+    assert.equal(made.status, 200);
+    const { code } = await made.json();
+    const loc = (await c.query(`SELECT l.name, l.status FROM scans s JOIN locations l ON l.id = s.location_id WHERE s.id = $1`, [scan2])).rows[0];
+    assert.equal(loc.name, 'Corner box');
+    const near = await (await fetch(`${base}/api/locations/near?lat=32.09&lon=34.79`)).json();
+    assert.equal(near.libraries[0].code, code, 'the new library is found near the photos');
   } finally { await c.end(); }
 });

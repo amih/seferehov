@@ -23,7 +23,7 @@ const UNDO_DAYS = 14;
 const ITEM_SQL = `
   SELECT i.id, i.title, i.author, i.isbn13, i.via, i.matched, i.quality, i.frame_path, i.crop_path, i.back_path, i.decision, i.sources,
          NOT ${CROP_SHOWN_SQL} AS crop_hidden,
-         s.id AS scan_id, s.kind, s.source, s.owner, s.friend_name, l.code, l.name AS location_name,
+         s.id AS scan_id, s.kind, s.source, s.owner, s.friend_name, l.code, l.name AS location_name, s.capture_id AS session, s.situation,
          b.id AS book_id, b.title AS book_title, b.authors AS book_authors, b.cover_url, b.year,
          COALESCE(i.confidence, CASE i.quality WHEN 'high' THEN 85 WHEN 'medium' THEN 40 ELSE 20 END) AS confidence,
          COALESCE(i.confidence_why, CASE i.quality WHEN 'high' THEN 'catalogue' WHEN 'medium' THEN 'read' ELSE 'low' END) AS confidence_why
@@ -402,7 +402,16 @@ export default async function approvalRoutes(app) {
     );
     const waits = processing.length ? await queueWaits() : new Map();
     const wait = Math.max(0, ...processing.map((x) => waits.get(x.id)?.mins ?? 0)) || null;
-    return { items: items.map(publicItem), processing, wait, ...(await counts(req.user.id)) };
+    // Photos from the map's camera whose place is still a guess: one card per session.
+    const situations = await many(
+      `SELECT c.id AS session, c.guess, c.created_at, bool_or(s.situation = 'ask') AS ask, count(i.id)::int AS n
+         FROM capture_sessions c JOIN scans s ON s.capture_id = c.id
+         LEFT JOIN scan_items i ON i.scan_id = s.id AND (i.decision IS NULL OR i.decision = 'later')
+        WHERE c.user_id = $1 AND c.guessed AND c.answered_at IS NULL AND s.situation IS NOT NULL AND s.status = 'done'
+        GROUP BY c.id ORDER BY c.created_at`,
+      [req.user.id],
+    );
+    return { items: items.map(publicItem), processing, wait, situations: situations.filter((x) => x.n), ...(await counts(req.user.id)) };
   });
 
   app.post('/api/queue/:id', {
@@ -417,7 +426,16 @@ export default async function approvalRoutes(app) {
       [Number(req.params.id), req.user.id],
     );
     if (!item) return reply.code(404).send({ error: 'not_found' });
-    const scan = await one('SELECT * FROM scans WHERE id = $1', [item.scan_id]);
+    let scan = await one('SELECT * FROM scans WHERE id = $1', [item.scan_id]);
+    // From the map's camera: the reader answers where the photos were taken first; approving a
+    // book of a sure guess accepts the guess.
+    if (scan.situation === 'ask' && decision === 'approved') return reply.code(409).send({ error: 'situation_first', session: scan.capture_id });
+    if (scan.situation === 'sure' && decision === 'approved') {
+      const { answerSituation } = await import('./capture.js');
+      const r = await answerSituation(req.user, scan.capture_id, { kind: 'right' });
+      if (r.error) return reply.code(r.status).send({ error: r.error });
+      scan = await one('SELECT * FROM scans WHERE id = $1', [item.scan_id]);
+    }
     let result = null;
     if (decision === 'approved') {
       result = await approveItem(item, scan, req.user, { title, author });
