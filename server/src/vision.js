@@ -598,7 +598,9 @@ export async function readCrop(img, w, h, title = null, opts = {}) {
     ]);
     return { angle, jpeg, read, ocr };
   }));
-  const out = await judgeCrop(tries, spine, w >= 2.5 * h, title, opts);
+  // Lab 063 (22 Nov): when PaddleOCR does not confirm, Surya checks first; only then may the
+  // cut-out be split into bands (splitting on PaddleOCR's lines cut single spines in two).
+  const out = await judgeCrop(tries, spine, w >= 2.5 * h, title, paddle ? { ...opts, split: false } : opts);
   if (!paddle || [].concat(out ?? []).some((b) => b.verified)) return out;
   // The Hebrew PaddleOCR did not confirm the reading either way up (or is down): Surya checks
   // the same readings again. The two confirm different spines: lab 055 (207 spines turned on
@@ -609,7 +611,7 @@ export async function readCrop(img, w, h, title = null, opts = {}) {
   return judgeCrop(again, spine, w >= 2.5 * h, title, opts);
 }
 
-async function judgeCrop(tries, spine, flat, title, { split = false, ownLines = true } = {}) {
+async function judgeCrop(tries, spine, flat, title, { split = false, ownLines = true, fromCutter = false } = {}) {
   if (tries.some((x) => !x.ocr?.boxes)) {
     // The OCR is down: the vision model's reading alone, the clearer one.
     const ok = tries.filter((x) => x.read).sort((a, b) => (a.read.quality === 'low') - (b.read.quality === 'low'))[0];
@@ -691,7 +693,7 @@ async function judgeCrop(tries, spine, flat, title, { split = false, ownLines = 
   }
   let crop = best.jpeg, cutInfo = null;
   // A book lying flat shows its spine as a long level strip: cut and straightened the same way.
-  if (spine || flat) ({ crop, info: cutInfo } = await spineCut(best.jpeg, lines));
+  if (spine || flat) ({ crop, info: cutInfo } = await spineCut(best.jpeg, lines, fromCutter ? { turn: false, minKeep: 0.6 } : {}));
   if (cutInfo) await step('spine-cut', { note: 'this spine turned level for its own lean; its edges found as straight lines at any angle; the neighbour beyond them painted grey', ...cutInfo }, { image: best.jpeg, crop });
   await report('kept', { crop });
   return { ...(best.read ?? { title, author: null, isbn: null, quality: 'medium' }), crop, verified: true, at: here(), across: await acrossOf(best, lines) };
@@ -842,7 +844,7 @@ export async function band(jpeg, lines) {
 // (3) the cut takes in both lines, and what lies beyond them (the neighbour's wedge) is
 // painted light grey. A side with no clear line falls back to the level cut of band().
 const EDGE_MIN = 40; // mean colour change across a line (sum of R, G, B) that counts as an edge
-export async function spineCut(jpeg, lines) {
+export async function spineCut(jpeg, lines, { turn = true, minKeep = 0 } = {}) {
   const hits = lines.filter((b) => b.score >= 0.4).sort((a, b) => b.score - a.score);
   if (!hits.length) return { crop: jpeg, info: null };
   const first = hits[0].bbox;
@@ -862,7 +864,7 @@ export async function spineCut(jpeg, lines) {
     const txt = await sharp(jpeg).extract({ left: Math.round(ux1), top: Math.max(0, Math.round(y1)), width: Math.round(Math.min(W, ux2) - ux1), height: Math.round(Math.min(H, y2) - Math.max(0, y1)) }).toBuffer();
     measured = await dominantTilt(txt);
   } catch { /* level as it is */ }
-  if (Math.abs(measured) < 0.7 || Math.abs(measured) > 12) measured = 0;
+  if (Math.abs(measured) < 0.7 || Math.abs(measured) > 12 || !turn) measured = 0;
 
   const attempt = async (lean) => {
     let img = jpeg, W2 = W, H2 = H;
@@ -939,6 +941,7 @@ export async function spineCut(jpeg, lines) {
   const r0 = Math.max(0, Math.floor(Math.min(yTop(0), yTop(W2 - 1))));
   const r1 = Math.min(H2, Math.ceil(Math.max(yBot(0), yBot(W2 - 1))));
   if (r1 - r0 < 12) return { crop: await band(jpeg, lines), info: null };
+  if (minKeep && (r1 - r0) < minKeep * H2) return { crop: jpeg, info: { lean: 0, top: null, bottom: null, note: `the edges found would keep ${Math.round(100 * (r1 - r0) / H2)}% of the cut-out: kept whole` } };
   // (3) Only this spine: beyond its edges, light grey.
   const out = Buffer.alloc(W2 * (r1 - r0) * 3);
   for (let y = r0; y < r1; y++) {
@@ -1003,7 +1006,7 @@ async function readSpinesCut(cutRes, W, H, upright) {
     const place = { tilt: 0, box };
     const b = await scope(`cut-out ${k + 1}`, async () => {
       await step('cut-out', { from: 'spine cutter', w: s.w, h: s.h, poly: s.poly, conf: s.conf }, { image: img });
-      return readCrop(img, s.w, s.h, null, { split: true });
+      return readCrop(img, s.w, s.h, null, { split: true, fromCutter: true });
     });
     for (const x of [].concat(b ?? [])) if (x.verified !== false) books.push({ ...x, place, spot: { poly: s.poly.map(([x2, y2]) => [Math.round(x2 * 1000) / 1000, Math.round(y2 * 1000) / 1000]), by: 'yolo-051' } });
   }
