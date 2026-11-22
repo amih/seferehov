@@ -387,3 +387,21 @@ test('one camera from the map: the guess is asked, answered "at home", then "a n
     assert.equal(near.libraries[0].code, code, 'the new library is found near the photos');
   } finally { await c.end(); }
 });
+
+test('back button: one step at a time, down to the map; "back to the library" does not pile up', async () => {
+  const context = await browser.newContext({ locale: 'en-US', serviceWorkers: 'block' });
+  const page = await context.newPage();
+  const path = () => new URL(page.url()).pathname;
+  await page.goto(`${base}/l/${S.code}`); // a shared link: the map is put under it
+  await page.locator(`a[href="/l/${S.code}/b/${S.book}"]`).first().click();
+  await page.waitForURL(`**/l/${S.code}/b/${S.book}`);
+  await page.goBack();
+  assert.equal(path(), `/l/${S.code}`); // the library, not the map
+  await page.goForward();
+  await page.waitForURL(`**/l/${S.code}/b/${S.book}`);
+  await page.locator(`a[href="/l/${S.code}"]`).first().click(); // "← Back to <library>"
+  await page.waitForURL(`**/l/${S.code}`);
+  await page.goBack();
+  assert.equal(path(), '/'); // went back down to the library: one more back is the map
+  await context.close();
+});

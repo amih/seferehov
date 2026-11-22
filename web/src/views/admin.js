@@ -1,5 +1,5 @@
 import { api, getMe } from '../api.js';
-import { navigate } from '../nav.js';
+import { navigate, replaceUrl } from '../nav.js';
 import { esc, toast, confirmDialog } from '../ui.js';
 import { lang } from '../i18n.js';
 import { tracked } from '../analytics.js';
@@ -28,7 +28,7 @@ export default async function adminView(root) {
     const b = e.target.closest('[data-k]');
     if (!b) return;
     tab = b.dataset.k;
-    history.replaceState(history.state, '', `#${tab}`);
+    replaceUrl(`${location.pathname}${location.search}#${tab}`);
     show();
   };
 

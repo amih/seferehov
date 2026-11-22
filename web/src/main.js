@@ -5,7 +5,7 @@ import { toast, choose, esc } from './ui.js';
 import { whyText } from './outbox-ui.js';
 import { getMe } from './api.js';
 import './net.js';
-import { navigate, mapUnderneath, closeLayer } from './nav.js';
+import { navigate, mapUnderneath, closeLayer, savedScroll, replaceUrl } from './nav.js';
 import { trackPageView } from './analytics.js';
 import { t, lang, applyLang } from './i18n.js';
 import mapView from './views/map.js';
@@ -83,7 +83,7 @@ let renders = 0;
 // menu item meanwhile starts another render: the older one then stops, and a screen it
 // had already opened is closed at once, so nothing (a map, a camera, timers) is left
 // running unseen.
-async function render() {
+async function render({ back = false } = {}) {
   const n = ++renders;
   const stale = () => n !== renders;
   maybeApply(); // a waiting update is applied between screens
@@ -99,7 +99,7 @@ async function render() {
   if (me?.screen_name) joinInvite(); // came through a friend's invite link (once)
   if (me && !me.screen_name && !['/me', '/about', '/comic'].includes(path)) {
     sessionStorage.setItem('seferehov:next', location.pathname + location.search);
-    history.replaceState(history.state, '', '/me?welcome=1');
+    replaceUrl('/me?welcome=1');
     return render();
   }
   // A fresh element per screen: listeners a screen added to it go with it.
@@ -122,6 +122,9 @@ async function render() {
   const done = (await Promise.resolve(view(main, params.slice(1), new URLSearchParams(location.search))).finally(() => main.classList.remove('loading'))) || null;
   if (stale()) { done?.(); return; }
   cleanup = done;
+  // Back (or forward) to a screen: where it was scrolled to, once it has drawn.
+  const y = back ? savedScroll() : null;
+  if (y) requestAnimationFrame(() => { if (!stale()) window.scrollTo(0, y); });
   showReadyBanner(me, path);
 }
 
@@ -134,8 +137,8 @@ document.addEventListener('click', (e) => {
   e.preventDefault();
   navigate(url.pathname + url.search + url.hash);
 });
-window.addEventListener('popstate', () => { if (!closeLayer()) render(); });
-window.addEventListener('seferehov:navigate', render);
+window.addEventListener('popstate', () => { if (!closeLayer()) render({ back: true }); });
+window.addEventListener('seferehov:navigate', () => render());
 
 const badge = document.getElementById('queue-badge');
 let queued = { waiting: 0, failed: 0 };
@@ -227,7 +230,7 @@ document.getElementById('app-version').textContent = __APP_VERSION__;
 const inviteCode = new URLSearchParams(location.search).get('i');
 if (inviteCode && location.pathname === '/') {
   rememberInvite(inviteCode);
-  history.replaceState(null, '', `/invite/${encodeURIComponent(inviteCode)}`);
+  history.replaceState(null, '', `/invite/${encodeURIComponent(inviteCode)}`); // mapUnderneath() puts the map under it
 }
 mapUnderneath();
 render();
