@@ -693,7 +693,11 @@ async function judgeCrop(tries, spine, flat, title, { split = false, ownLines = 
   }
   let crop = best.jpeg, cutInfo = null;
   // A book lying flat shows its spine as a long level strip: cut and straightened the same way.
-  if (spine || flat) ({ crop, info: cutInfo } = await spineCut(best.jpeg, lines, fromCutter ? { turn: false, minKeep: 0.6 } : {}));
+  // A cut-out from the spine cutter is already one spine, cut straight along its own rectangle:
+  // kept as it is. spineCut (made for the vision model's boxes) turned it again by the lean of its
+  // print, and searched for edges only within one print-line height of the print, where it found
+  // the print's own outline or the cover's colour blocks instead of the spine's edge (lab 063).
+  if ((spine || flat) && !fromCutter) ({ crop, info: cutInfo } = await spineCut(best.jpeg, lines));
   if (cutInfo) await step('spine-cut', { note: 'this spine turned level for its own lean; its edges found as straight lines at any angle; the neighbour beyond them painted grey', ...cutInfo }, { image: best.jpeg, crop });
   await report('kept', { crop });
   return { ...(best.read ?? { title, author: null, isbn: null, quality: 'medium' }), crop, verified: true, at: here(), across: await acrossOf(best, lines) };
@@ -844,7 +848,7 @@ export async function band(jpeg, lines) {
 // (3) the cut takes in both lines, and what lies beyond them (the neighbour's wedge) is
 // painted light grey. A side with no clear line falls back to the level cut of band().
 const EDGE_MIN = 40; // mean colour change across a line (sum of R, G, B) that counts as an edge
-export async function spineCut(jpeg, lines, { turn = true, minKeep = 0 } = {}) {
+export async function spineCut(jpeg, lines) {
   const hits = lines.filter((b) => b.score >= 0.4).sort((a, b) => b.score - a.score);
   if (!hits.length) return { crop: jpeg, info: null };
   const first = hits[0].bbox;
@@ -864,7 +868,7 @@ export async function spineCut(jpeg, lines, { turn = true, minKeep = 0 } = {}) {
     const txt = await sharp(jpeg).extract({ left: Math.round(ux1), top: Math.max(0, Math.round(y1)), width: Math.round(Math.min(W, ux2) - ux1), height: Math.round(Math.min(H, y2) - Math.max(0, y1)) }).toBuffer();
     measured = await dominantTilt(txt);
   } catch { /* level as it is */ }
-  if (Math.abs(measured) < 0.7 || Math.abs(measured) > 12 || !turn) measured = 0;
+  if (Math.abs(measured) < 0.7 || Math.abs(measured) > 12) measured = 0;
 
   const attempt = async (lean) => {
     let img = jpeg, W2 = W, H2 = H;
@@ -941,7 +945,6 @@ export async function spineCut(jpeg, lines, { turn = true, minKeep = 0 } = {}) {
   const r0 = Math.max(0, Math.floor(Math.min(yTop(0), yTop(W2 - 1))));
   const r1 = Math.min(H2, Math.ceil(Math.max(yBot(0), yBot(W2 - 1))));
   if (r1 - r0 < 12) return { crop: await band(jpeg, lines), info: null };
-  if (minKeep && (r1 - r0) < minKeep * H2) return { crop: jpeg, info: { lean: 0, top: null, bottom: null, note: `the edges found would keep ${Math.round(100 * (r1 - r0) / H2)}% of the cut-out: kept whole` } };
   // (3) Only this spine: beyond its edges, light grey.
   const out = Buffer.alloc(W2 * (r1 - r0) * 3);
   for (let y = r0; y < r1; y++) {
