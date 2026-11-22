@@ -21,6 +21,7 @@ import { PRESENT_BOOKS_SQL, TAKEN_BOOKS_SQL } from './locations.js';
 import { normTitle } from './vision.js';
 import { BOOK_REVIEWS_SQL, READER_REVIEWS_SQL, QUESTIONS, hasText } from './reviews.js';
 import { OFFERS_SQL } from './offers.js';
+import { nliCredit, nliRecordUrl } from './books.js';
 import { translate } from '../../web/src/i18n.js';
 import { comicHtml, comicText, comicImages, COMIC_CARD } from '../../web/src/comic.js';
 import { levelOf } from '../../web/src/levels.js';
@@ -380,6 +381,13 @@ function bookLinks(b) {
   return links;
 }
 
+// "Book details from: The National Library of Israel", only for books whose details came from there.
+function nliLine(b, T, lng) {
+  const c = nliCredit(b);
+  if (!c) return '';
+  return `<p class="small nli-credit">${T('book.nli_credit')}${c.record ? ` · <a href="${esc(nliRecordUrl(c.record, lng))}" rel="noopener" target="_blank">${T('book.nli_record')}</a>` : ''}</p>`;
+}
+
 const isbnShown = (isbn) => (isbn ? `${isbn.slice(0, 3)}-${isbn.slice(3)}` : '');
 const danacodeShown = (d) => (d ? `${Number(d.slice(0, 4))}-${Number(d.slice(4, 11))}` : '');
 
@@ -497,6 +505,7 @@ async function bookPage(lng, T, id) {
       ${shelfMates.length ? `<h2>${T('seo.book_neighbours')}</h2>${bookList(shelfMates, lng)}` : ''}
       <h2>${T('seo.book_more')}</h2>
       <ul class="ext-links">${bookLinks(b).map(([n, u]) => `<li><a href="${esc(u)}" rel="noopener nofollow" target="_blank">${esc(n)}</a></li>`).join('')}</ul>
+      ${nliLine(b, T, lng)}
       <hr><p class="small">${T('shelves.note_html')}</p></article>`,
     jsonld: [{
       '@context': 'https://schema.org',

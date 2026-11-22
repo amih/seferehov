@@ -10,7 +10,7 @@ import sharp from 'sharp';
 import { config } from './config.js';
 import { one, q } from './db.js';
 import { normalizeDanacode } from './util.js';
-import { nliRecords, marcFields } from './books.js';
+import { nliRecords, marcFields, control } from './books.js';
 import { politeFetch } from './polite.js';
 
 const UA = 'SeferehovBot/0.1 (+https://seferehov.com/bot)';
@@ -65,7 +65,7 @@ async function fromNli(book) {
       // The record also holds the book's Danacode (024 $2 danacode): kept, so a later
       // scan of the Danacode barcode finds this book.
       const dana = marcFields(xml, '024').find((f) => f.some(([c, v]) => c === '2' && /danacode/i.test(v)))?.find(([c]) => c === 'a')?.[1];
-      return { source: 'nli', danacode: normalizeDanacode(dana), description: tidy(blurb), front_url: front && await iiifImage(front), back_url: back && await iiifImage(back) };
+      return { source: 'nli', record: control(xml, '001') || null, danacode: normalizeDanacode(dana), description: tidy(blurb), front_url: front && await iiifImage(front), back_url: back && await iiifImage(back) };
     }
   }
   return null;
@@ -126,6 +126,10 @@ async function lookUp(book) {
       await q('UPDATE books SET danacode = $2 WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM books WHERE danacode = $2)', [book.id, r.danacode]).catch(() => {});
     }
     if (used) found.sources.push(r.source);
+    // The National Library record the details came from, for the credit link (nliCredit).
+    if (used && r.record && !book.source_ids?.nli) {
+      await q(`UPDATE books SET source_ids = COALESCE(source_ids, '{}'::jsonb) || jsonb_build_object('nli', $2::text) WHERE id = $1`, [book.id, r.record]).catch(() => {});
+    }
     if (found.front_url && found.back_url && found.description) break;
   }
   // A catalogue was too busy to ask: try again on a later visit, unless something was found.

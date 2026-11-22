@@ -1,7 +1,7 @@
 import { api } from '../api.js';
 import { navigate, backCloses } from '../nav.js';
 import { esc, timeAgo, toast, confirmDialog, getPosition } from '../ui.js';
-import { t } from '../i18n.js';
+import { t, lang } from '../i18n.js';
 import { watchDialog } from '../watch.js';
 import { pagerHtml, attachPager, loadBook } from '../pager.js';
 import { bookShots } from '../shots.js';
@@ -141,6 +141,8 @@ function renderBook(root, { b, photos, texts, again, back, status, actions, wire
     ${b.isbn13 ? `<p class="muted small" dir="ltr">ISBN ${esc(b.isbn13)}</p>` : ''}
     ${b.id ? `<p class="small"><a href="/b/${b.id}">${t('book.public_page')}</a></p>` : ''}
     ${b.details_source ? `<p class="muted small">${t('book.source', { src: esc(b.details_source) })}</p>` : ''}
+    ${b.nli_credit ? `<p class="muted small nli-credit">${t('book.nli_credit')}${b.nli_credit.record
+      ? ` · <a href="https://www.nli.org.il/${lang() === 'he' ? 'he' : 'en'}/books/NNL_ALEPH${esc(b.nli_credit.record)}/NLI" target="_blank" rel="noopener">${t('book.nli_record')}</a>` : ''}</p>` : ''}
   </section>`;
 
   wire(root);

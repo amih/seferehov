@@ -6,7 +6,7 @@ import { CROP_SHOWN_SQL } from './confidence.js';
 import { requireUser } from './auth.js';
 import { savePhoto, photoUrls, avatarUrl } from './photos.js';
 import { bookDetails } from './details.js';
-import { lookupIsbn, upsertBook, findOrCreateBook } from './books.js';
+import { lookupIsbn, upsertBook, findOrCreateBook, nliCredit } from './books.js';
 import { readForm } from './multipart.js';
 import { initialStatus, locationStatus, award, awardSighting } from './moderation.js';
 import { parseLatLon, shortCode, memo } from './util.js';
@@ -296,7 +296,7 @@ export default async function locationRoutes(app) {
       book: {
         id: book.id, isbn13: book.isbn13, title: book.title, authors: book.authors, year: book.year, publisher: book.publisher,
         cover_url: book.cover_url, front_url: book.front_url, back_url: book.back_url,
-        description: book.description, details_source: book.details_source, details_pending: pending,
+        description: book.description, details_source: book.details_source, nli_credit: nliCredit(book), details_pending: pending,
       },
       texts: await coverTexts(book.id),
       photos: shelf.filter((p) => !seen.has(p.url) && seen.add(p.url)).map((p) => ({ url: `/uploads/${p.url}`, kind: p.kind, at: p.created_at })),

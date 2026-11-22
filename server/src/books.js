@@ -157,7 +157,17 @@ export function marcFields(xml, tag) {
   return [...xml.matchAll(re)].map((m) => [...m[1].matchAll(/code="(\w)">([^<]*)</g)].map(([, c, v]) => [c, xmlDecode(v)]));
 }
 const sub = (f, code) => f.find(([c]) => c === code)?.[1] ?? null;
-const control = (xml, tag) => xml.match(new RegExp(`<controlfield tag="${tag}">([^<]*)<`))?.[1] ?? '';
+export const control = (xml, tag) => xml.match(new RegExp(`<controlfield tag="${tag}">([^<]*)<`))?.[1] ?? '';
+
+// Credit to the National Library, shown on a book's pages only when its details came from there:
+// the book was found in its catalogue (source 'nli'), or its covers, blurb or Danacode were
+// (details_source lists 'nli'). record: the catalogue record number, for a link, when known.
+export function nliCredit(book) {
+  if (!book || (book.source !== 'nli' && !/\bnli\b/.test(book.details_source ?? ''))) return null;
+  const id = String(book.source_ids?.nli ?? '');
+  return { record: /^\d{6,}$/.test(id) ? id : null };
+}
+export const nliRecordUrl = (id, lng = 'he') => `https://www.nli.org.il/${lng === 'he' ? 'he' : 'en'}/books/NNL_ALEPH${id}/NLI`;
 
 // MARC XML records for a CQL query ("alma.isbn=…", "alma.title=\"…\"").
 // throwBusy: throw polite.js's Busy instead of answering "no records" (details.js).

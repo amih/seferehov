@@ -3,7 +3,7 @@
 import { one, many, q } from './db.js';
 import { coverTexts } from './seo.js';
 import { requireUser } from './auth.js';
-import { lookupIsbn, upsertBook, findOrCreateBook } from './books.js';
+import { lookupIsbn, upsertBook, findOrCreateBook, nliCredit } from './books.js';
 import { savePhoto, photoUrls } from './photos.js';
 import { readForm } from './multipart.js';
 import { locationByCode, visibleTo, distanceTo, splitAuthors, recordSighting } from './locations.js';
@@ -87,7 +87,7 @@ export default async function myBookRoutes(app) {
       book: {
         id: book.id, isbn13: book.isbn13, title: book.title, authors: book.authors, year: book.year, publisher: book.publisher,
         cover_url: book.cover_url, front_url: book.front_url, back_url: book.back_url,
-        description: book.description, details_source: book.details_source, details_pending: !ready,
+        description: book.description, details_source: book.details_source, nli_credit: nliCredit(book), details_pending: !ready,
       },
       texts: await coverTexts(book.id),
       photos: [m.front_path && { url: `/uploads/${m.front_path}`, kind: 'cover', at: m.front_at },
