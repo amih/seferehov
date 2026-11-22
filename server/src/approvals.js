@@ -317,10 +317,15 @@ export async function mergeDuplicates(userId) {
       ORDER BY i.id`,
     [userId],
   );
-  const same = (a, b) => a.location_id === b.location_id && (
-    (a.book_id && a.book_id === b.book_id) || (a.isbn13 && a.isbn13 === b.isbn13) || (a.danacode && a.danacode === b.danacode)
-    || [a.title, a.book_title].some((x) => [b.title, b.book_title].some((y) => near(normTitle(x), normTitle(y))))
-    || sameReading(a, b));
+  const same = (a, b) => {
+    if (a.location_id !== b.location_id) return false;
+    // When both readings were matched to different catalogue books, they are different books
+    // even if one title appears as a substring of the other (lab 062, SAFE_MERGE=1).
+    if (config.safeMerge && a.book_id && b.book_id && a.book_id !== b.book_id) return false;
+    return (a.book_id && a.book_id === b.book_id) || (a.isbn13 && a.isbn13 === b.isbn13) || (a.danacode && a.danacode === b.danacode)
+      || [a.title, a.book_title].some((x) => [b.title, b.book_title].some((y) => near(normTitle(x), normTitle(y))))
+      || sameReading(a, b);
+  };
   const groups = [];
   for (const item of open) {
     const g = groups.find((gr) => gr.some((o) => same(o, item)));

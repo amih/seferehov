@@ -27,6 +27,9 @@ export const config = {
   notifyAdminMinutes: Number(env.NOTIFY_ADMIN_MINUTES ?? 10),
   // 1 = books with confidence "sure" (src/confidence.js) are approved without the reader.
   autoApproveSure: env.AUTO_APPROVE_SURE === '1',
+  // 1 = never merge two readings that the catalogue matched to different books; prevents
+  // subtitle-containment false positives in mergeDuplicates (lab 062, off by default).
+  safeMerge: env.SAFE_MERGE === '1',
   vision: {
     url: (env.OLLAMA_URL || 'http://127.0.0.1:11434').replace(/\/$/, ''),
     model: env.VISION_MODEL || 'qwen3-vl:8b-instruct',
