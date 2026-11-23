@@ -590,23 +590,45 @@ export function surelyHebrew(read, ocr) {
   const ocrHeb = (ocr?.boxes ?? []).filter((b) => b.confidence >= 0.5).map((b) => b.text).join(' ').match(/[\u05d0-\u05ea]/g)?.length ?? 0;
   return hebShare(`${read?.title ?? ''} ${read?.author ?? ''}`) >= 0.7 && ocrHeb >= 3;
 }
-// The OCR line that best holds a mixed reading's Hebrew part, when it is all Hebrew letters.
+const lcs = (a, b) => {
+  const row = new Array(b.length + 1).fill(0);
+  for (const ca of a) { let prev = 0; for (let j = 1; j <= b.length; j++) { const t = row[j]; row[j] = ca === b[j - 1] ? prev + 1 : Math.max(row[j], row[j - 1]); prev = t; } }
+  return row[b.length];
+};
+// A mixed reading with each mixed word replaced by the Hebrew OCR's word for it: the OCR word
+// (Hebrew letters only) closest to the mixed word's Hebrew part ("סמيث" → "סמית"). Null when a
+// mixed word has no such OCR word. Only the mixed words change: the OCR misreads others.
 export function ocrHebrewFor(text, ocr) {
-  const lines = (ocr?.boxes ?? []).filter((b) => b.confidence >= 0.5 && !FOREIGN.test(b.text) && HEB.test(b.text));
-  const best = lines.map((b) => ({ text: b.text.trim(), s: overlap(text, b.text) })).sort((a, b) => b.s - a.s)[0];
-  return best && best.s >= 0.4 ? best.text : null;
+  const words = (ocr?.boxes ?? []).filter((b) => b.confidence >= 0.5).flatMap((b) => b.text.split(/[^\p{L}]+/u))
+    .filter((w) => w.length >= 2 && !FOREIGN.test(w) && HEB.test(w));
+  const have = new Set(String(text ?? '').split(/[^\p{L}]+/u));
+  let ok = true;
+  const out = String(text ?? '').replace(/\p{L}+/gu, (w) => {
+    if (!(HEB.test(w) && FOREIGN.test(w))) return w;
+    const heb = w.replace(/[^\u05d0-\u05ea]/g, '');
+    // Share of the Hebrew part's letters found in order in the OCR word; words the reading
+    // already has are someone else's ("סטפאנוס" is the first name, not "קסנakis").
+    const best = words.filter((o) => !have.has(o)).map((o) => ({ o, s: lcs(heb, o) / heb.length })).sort((x, y) => y.s - x.s)[0];
+    if (!best || best.s < 0.6 || heb.length < 2) { ok = false; return w; }
+    return best.o;
+  });
+  return ok ? out : null;
 }
-// Fixed by asking the vision model again, told the print is Hebrew; if that is still mixed, the
-// Hebrew OCR's line for that field; else the reading is kept as it was. SCRIPT_GUARD=0 turns it off.
+
+// Fixed by asking the vision model again, shown its reading; if that is still mixed, the mixed
+// words are replaced by the Hebrew OCR's words for them; else the reading is kept as it was. SCRIPT_GUARD=0 turns it off.
 export async function scriptGuard(jpeg, read, ocr) {
   if (!config.scriptGuard || !read || !(mixedWord(read.title) || mixedWord(read.author)) || !surelyHebrew(read, ocr)) return read;
-  const line = await generate(jpeg, `${SPINE_PROMPT} The print is Hebrew: write every Hebrew word in Hebrew letters only.`, 80).catch(() => '');
+  // Told only "the print is Hebrew", the model repeats itself word for word; shown its own
+  // reading it writes the word again in Hebrew letters ("קסנakis" → "קסנאקיס", 23 Nov 2026).
+  const was = read.author ? `${read.title} | ${read.author}` : read.title;
+  const line = await generate(jpeg, `This book spine is printed in Hebrew. A reader wrote: "${was}". Part of it is written in Latin or Arabic letters, but the spine prints it in Hebrew letters. Look at the spine and answer one line, TITLE | AUTHOR, every word in Hebrew letters exactly as printed.`, 80).catch(() => '');
   const again = /^NONE\b/i.test(line.trim()) ? null : parseBooks(line.trim().split('\n')[0])[0] ?? null;
   let fixed = read, how = 'kept as read';
   if (again && !mixedWord(again.title) && !mixedWord(again.author) && hebShare(again.title) >= 0.7) { fixed = { ...read, ...again }; how = 'read again in Hebrew'; } else {
     const field = (k) => (mixedWord(read[k]) ? ocrHebrewFor(read[k], ocr) ?? read[k] : read[k]);
     const f = { ...read, title: field('title'), author: field('author') };
-    if (f.title !== read.title || f.author !== read.author) { fixed = f; how = 'the Hebrew OCR line'; }
+    if (f.title !== read.title || f.author !== read.author) { fixed = f; how = 'the Hebrew OCR words'; }
   }
   await step('script-guard', { note: 'a Hebrew spine read with a word in Latin or Arabic letters', before: { title: read.title, author: read.author }, again: again && { title: again.title, author: again.author }, after: { title: fixed.title, author: fixed.author }, verdict: how });
   return fixed;

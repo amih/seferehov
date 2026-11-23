@@ -19,7 +19,7 @@ test('surelyHebrew: Hebrew reading and Hebrew print found by the OCR', () => {
   assert.equal(surelyHebrew({ title: 'The Greek', author: 'Kazantzakis' }, ocr('זורבה')), false);
 });
 
-test('ocrHebrewFor: the OCR line in Hebrew letters that holds the field', () => {
-  assert.equal(ocrHebrewFor('ניקוס קסנakis', ocr('ניקוס קזנצאקיס', 'זורבה היווני')), 'ניקוס קזנצאקיס');
+test('ocrHebrewFor: only the mixed word is replaced, by the OCR word for it', () => {
+  assert.equal(ocrHebrewFor("העולם בשנת 2050 לורנס ס' סמيث", ocr("הלה בשנה 2050 לורנס ס '", 'סמית')), "העולם בשנת 2050 לורנס ס' סמית");
   assert.equal(ocrHebrewFor('ניקוס קסנakis', ocr('Kazantzakis')), null);
 });
