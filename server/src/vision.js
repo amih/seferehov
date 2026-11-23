@@ -575,6 +575,43 @@ export async function tesseractWords(jpeg) {
 const UPRIGHT_MARGIN = 0.2;
 
 
+// A Hebrew spine read with a word that turns to Latin or Arabic letters halfway ("קסנakis",
+// "סמيث": lab 064, Ami's home scans 3f1b7fd5 #814 and 7aea3f16 #881, no book found for either).
+// mixedWord: a word (letters only; "ה-DNA" is two words) holding Hebrew and Latin or Arabic letters.
+const HEB = /[\u05d0-\u05ea]/, FOREIGN = /[A-Za-z\u0600-\u06ff]/;
+export const mixedWord = (text) => String(text ?? '').split(/[^\p{L}]+/u).some((w) => HEB.test(w) && FOREIGN.test(w));
+const hebShare = (text) => {
+  const letters = String(text ?? '').match(/\p{L}/gu) ?? [];
+  return letters.length ? letters.filter((c) => HEB.test(c)).length / letters.length : 0;
+};
+// Surely Hebrew: most of the reading's letters are Hebrew, and the Hebrew OCR found Hebrew print
+// on the same picture.
+export function surelyHebrew(read, ocr) {
+  const ocrHeb = (ocr?.boxes ?? []).filter((b) => b.confidence >= 0.5).map((b) => b.text).join(' ').match(/[\u05d0-\u05ea]/g)?.length ?? 0;
+  return hebShare(`${read?.title ?? ''} ${read?.author ?? ''}`) >= 0.7 && ocrHeb >= 3;
+}
+// The OCR line that best holds a mixed reading's Hebrew part, when it is all Hebrew letters.
+export function ocrHebrewFor(text, ocr) {
+  const lines = (ocr?.boxes ?? []).filter((b) => b.confidence >= 0.5 && !FOREIGN.test(b.text) && HEB.test(b.text));
+  const best = lines.map((b) => ({ text: b.text.trim(), s: overlap(text, b.text) })).sort((a, b) => b.s - a.s)[0];
+  return best && best.s >= 0.4 ? best.text : null;
+}
+// Fixed by asking the vision model again, told the print is Hebrew; if that is still mixed, the
+// Hebrew OCR's line for that field; else the reading is kept as it was. SCRIPT_GUARD=0 turns it off.
+export async function scriptGuard(jpeg, read, ocr) {
+  if (!config.scriptGuard || !read || !(mixedWord(read.title) || mixedWord(read.author)) || !surelyHebrew(read, ocr)) return read;
+  const line = await generate(jpeg, `${SPINE_PROMPT} The print is Hebrew: write every Hebrew word in Hebrew letters only.`, 80).catch(() => '');
+  const again = /^NONE\b/i.test(line.trim()) ? null : parseBooks(line.trim().split('\n')[0])[0] ?? null;
+  let fixed = read, how = 'kept as read';
+  if (again && !mixedWord(again.title) && !mixedWord(again.author) && hebShare(again.title) >= 0.7) { fixed = { ...read, ...again }; how = 'read again in Hebrew'; } else {
+    const field = (k) => (mixedWord(read[k]) ? ocrHebrewFor(read[k], ocr) ?? read[k] : read[k]);
+    const f = { ...read, title: field('title'), author: field('author') };
+    if (f.title !== read.title || f.author !== read.author) { fixed = f; how = 'the Hebrew OCR line'; }
+  }
+  await step('script-guard', { note: 'a Hebrew spine read with a word in Latin or Arabic letters', before: { title: read.title, author: read.author }, again: again && { title: again.title, author: again.author }, after: { title: fixed.title, author: fixed.author }, verdict: how });
+  return fixed;
+}
+
 // One cut-out from a shelf photo: which way up it is, what it says, and a tight
 // picture of just that one book. The vision model reads it both ways up, Surya OCR
 // reads it both ways up, and the way where the two agree is the right one: each of
@@ -596,7 +633,7 @@ export async function readCrop(img, w, h, title = null, opts = {}) {
       generate(jpeg, SPINE_PROMPT, 80).then((line) => (/^NONE\b/i.test(line.trim()) ? null : parseBooks(line.trim().split('\n')[0])[0] ?? null)),
       paddle ? suryaRead(jpeg, { url: config.spineOcrUrl, engine: 'paddle-hebrew' }).catch(() => null) : suryaRead(jpeg).catch(() => null),
     ]);
-    return { angle, jpeg, read, ocr };
+    return { angle, jpeg, read: await scriptGuard(jpeg, read, ocr), ocr };
   }));
   // Lab 063 (22 Nov): when PaddleOCR does not confirm, Surya checks first; only then may the
   // cut-out be split into bands (splitting on PaddleOCR's lines cut single spines in two).
