@@ -268,7 +268,13 @@ body:has(.decide) .install-banner, body:has(.scanner.live) .install-banner { dis
 .approve .q-high { color: #2e7d4f; }
 .approve .q-medium { color: #9a6b12; }
 .approve .q-low { color: #b3392f; }
-.decide { position: sticky; bottom: calc(8px + env(safe-area-inset-bottom)); display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; margin-top: 14px; padding: 8px; background: var(--paper); border-radius: 14px; box-shadow: 0 -2px 14px rgb(0 0 0 / .08); }
+/* The decision buttons stay in one place on the screen, whatever the picture's height, so a reader can tap
+   Approve book after book without looking for the button (Ami, 24 Nov 2026). Approve is always the bottom row. */
+.decide { position: fixed; z-index: 20; left: 50%; transform: translateX(-50%); bottom: calc(8px + env(safe-area-inset-bottom)); width: min(704px, calc(100% - 16px)); box-sizing: border-box; display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; padding: 8px; background: var(--paper); border-radius: 14px; box-shadow: 0 -2px 14px rgb(0 0 0 / .12); }
+.page:has(.decide) { padding-bottom: calc(150px + env(safe-area-inset-bottom)); }
+body:has(.decide) .toast { bottom: calc(150px + env(safe-area-inset-bottom)); }
+.decide.six [data-d="approved"] { order: 2; }
+.decide.six > :not([data-d="approved"]) { order: 1; }
 .decide .btn { padding: 14px 6px; font-size: 1.05rem; }
 .decide.six { grid-template-columns: repeat(3, 1fr); }
 .decide.six > * { font-size: .95rem; }

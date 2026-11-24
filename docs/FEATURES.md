@@ -162,6 +162,7 @@ Every step is recorded as evidence and gives the item a confidence for the queue
 - The page tells readers that each correction or "wrong" helps improve reading for everyone. Those scans (photos without location data, trace, and the decision) are kept for good to study reading errors.
 - A reader who closed the app gets an e-mail when the results are ready.
 - While photos are still being read, the queue page says how many and about how long until they are done.
+- The decision buttons stay in one place at the bottom of the screen (24 Nov 2026), whatever the height of the picture or the text above them, so a reader can approve book after book without looking for the button. Approve is always the bottom row; the same bar is used on the help-check page.
 
 ## Help check: volunteers check books others left waiting (24 Nov 2026)
 
