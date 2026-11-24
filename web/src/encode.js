@@ -30,3 +30,20 @@ export async function encodeJpeg(canvas, quality = 0.9) {
     return viaCanvas(canvas, quality);
   }
 }
+
+// A frame grabbed with createImageBitmap(video) (the free-style camera's burst): handed
+// to the worker as it is, with no canvas copy on the page's thread. The bitmap is used up.
+export async function encodeBitmap(bitmap, quality = 0.85) {
+  const w = getWorker();
+  if (w) {
+    try {
+      const id = ++n;
+      return await new Promise((ok, fail) => { waiting.set(id, { ok, fail }); w.postMessage({ id, bitmap, quality }, [bitmap]); });
+    } catch { broken = true; }
+  }
+  const c = document.createElement('canvas');
+  c.width = bitmap.width; c.height = bitmap.height;
+  c.getContext('2d').drawImage(bitmap, 0, 0);
+  bitmap.close?.();
+  return viaCanvas(c, quality);
+}

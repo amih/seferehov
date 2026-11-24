@@ -105,19 +105,27 @@ export default async function adminView(root) {
     return `<p>Each time a live camera was used (no pictures, only numbers). Hold = waiting for the phone to steady at new books, next = moving on after a photo,
       hunt = waiting for a barcode close-up, wait = animation / settling. Photos: shelf steady / rough / leaving; covers still (2 still ticks) / best (sharpest of a
       moment) / button / file (camera app). Ready → photo = median time from the moment a photo could be taken to the photo.</p>
-      ${sessions.length ? table(['When', 'Reader', 'Phone', 'Kind', 'Camera', 'Open', 'Time', 'Photos', 'Ready → photo', 'Books (front→back)', 'Codes', 'Hold', 'Next', 'Too fast', 'Dark', 'Glare', 'Speed (median)', 'Ended', ''], sessions.map((c) => {
+      <p>Algo: v0 = the timed holds (steady.js), burst-v1 = a steady moment, then a burst (still.js). To flash = median ms from reaching a
+      shelf to the flash; s / shelf = session time ÷ shelves (photos not counting second photos of a place); tick gap = median ms between looks (planned 100–150).</p>
+      ${sessions.length ? table(['When', 'Reader', 'Phone', 'Kind', 'Algo', 'Camera', 'Open', 'Time', 'Photos', 'Ready → photo', 'To flash', 's / shelf', 'Tick gap', 'Books (front→back)', 'Codes', 'Hold', 'Next', 'Too fast', 'Dark', 'Glare', 'Speed (median)', 'Ended', ''], sessions.map((c) => {
         const st = c.stats, ph = st.photos ?? [], by = (h) => ph.filter((p) => p.how === h).length, bk = st.books ?? [];
         const hows = [...new Set(ph.map((p) => p.how))].map((h) => `${h} ${by(h)}`).join(' / ');
         const codes = (st.events ?? []).filter((e) => e.e === 'code').length + bk.filter((b) => b.code === 'still').length;
+        const shelves = ph.filter((p) => p.how !== 'extra' && p.how !== 'burst2').length;
+        const hand = (st.events ?? []).find((e) => e.e === 'hand');
         const set = c.camera?.settings;
         return [when(c.created_at),
           c.user_id ? `<a href="/r/${c.user_id}">${esc(c.screen_name ?? `#${c.user_id}`)}</a>` : '—',
           esc(phone(c.device, c.ua)),
           esc(`${c.kind} · ${st.screen ?? st.detector ?? ''}`),
+          esc(c.kind === 'capture' ? st.algo ?? 'v0' : '—'),
           esc(set ? `${set.width}×${set.height}${set.frameRate ? ` @${Math.round(set.frameRate)}` : ''}` : st.cam ?? '—'),
           st.openError ? `<b>${esc(st.openError)}</b>` : sec(st.openMs),
           sec(st.ms ?? 0), `<b>${ph.length}</b> <span class="muted small">${esc(hows)}</span>`,
           sec(mid(ph.map((p) => p.wait))),
+          sec(mid(ph.map((p) => p.toFlash))),
+          shelves && st.ms ? sec(st.ms / shelves) : '—',
+          hand?.gapMs != null ? `${hand.gapMs} ms` : '—',
           bk.length ? `${bk.length} <span class="muted small">(${sec(mid(bk.map((b) => b.frontToBack)))})</span>` : '—',
           codes || '—',
           share(st, 'hold'), share(st, 'next'), share(st, 'fast'), share(st, 'dark'), share(st, 'glare'), st.ticks ? median(st.speed) : '—', esc(st.ended ?? ''),

@@ -88,8 +88,9 @@ const yes = async (images, prompt) => /^\s*YES/i.test(await generate(images, pro
 export async function sortShots(shots, { log = () => {} } = {}) {
   const info = [];
   for (const [i, s] of shots.entries()) {
-    // A second photo of the same pause (meta.extra): it shows what the one before it shows.
-    const prev = s.meta?.extra && i ? info[i - 1] : null;
+    // A second photo of the same pause (meta.extra, or how 'burst2': the camera's second
+    // kept photo of a shelf): it shows what the one before it shows.
+    const prev = (s.meta?.extra || s.meta?.how === 'burst2') && i ? info[i - 1] : null;
     if (prev) {
       info.push({ i, kind: prev.kind, said: prev.said, codes: prev.codes, f: prev.f ? await features(s.buf) : null, extraOf: i - 1 });
       log({ shot: i, kind: prev.kind, extra_of: i - 1 });

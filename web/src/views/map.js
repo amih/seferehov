@@ -7,7 +7,7 @@ import { api, getMe } from '../api.js';
 import { esc, getPosition, toast } from '../ui.js';
 import { t, isRtl, lang } from '../i18n.js';
 import { navigate } from '../nav.js';
-import { captureShots, captureFiles } from '../capture.js';
+import { captureShots, captureFiles, askMotion } from '../capture.js';
 
 const VIEW_KEY = 'seferehov:mapView';
 export const COMIC_KEY = 'seferehov:comicSeen'; // set when the comic was opened or the hint closed
@@ -151,6 +151,7 @@ export default function mapView(root, _, query) {
   const request = () => ({ lang: lang() });
   const cam = captureShots({ panel: sheet.querySelector('#capture-panel'), request, guess: true, screen: 'map' });
   root.querySelector('.fab-cam').onclick = async () => {
+    askMotion(); // iPhone: the motion sensors are asked for within the tap (cam.start() comes after an await)
     if (!await getMe()) return navigate('/login?next=/');
     sheet.hidden = false;
     if (!await cam.start()) sheet.querySelector('#cam-files').click();
