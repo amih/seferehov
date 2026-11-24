@@ -932,7 +932,7 @@ export async function renderShell(req) {
 
 export default async function seoRoutes(app) {
   app.get('/robots.txt', async (req, reply) => reply.type('text/plain').send(
-    `User-agent: *\nDisallow: /api/\nDisallow: /me\nDisallow: /login\nDisallow: /review\nDisallow: /admin\nDisallow: /queue\nDisallow: /books\nDisallow: /scan/\nAllow: /api/locations/*/sign\n\nSitemap: ${config.baseUrl}/sitemap.xml\n`));
+    `User-agent: *\nDisallow: /api/\nDisallow: /me\nDisallow: /login\nDisallow: /review\nDisallow: /admin\nDisallow: /queue\nDisallow: /help\nDisallow: /books\nDisallow: /scan/\nAllow: /api/locations/*/sign\n\nSitemap: ${config.baseUrl}/sitemap.xml\n`));
 
   // IndexNow proves the site is ours by this file (src/indexnow.js).
   if (config.indexNowKey) app.get(`/${config.indexNowKey}.txt`, async (req, reply) => reply.type('text/plain').send(config.indexNowKey));

@@ -16,7 +16,7 @@ export default async function locationView(root, [code]) {
     root.innerHTML = `<section class="page"><h1>${t('loc.notfound')}</h1><p>${t(e.status === 404 ? 'loc.notfound_404' : 'offline')}</p><p><a href="/">${t('back.map')}</a></p></section>`;
     return;
   }
-  const { location: l, books, taken = [], activity, my_pending, my_pending_edits, my_scans = [], spines = [] } = data;
+  const { location: l, books, taken = [], activity, my_pending, my_pending_edits, my_scans = [], spines = [], help_n: helpN = 0 } = data;
   const readyScan = my_scans.find((x) => x.status === 'done');
   const busyScan = my_scans.find((x) => x.status === 'queued' || x.status === 'processing');
   const me = await getMe();
@@ -44,6 +44,7 @@ export default async function locationView(root, [code]) {
     ${my_pending_edits ? `<p class="note">${t('loc.my_pending_edits', { n: my_pending_edits })}</p>` : ''}
     ${readyScan ? `<p><a class="btn primary" href="/l/${l.code}/check">${t('loc.scan_ready')}</a></p>`
       : busyScan ? `<p class="note"><a href="/queue">${t('loc.scan_waiting')}</a></p>` : ''}
+    ${helpN ? `<p class="note"><a href="/l/${l.code}/help">${t('hc.loc_line', { n: helpN })}</a></p>` : ''}
     ${noStringsNote()}
 
     ${spines.length ? `<h2>📕 ${t('spines.title')} <span class="count">${spines.length}</span></h2>

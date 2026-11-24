@@ -154,6 +154,18 @@ Every step is recorded as evidence and gives the item a confidence for the queue
 - A reader who closed the app gets an e-mail when the results are ready.
 - While photos are still being read, the queue page says how many and about how long until they are done.
 
+## Help check: volunteers check books others left waiting (24 Nov 2026)
+
+Books read from shelf photos at public street libraries that their photographer has not checked for a few days can be checked by any signed-in volunteer. Helping is optional and much appreciated; nothing new is asked of the photographer, whose queue stays as it was (`server/src/help.js`, `web/src/views/help.js`).
+
+- **Which books**: from photos or videos (never barcodes, never home or friends' shelves, never camera sessions whose place is still a guess) at an approved library; still undecided or set aside for later; read more than `HELP_AFTER_DAYS` days ago (default 3; 0 turns the feature off) and less than 60; not a low-quality read; with a cut-out picture good enough to show; confidence 45 or more (🟡 medium and up: low ones are mostly misreads). A volunteer never sees their own photos' books, nor books they already answered.
+- **The question**: one book at a time, the cut-out picture large, and what Seferehov thinks it is (the catalogue book's title, authors and cover when it was matched, else the reading): "Is this the book in the picture?" ✓ Right / ✕ Not this book / Skip.
+- **When it is decided**: two volunteers say right and nobody says wrong (approved), or two say wrong and nobody right (declined, reason "reading"). A trusted volunteer (trust level 1 and up: the app's trusted readers, whose own reports go live without review) settles it alone. Mixed votes stay open: only trusted volunteers are shown those, and the photographer can still decide.
+- **Applied as the photographer's own decision**: the sighting is made for the photographer (with their trust level and their distance from the library), they get the full points for the find, the book leaves their queue, and it shows in their "Recent decisions" marked "checked by volunteers", where they can undo it as any decision; an undone one is never offered to volunteers again. `scan_items.decided_by` records the volunteer whose vote decided it (NULL: the photographer or the server); votes are in `help_votes` (migration 056).
+- **Points**: 5 per answer, and 10 more to every volunteer whose answer agreed with the decision, within the daily cap. The thank-you after each answer shows the points.
+- **Where**: `/help` lists libraries with books waiting for the volunteer (nearest first when the phone already allows its position, or after "📍 Nearest first"; no permission popup on opening); `/l/<code>/help` checks one library's books; the library page shows "🙋 N books here wait for a quick check. Want to help?"; the menu and the to-do tabs have a 🙋 entry with the count (`/api/todo` `help`, capped at 99). The photographer's queue says, under a library book, that other volunteers may check books left unchecked after N days and nothing new is asked of them.
+- API: `GET /api/help/libraries?lat=&lon=`, `GET /api/help/l/:code`, `POST /api/help/:id {right: true|false}` → `{decided: 'approved'|'declined'|null, points}` (600 an hour).
+
 ## Reading order (when many readers scan at once)
 
 - Book covers go first: a cover sent while a long shelf batch is being read is read between two of its photos, within a few minutes.
@@ -205,7 +217,7 @@ Every step is recorded as evidence and gives the item a confidence for the queue
 
 - **Reviews**: "I read it", stars, and four guided questions. Copied text and contact details are refused; admins can hide a review.
 - **Book fixes**: anyone can fix a book's title, author, description and so on. Trusted readers' fixes go live at once; others are voted on. Every change has a history and can be undone.
-- **Points and levels** for approved reports, with a daily cap. New readers' reports are reviewed first; after a few good ones they publish directly. Reports made far from the library always go to review.
+- **Points and levels** for approved reports, with a daily cap. Quick checks of other readers' books (help check) earn points too. New readers' reports are reviewed first; after a few good ones they publish directly. Reports made far from the library always go to review.
 
 ## App and updates
 

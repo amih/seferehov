@@ -12,6 +12,7 @@ const TABS = [
   ['duplicates', '/duplicates', '🧩'],
   ['libraries', '/duplicate-libraries', '📍'],
   ['texts', '/admin#texts', '🔤'],
+  ['help', '/help', '🙋'], // other readers' books, for any volunteer (help check)
 ];
 // The last counts are kept on the phone, so the menu shows them the moment it opens. They
 // are asked for again only when older than `maxAge` (the app starting, coming back into view

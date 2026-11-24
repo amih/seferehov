@@ -28,6 +28,7 @@ async function open() {
     ['🏆', 'menu.top', '/top'],
     ['🌍', 'menu.places', '/places'],
     ...(me ? [['📥', 'todo.title', '/queue', 'todo', waiting]] : []),
+    ...(me ? [['🙋', 'hc.menu', '/help', 'help', lastTodoCounts(me.id)?.help]] : []),
     ...(me ? [['🔔', 'menu.watches', '/me#watches']] : []),
     ...(me ? [['💌', 'invite.menu', '/invite']] : []),
     ...(me?.trust_level >= 3 ? [['📊', 'menu.admin', '/admin']] : []),
@@ -42,7 +43,7 @@ async function open() {
     <button class="x" data-close aria-label="${esc(t('menu.close'))}">✕</button>
     <ul>${items.map(([icon, key, href, cls, n]) => cls === 'me'
       ? `<li><a class="me" href="/me">${icon}${esc(key)}</a></li>`
-      : `<li${cls === 'todo' && !n && !(me?.trust_level >= 2) ? ' hidden' : ''}><a href="${esc(href)}"${cls ? ` class="${cls}"` : ''}><span>${icon}</span>${esc(t(key))}${n ? ` <b class="count">${n}</b>` : ''}</a></li>`).join('')}</ul>
+      : `<li${(cls === 'todo' && !n && !(me?.trust_level >= 2)) || (cls === 'help' && !n) ? ' hidden' : ''}><a href="${esc(href)}"${cls ? ` class="${cls}"` : ''}><span>${icon}</span>${esc(t(key))}${n ? ` <b class="count">${n}</b>` : ''}</a></li>`).join('')}</ul>
     <p class="muted small">${esc(__APP_VERSION__)}</p>
   </nav>`;
   const close = () => { el.remove(); document.removeEventListener('keydown', onKey); };
@@ -63,6 +64,12 @@ async function open() {
       a.querySelector('.count')?.remove();
       if (n) a.insertAdjacentHTML('beforeend', ` <b class="count">${n}</b>`);
       a.parentElement.hidden = !n && !(me.trust_level >= 2);
+      const h = el.querySelector('a.help');
+      if (h) {
+        h.querySelector('.count')?.remove();
+        if (todo.help) h.insertAdjacentHTML('beforeend', ` <b class="count">${todo.help}</b>`);
+        h.parentElement.hidden = !todo.help;
+      }
     }, () => {});
   }
 }

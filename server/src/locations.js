@@ -12,6 +12,7 @@ import { initialStatus, locationStatus, award, awardSighting } from './moderatio
 import { parseLatLon, shortCode, memo } from './util.js';
 import { checkPrivate } from './privacy.js';
 import { waitingFor } from './finder.js';
+import { helpCount } from './help.js';
 
 const DUPLICATE_RADIUS_M = 25;
 export const SIGHTING_KINDS = ['seen', 'added', 'taken', 'gone'];
@@ -186,6 +187,8 @@ export default async function locationRoutes(app) {
         place: loc.place_id ? await one('SELECT id, slug, name, name_he FROM places WHERE id = $1', [loc.place_id]) : null,
       },
       books, taken, activity, my_pending: pending.n, my_pending_edits: pending.edits, my_scans: scans,
+      // Books here waiting for a volunteer's quick check (help.js), for this reader.
+      help_n: loc.status === 'approved' ? await helpCount(req.user, loc.id) : 0,
       spines: (await many(OPEN_SPINES_SQL, [loc.id])).map(({ crop_path, frame_path, user_id, ...i }) => ({
         ...i, crop: `/uploads/${crop_path}`, frame: frame_path && `/uploads/${frame_path}`, mine: user_id === req.user?.id })),
     };

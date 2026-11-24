@@ -40,6 +40,7 @@ import traceView from './views/trace.js';
 import outlinesView from './views/outlines.js';
 import spineCheckView from './views/spinecheck.js';
 import offersView from './views/offers.js';
+import helpView, { helpLibraryView } from './views/help.js';
 
 const routes = [
   [/^\/$/, mapView],
@@ -48,6 +49,7 @@ const routes = [
   [/^\/l\/([A-Za-z0-9]{4,10})\/b\/(\d+)$/, bookView],
   [/^\/l\/([A-Za-z0-9]{4,10})\/edit$/, editLocationView],
   [/^\/l\/([A-Za-z0-9]{4,10})\/check$/, shelfCheckView],
+  [/^\/l\/([A-Za-z0-9]{4,10})\/help$/, helpLibraryView],
   [/^\/l\/([A-Za-z0-9]{4,10})$/, locationView],
   [/^\/(?:queue|scan\/[0-9a-f-]{36})$/, queueView], // /scan/<id>: links in older e-mails
   [/^\/add$/, addLocationView],
@@ -61,6 +63,7 @@ const routes = [
   [/^\/duplicates$/, duplicatesView],
   [/^\/duplicate-libraries$/, duplicateLibrariesView],
   [/^\/fixes$/, fixesView],
+  [/^\/help$/, helpView],
   [/^\/login$/, loginView],
   [/^\/me$/, meView],
   [/^\/settings$/, settingsView],

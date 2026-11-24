@@ -17,6 +17,7 @@ import { knownWords } from './hebfix.js';
 import { fixesToVote } from './fixes.js';
 import { queueWaits, keepForReview } from './scans.js';
 import { CROP_SHOWN_SQL } from './confidence.js';
+import { helpCount } from './help.js';
 
 const UNDO_DAYS = 14;
 
@@ -379,6 +380,7 @@ export default async function approvalRoutes(app) {
   app.get('/api/todo', { preHandler: requireUser() }, async (req) => {
     const c = await counts(req.user.id);
     const r = { mine: c.open + c.later, processing: c.processing };
+    if (config.helpAfterDays > 0) r.help = await helpCount(req.user);
     if (req.user.trust_level >= 1) r.fixes = await fixesToVote(req.user);
     if (req.user.trust_level >= 2) {
       const g = await sharedCounts();
@@ -418,7 +420,7 @@ export default async function approvalRoutes(app) {
         GROUP BY c.id ORDER BY c.created_at`,
       [req.user.id],
     );
-    return { items: items.map(publicItem), processing, wait, situations: situations.filter((x) => x.n), ...(await counts(req.user.id)) };
+    return { items: items.map(publicItem), processing, wait, situations: situations.filter((x) => x.n), help_days: config.helpAfterDays, ...(await counts(req.user.id)) };
   });
 
   app.post('/api/queue/:id', {
@@ -487,7 +489,7 @@ export default async function approvalRoutes(app) {
   // The reader's last decisions, newest first: a wrong tap can be undone, a title fixed.
   app.get('/api/queue/recent', { preHandler: requireUser() }, async (req) => {
     const items = await many(
-      `SELECT i.id, i.decision, i.decided_at, i.crop_path, i.frame_path, i.title AS read_title,
+      `SELECT i.id, i.decision, i.decided_at, i.crop_path, i.frame_path, i.title AS read_title, i.decided_by IS NOT NULL AS helped,
               COALESCE(sb.title, mb.title, i.title) AS title, COALESCE(sb.authors, mb.authors) AS authors,
               l.code, l.name AS location_name, m.placed_at
          FROM scan_items i JOIN scans s ON s.id = i.scan_id LEFT JOIN locations l ON l.id = s.location_id
@@ -527,7 +529,7 @@ export default async function approvalRoutes(app) {
       }
       await db.query(
         `UPDATE scan_items SET decision = NULL, decided_at = NULL, outcome = NULL, sighting_id = NULL, my_book_id = NULL, auto = false,
-                crop_path = COALESCE(crop_unflipped, crop_path), crop_unflipped = NULL, decline_why = NULL, text_across = false WHERE id = $1`, [item.id]);
+                help_off = help_off OR decided_by IS NOT NULL, decided_by = NULL, crop_path = COALESCE(crop_unflipped, crop_path), crop_unflipped = NULL, decline_why = NULL, text_across = false WHERE id = $1`, [item.id]);
       await db.query(`UPDATE scans SET status = 'done' WHERE id = $1 AND status = 'confirmed'`, [item.scan_id]);
     });
     const back = await one(`${ITEM_SQL} WHERE i.id = $1`, [item.id]);

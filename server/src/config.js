@@ -28,6 +28,9 @@ export const config = {
   // Books whose confidence (src/confidence.js) is at least this are approved without the reader;
   // 0 = off. AUTO_APPROVE_SURE=1 alone means 92 ("sure"). Ami 24 Nov 2026: 90 (catalogue + OCR), then 75 (corrected, then found in the catalogue).
   autoApproveAt: Number(env.AUTO_APPROVE_AT ?? (env.AUTO_APPROVE_SURE === '1' ? 92 : 0)),
+  // Help check (src/help.js): books left unchecked this many days at a public library can be
+  // checked by other volunteers. 0 = off.
+  helpAfterDays: Number(env.HELP_AFTER_DAYS ?? 3),
   // Never merge two readings that the catalogue matched to different books: a catalogue subtitle
   // holding another book's title merged #759 into #758 (lab 062). SAFE_MERGE=0 turns it off.
   safeMerge: env.SAFE_MERGE !== '0',
@@ -106,6 +109,8 @@ export const POINTS = {
   invite: 100, // a reader you invited made their first contribution, or accepted the books you catalogued for them
   fixKept: 5, // ... and again when nobody undid it for FIX_KEEP_DAYS
   fixVote: 2, // a vote on another reader's correction
+  helpCheck: 5, // a quick check of a book another reader photographed (help check), every vote
+  helpDecided: 10, // ... and again to each volunteer whose vote agreed with what was decided
 };
 // Admins get points divided by this.
 export const ADMIN_POINTS_DIVISOR = 10;

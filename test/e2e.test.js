@@ -83,6 +83,11 @@ async function seed() {
   S.scan = (await one(`INSERT INTO scans(user_id, location_id, status, source, media, started_at, finished_at)
     VALUES ($1, $2, 'done', 'photo', '[{"path":"0.img","type":"image"}]', now() - interval '5 minutes', now()) RETURNING id`, [S.reader, S.location])).id;
   await c.query(`INSERT INTO scan_items(scan_id, title, author, via, book_id, confidence, quality) VALUES ($1, 'Deep Work', 'Cal Newport', 'vision', $2, 85, 'medium')`, [S.scan, S.book2]);
+  // A book the reader left unchecked for 5 days: other volunteers can check it (help check).
+  S.helpScan = (await one(`INSERT INTO scans(user_id, location_id, status, source, media, started_at, finished_at, created_at)
+    VALUES ($1, $2, 'done', 'photo', '[]', now() - interval '5 days', now() - interval '5 days', now() - interval '5 days') RETURNING id`, [S.reader, S.location])).id;
+  S.helpItem = (await one(`INSERT INTO scan_items(scan_id, title, author, via, book_id, confidence, quality, crop_path, created_at)
+    VALUES ($1, 'Deep Work', 'Cal Newport', 'vision', $2, 60, 'medium', 't/help-crop.jpg', now() - interval '5 days') RETURNING id`, [S.helpScan, S.book2])).id;
   // Two approved spines on a shelf photo, with no outline (for /admin/outlines).
   mkdirSync(join(tmp, 'uploads/t'), { recursive: true });
   await sharp({ create: { width: 600, height: 800, channels: 3, background: '#8a6d4b' } }).jpeg().toFile(join(tmp, 'uploads/t/scan-e2e-1_x.jpg'));
@@ -177,7 +182,7 @@ const SCREENS = () => [
   { path: '/offers', signedIn: true }, { path: '/me', signedIn: true }, { path: '/settings', signedIn: true },
   { path: '/invite', signedIn: true }, `/invite/${S.invite}`, { path: `/invite/${S.invite}`, admin: true }, `/b/${S.book3}`, `/r/${S.reader}`,
   { path: '/add', signedIn: true }, { path: `/l/${S.code}/edit`, signedIn: true }, { path: `/l/${S.code}/add`, signedIn: true, camera: true },
-  { path: '/fixes', signedIn: true }, { path: '/review', admin: true }, { path: '/duplicates', admin: true },
+  { path: '/fixes', signedIn: true }, { path: '/help', signedIn: true }, { path: `/l/${S.code}/help`, signedIn: true }, { path: '/review', admin: true }, { path: '/duplicates', admin: true },
   { path: '/duplicate-libraries', admin: true }, { path: '/admin', admin: true }, { path: '/admin#queue', admin: true },
   { path: '/admin#texts', admin: true }, { path: '/admin#readers', admin: true }, { path: '/admin#camera', admin: true },
   { path: '/admin#stats', admin: true }, { path: '/admin#reviews', admin: true }, { path: '/admin/trace', admin: true }, { path: '/admin/outlines', admin: true },
@@ -385,6 +390,53 @@ test('one camera from the map: the guess is asked, answered "at home", then "a n
     assert.equal(loc.name, 'Corner box');
     const near = await (await fetch(`${base}/api/locations/near?lat=32.09&lon=34.79`)).json();
     assert.equal(near.libraries[0].code, code, 'the new library is found near the photos');
+  } finally { await c.end(); }
+});
+
+test('help check: two volunteers say right, the book is approved for its photographer', async () => {
+  const c = new pg.Client(dbUrl);
+  await c.connect();
+  try {
+    const volunteer = async (name) => {
+      const id = (await c.query(`INSERT INTO users(email, screen_name, trust_level) VALUES ($1, $2, 0) RETURNING id`, [`${name}@example.com`, name])).rows[0].id;
+      const token = randomBytes(24).toString('hex');
+      await c.query(`INSERT INTO sessions(token_hash, user_id, expires_at) VALUES ($1, $2, now() + interval '1 day')`,
+        [createHash('sha256').update(token).digest(), id]);
+      return { id: Number(id), cookie: `seferehov_session=${token}` };
+    };
+    const [a, b] = [await volunteer('Helper A'), await volunteer('Helper B')];
+    const item = (await c.query(`INSERT INTO scan_items(scan_id, title, author, via, book_id, confidence, quality, crop_path, created_at)
+      VALUES ($1, 'Deep Work', 'Cal Newport', 'vision', $2, 70, 'medium', 't/help-crop2.jpg', now() - interval '4 days') RETURNING id`, [S.helpScan, S.book2])).rows[0].id;
+    const vote = (who, right) => fetch(`${base}/api/help/${item}`, { method: 'POST', headers: { cookie: who.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ right }) });
+    const libs = await (await fetch(`${base}/api/help/libraries`, { headers: { cookie: a.cookie } })).json();
+    assert.ok(libs.libraries.some((l) => l.code === S.code && l.n >= 2), JSON.stringify(libs));
+    const list = await (await fetch(`${base}/api/help/l/${S.code}`, { headers: { cookie: a.cookie } })).json();
+    assert.ok(list.items.some((i) => String(i.id) === String(item) && i.title === 'Deep Work'));
+    const own = await fetch(`${base}/api/help/l/${S.code}`, { headers: { cookie: `seferehov_session=${S.readerToken}` } });
+    assert.ok(!(await own.json()).items.length, 'the photographer is not offered their own books');
+    assert.equal((await fetch(`${base}/api/help/${item}`, { method: 'POST', headers: { cookie: `seferehov_session=${S.readerToken}`, 'content-type': 'application/json' }, body: '{"right":true}' })).status, 404);
+    const r1 = await (await vote(a, true)).json();
+    assert.equal(r1.decided, null, 'one new volunteer does not decide alone');
+    assert.equal((await vote(a, true)).status, 404, 'one vote per volunteer');
+    const r2 = await (await vote(b, true)).json();
+    assert.equal(r2.decided, 'approved');
+    const row = (await c.query(`SELECT i.decision, i.decided_by::int, i.outcome, si.user_id::int AS credited
+      FROM scan_items i LEFT JOIN sightings si ON si.id = i.sighting_id WHERE i.id = $1`, [item])).rows[0];
+    assert.deepEqual(row, { decision: 'approved', decided_by: b.id, outcome: 'kept', credited: Number(S.reader) });
+    const pts = (await c.query(`SELECT user_id::int, reason FROM karma_events WHERE ref_type = 'scan_item' AND ref_id = $1 ORDER BY user_id, reason`, [item])).rows;
+    assert.deepEqual(pts, [{ user_id: a.id, reason: 'help_check' }, { user_id: a.id, reason: 'help_decided' }, { user_id: b.id, reason: 'help_check' }, { user_id: b.id, reason: 'help_decided' }]);
+    // The screen: one book at a time, Right / Not this book / Skip, in both languages.
+    for (const lang of ['he', 'en']) {
+      const context = await browser.newContext({ locale: lang === 'he' ? 'he-IL' : 'en-US', serviceWorkers: 'block', viewport: { width: 400, height: 800 } });
+      await context.addCookies([{ name: 'seferehov_session', value: S.adminToken, url: base }]);
+      await context.addInitScript((l) => { try { localStorage.setItem('seferehov:lang', l); } catch { /* */ } }, lang);
+      const page = await context.newPage();
+      await page.goto(`${base}/l/${S.code}/help`);
+      await page.locator('.help-check h1').waitFor({ timeout: 10_000 });
+      assert.match(await page.locator('.help-check h1').innerText(), lang === 'he' ? /האם זה הספר שבתמונה/ : /Is this the book in the picture\?/);
+      assert.equal(await page.locator('.decide button').count(), 3);
+      await context.close();
+    }
   } finally { await c.end(); }
 });
 

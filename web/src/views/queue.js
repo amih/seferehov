@@ -137,7 +137,7 @@ export default async function queueView(root) {
       ${list.length ? `<ul class="recent-list">${list.map((i) => `<li>
         ${i.pic ? `<img src="${esc(i.pic)}" alt="">` : '<span class="nopic">📕</span>'}
         <div><b dir="auto">${esc(i.title)}</b>${i.authors?.length ? `<br><span class="small" dir="auto">${esc(i.authors.join(', '))}</span>` : ''}
-          <br><span class="small muted">${t(`queue.was_${i.decision}`)} · ${i.code ? esc(i.location_name || t('free_library')) : t('queue.my_books')}</span></div>
+          <br><span class="small muted">${t(`queue.was_${i.decision}`)}${i.helped ? ` (${t('hc.by_helpers')})` : ''} · ${i.code ? esc(i.location_name || t('free_library')) : t('queue.my_books')}</span></div>
         ${i.undoable ? `<button class="btn small" data-undo="${i.id}">${t('queue.undo')}</button>` : `<span class="small muted">${t('queue.placed')}</span>`}
       </li>`).join('')}</ul>` : `<p class="note">${t('queue.recent_none')}</p>`}
     </section>`;
@@ -249,6 +249,7 @@ export default async function queueView(root) {
     : `<button class="btn danger" data-d="declined">✕ ${t('queue.decline')}</button>`}
       </div>
       <p class="muted small">${t('queue.helps')}</p>
+      ${counts.help_days && i.code && ['photo', 'video'].includes(i.source) ? `<p class="muted small">${t('hc.owner_note', { days: counts.help_days })}</p>` : ''}
       ${stepsBox(i.id)}
       ${recentLink()}
     </section>`;
