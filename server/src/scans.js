@@ -278,20 +278,20 @@ export function startScanWorker(logger) {
 // "n" books wait for the reader; "auto" were approved for them (confidence high enough, AUTO_APPROVE_AT):
 // the app works for the reader, and says so (Ami, 24 Nov 2026).
 // Three groups, as the queue shows them (web/src/views/queue.js confidenceLine): high (75+) were
-// approved for the reader (AUTO_APPROVE_AT), medium (45-74) wait for them, low (under 45) are
-// optional: about a quarter of them were right in past decisions (Ami, 24 Nov 2026).
+// approved for the reader (AUTO_APPROVE_AT); medium (45-74) and low (under 45) wait, but going
+// through them is volunteering, never a duty: the app works for the reader (Ami, 24 Nov 2026).
 const books = { he: (n) => (n === 1 ? 'ספר אחד' : `${n} ספרים`), en: (n) => (n === 1 ? '1 book' : `${n} books`) };
 const READY_TEXT = {
   he: {
     done: {
       subject: ({ auto, mid, low }) => (!auto ? 'הספרים מהתמונות שלך מוכנים לאישור'
-        : `✨ אישרנו בשבילכם ${books.he(auto)} מהתמונות שלך${mid + low ? ` · ${mid + low} מחכים לבדיקה` : ''}`),
+        : `✨ אישרנו בשבילכם ${books.he(auto)} מהתמונות שלך${mid + low ? ` · עוד ${mid + low} לבדיקה, אם תרצו` : ''}`),
       body: ({ auto, mid, low, tidy }, url) => `קראנו את התמונות ששלחת ומצאנו ${books.he(auto + mid + low)}:\n\n`
         + (auto ? `🟢 ${books.he(auto)} בביטחון גבוה: אישרנו בשבילכם, אין צורך לעשות דבר.\n` : '')
-        + (mid ? `🟡 ${books.he(mid)} בביטחון בינוני: מחכים לאישור שלכם. רובם נכונים, ומספיק מבט מהיר.\n` : '')
-        + (low ? `🔴 ${books.he(low)} בביטחון נמוך: רשות. רובם קריאות שגויות, ואם הרשימה ארוכה מותר לדלג עליהם.\n` : '')
+        + (mid ? `🟡 ${books.he(mid)} בביטחון בינוני: רובם נכונים. אין חובה לעבור עליהם; אם תרצו להתנדב ולעזור לשפר את ספרחוב, מבט מהיר עליהם יעזור מאוד, ונודה לכם מאוד.\n` : '')
+        + (low ? `🔴 ${books.he(low)} בביטחון נמוך: רובם קריאות שגויות. אפשר לדלג עליהם, בעיקר אם הרשימה ארוכה.\n` : '')
         + (tidy ? `🧹 עוד ${tidy} זיהויים היו כפולים (אותו ספר בכמה תמונות) או קריאות גרועות, ולא הטרדנו אתכם בהם.\n` : '')
-        + (mid + low ? `\nלבדיקה ולאישור:\n${url}` : `\nאפשר לראות אותם כאן:\n${url}`)
+        + (mid + low ? `\nאם תרצו לעבור עליהם:\n${url}` : `\nאפשר לראות אותם כאן:\n${url}`)
         + '\n\nספרחוב',
     },
     failed: { subject: () => 'לא הצלחנו לקרוא את התמונות', body: (_, url) => `לא הצלחנו לקרוא את התמונות ששלחת. אפשר לנסות שוב, מקרוב יותר ובאור טוב:\n\n${url}\n\nספרחוב` },
@@ -299,13 +299,13 @@ const READY_TEXT = {
   en: {
     done: {
       subject: ({ auto, mid, low }) => (!auto ? 'Your shelf photos are ready to check'
-        : `✨ We approved ${books.en(auto)} from your photos for you${mid + low ? ` · ${mid + low} to check` : ''}`),
+        : `✨ We approved ${books.en(auto)} from your photos for you${mid + low ? ` · ${mid + low} more to check, if you like` : ''}`),
       body: ({ auto, mid, low, tidy }, url) => `We read the photos you sent and found ${books.en(auto + mid + low)}:\n\n`
         + (auto ? `🟢 ${books.en(auto)}, high confidence: approved for you, nothing to do.\n` : '')
-        + (mid ? `🟡 ${books.en(mid)}, medium confidence: waiting for your OK. Most are right; a quick look is enough.\n` : '')
-        + (low ? `🔴 ${books.en(low)}, low confidence: optional. Most are misreads, so if the list is long, feel free to skip them.\n` : '')
+        + (mid ? `🟡 ${books.en(mid)}, medium confidence: most are right. You don't have to go through them; if you'd like to volunteer and help improve Seferehov, a quick look helps a lot, and we'd really appreciate it.\n` : '')
+        + (low ? `🔴 ${books.en(low)}, low confidence: most are misreads. You can skip them, especially if the list is long.\n` : '')
         + (tidy ? `🧹 ${tidy} more reads were duplicates (the same book in several photos) or poor reads, so we did not bother you with them.\n` : '')
-        + (mid + low ? `\nCheck and approve them here:\n${url}` : `\nYou can see them here:\n${url}`)
+        + (mid + low ? `\nIf you'd like to go through them:\n${url}` : `\nYou can see them here:\n${url}`)
         + '\n\nSeferehov',
     },
     failed: { subject: () => 'We could not read your photos', body: (_, url) => `We could not read the photos you sent. You can try again, closer and with good light:\n\n${url}\n\nSeferehov` },
