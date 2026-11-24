@@ -741,7 +741,7 @@ export async function processScan(scan, { dry = false } = {}) {
   const found = [];
   const add = (key, item, i) => {
     // Where the spine is: its outline on this frame (see spotOf).
-    const spot = item.spot?.poly && item.frame !== undefined ? { frame: item.frame, poly: item.spot.poly } : null;
+    const spot = item.spot?.poly && item.frame !== undefined ? { frame: item.frame, poly: item.spot.poly, by: item.spot.by, conf: item.spot.conf } : null;
     const contains = (a, b) => a === b || (Math.min(a.length, b.length) >= 6 && (a.includes(b) || b.includes(a)));
     const score = (f) => {
       if (f.keys.has(key)) return 2;
@@ -919,7 +919,7 @@ export async function processScan(scan, { dry = false } = {}) {
       // The frame shown is the one the spine's outline is on.
       [scan.id, title, item.author ?? book?.authors?.[0] ?? null, book?.isbn13 ?? isbn ?? null, book?.id ?? null, item.via, !!book, item.spot?.frame ?? item.frame, quality, crop, lookupId,
         [item.via === 'barcode' ? 'barcode' : scan.source], item.at?.length ? item.at : null, item.confidence ?? null, item.confidenceWhy ?? null,
-        item.spot ? JSON.stringify({ poly: item.spot.poly }) : null, crop && item.cropShape ? JSON.stringify(item.cropShape) : null],
+        item.spot ? JSON.stringify({ poly: item.spot.poly, ...(item.spot.by ? { by: item.spot.by } : {}), ...(item.spot.conf != null ? { conf: item.spot.conf } : {}) }) : null, crop && item.cropShape ? JSON.stringify(item.cropShape) : null],
     );
     for (const e of item.evidence ?? []) {
       await q(`INSERT INTO scan_item_evidence(item_id, stage, source, outcome, before, after, detail) VALUES ($1, $2, $3, $4, $5, $6, $7)`,

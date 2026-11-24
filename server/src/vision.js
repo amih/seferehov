@@ -1057,7 +1057,7 @@ On the server: systemctl status seferehov-spines; journalctl -u seferehov-spines
 async function readSpinesCut(cutRes, W, H, upright) {
   const spines = cutRes.spines.slice(0, MAX_SPINES * 2);
   await step('spine-cutter', {
-    note: `the spine cutter (YOLO, lab 051) found ${cutRes.spines.length} spines in ${cutRes.ms} ms; ${cutRes.dropped_edge} cut off by the photo's edge left out`,
+    note: `the spine cutter (YOLO, lab 051) found ${cutRes.spines.length} spines in ${cutRes.ms} ms; ${cutRes.dropped_edge} cut off by the photo's edge left out${cutRes.dropped_overlap ? `, ${cutRes.dropped_overlap} found twice (overlapping a surer box) left out` : ''}`,
     W, H, spines: spines.map((s) => ({ poly: s.poly, conf: s.conf })),
   }, { image: upright });
   const books = [];
@@ -1068,9 +1068,11 @@ async function readSpinesCut(cutRes, W, H, upright) {
     const place = { tilt: 0, box };
     const b = await scope(`cut-out ${k + 1}`, async () => {
       await step('cut-out', { from: 'spine cutter', w: s.w, h: s.h, poly: s.poly, conf: s.conf }, { image: img });
-      return readCrop(img, s.w, s.h, null, { split: true, fromCutter: true });
+      // No band splitting for the cutter's cut-outs (24 Nov): a two-spine box sliced along its lines gave
+      // slivers; an unconfirmed cut-out is dropped instead.
+      return readCrop(img, s.w, s.h, null, { split: false, fromCutter: true });
     });
-    for (const x of [].concat(b ?? [])) if (x.verified !== false) books.push({ ...x, place, spot: { poly: s.poly.map(([x2, y2]) => [Math.round(x2 * 1000) / 1000, Math.round(y2 * 1000) / 1000]), by: 'yolo-051' } });
+    for (const x of [].concat(b ?? [])) if (x.verified !== false) books.push({ ...x, place, spot: { poly: s.poly.map(([x2, y2]) => [Math.round(x2 * 1000) / 1000, Math.round(y2 * 1000) / 1000]), by: 'yolo-051', conf: s.conf } });
   }
   return books;
 }

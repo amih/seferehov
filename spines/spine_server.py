@@ -6,12 +6,16 @@ that are not spines). It draws a turned rectangle around each spine; each spine 
 straight along its own rectangle, 4% longer at each end. On the lab's 55 checked test spines:
 43 cut cleanly, against 15 for the vision model's boxes; 0.07 s a photo on the CPU.
 
-The edge rule: a rectangle that runs off the photo is kept only if the part inside still has
-a spine's shape (long side at least 4 times the short side); a squarer stub is a book the
-photo cut off.
+The edge rule: a rectangle that runs off the photo is kept only if at least 85% of it is
+inside the photo and the part inside still has a spine's shape (long side at least 4 times
+the short side); otherwise it is a book the photo cut off (24 Nov 2026: two such books were
+declined as bad cuts).
+
+Overlaps: a rectangle that covers 35% or more of a surer one (or is 35% covered by it) is
+the same spine found twice, often half of it; only the surer one is kept (24 Nov 2026).
 
 POST /cut with the upright photo's bytes answers
-  {"W", "H", "ms", "dropped_edge", "spines": [{"poly", "conf", "w", "h", "jpeg"}]}
+  {"W", "H", "ms", "dropped_edge", "dropped_overlap", "spines": [{"poly", "conf", "w", "h", "jpeg"}]}
 poly: the spine's four corners as fractions of W and H; w, h: the cut-out's size in pixels
 (h along the spine); jpeg: the cut-out, base64, upright with the spine's length vertical.
 Spines left to right. Listens on 127.0.0.1 only.
@@ -33,6 +37,8 @@ WEIGHTS = os.environ.get("SPINES_WEIGHTS", os.path.join(HERE, "models", "spines-
 CONF = float(os.environ.get("SPINES_CONF", "0.25"))
 MARGIN = 0.04
 EDGE_ASPECT = 4.0
+EDGE_INSIDE = 0.85
+OVERLAP = 0.35
 model = YOLO(WEIGHTS)
 lock = threading.Lock()
 
@@ -61,10 +67,17 @@ def keep(poly, W, H):
     if not ((p[:, 0] < m * W).any() or (p[:, 0] > (1 - m) * W).any() or (p[:, 1] < m * H).any() or (p[:, 1] > (1 - m) * H).any()):
         return True
     a, ip = cv2.intersectConvexConvex(cv2.convexHull(p), np.float32([[0, 0], [W, 0], [W, H], [0, H]]))
-    if a < 1 or ip is None:
+    if a < 1 or ip is None or a < EDGE_INSIDE * cv2.contourArea(cv2.convexHull(p)):
         return False
     (_, (w, h), _) = cv2.minAreaRect(ip.reshape(-1, 2))
     return max(w, h) / max(1e-6, min(w, h)) >= EDGE_ASPECT
+
+
+def overlaps(a, b):
+    """Share of the smaller of two rectangles that the other covers."""
+    a, b = cv2.convexHull(np.float32(a)), cv2.convexHull(np.float32(b))
+    inter, _ = cv2.intersectConvexConvex(a, b)
+    return inter / max(1e-6, min(cv2.contourArea(a), cv2.contourArea(b)))
 
 
 def cut(img, q):
@@ -92,14 +105,19 @@ def cut_spines(data):
         r = model.predict(img, imgsz=1280, conf=CONF, verbose=False, device="cpu")[0]
     boxes = r.obb.xyxyxyxy.cpu().numpy() if r.obb is not None and len(r.obb) else []
     confs = r.obb.conf.cpu().numpy() if r.obb is not None and len(r.obb) else []
-    out, dropped = [], 0
-    for q, cf in zip(boxes, confs):
+    out, dropped, twice, kept = [], 0, 0, []
+    for k in sorted(range(len(confs)), key=lambda k: -confs[k]):
+        q, cf = boxes[k], confs[k]
+        if any(overlaps(q, o) >= OVERLAP for o in kept):
+            twice += 1
+            continue
         crop, poly = cut(img, q)
         if crop is None:
             continue
-        if not keep(poly, W, H):
+        if not keep(q, W, H):
             dropped += 1
             continue
+        kept.append(q)
         ok, jpg = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 92])
         out.append({
             "poly": [[round(min(1, max(0, float(x) / W)), 4), round(min(1, max(0, float(y) / H)), 4)] for x, y in q],
@@ -107,7 +125,7 @@ def cut_spines(data):
             "jpeg": base64.b64encode(jpg.tobytes()).decode(), "_x": float(np.mean(q[:, 0])),
         })
     out.sort(key=lambda s: s.pop("_x"))
-    return {"W": W, "H": H, "ms": round((time.time() - t) * 1000), "dropped_edge": dropped, "spines": out}
+    return {"W": W, "H": H, "ms": round((time.time() - t) * 1000), "dropped_edge": dropped, "dropped_overlap": twice, "spines": out}
 
 
 class Handler(BaseHTTPRequestHandler):
