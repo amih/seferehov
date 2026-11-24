@@ -277,28 +277,38 @@ export function startScanWorker(logger) {
 
 // "n" books wait for the reader; "auto" were approved for them (confidence high enough, AUTO_APPROVE_AT):
 // the app works for the reader, and says so (Ami, 24 Nov 2026).
+// Three groups, as the queue shows them (web/src/views/queue.js confidenceLine): high (75+) were
+// approved for the reader (AUTO_APPROVE_AT), medium (45-74) wait for them, low (under 45) are
+// optional: about a quarter of them were right in past decisions (Ami, 24 Nov 2026).
+const books = { he: (n) => (n === 1 ? 'ספר אחד' : `${n} ספרים`), en: (n) => (n === 1 ? '1 book' : `${n} books`) };
 const READY_TEXT = {
   he: {
     done: {
-      subject: (n, auto) => (!auto ? 'הספרים מהתמונות שלך מוכנים לאישור' : `✨ אישרנו בשבילכם ${auto === 1 ? 'ספר אחד' : `${auto} ספרים`} מהתמונות שלך${n ? ` · ${n === 1 ? 'אחד מחכה' : `${n} מחכים`} לבדיקה` : ''}`),
-      body: (n, auto, url, tidy = 0) => `קראנו את התמונות ששלחת ומצאנו ${n + auto} ספרים.\n`
-        + (auto && !n ? `✨ בכולם היינו בטוחים ואישרנו אותם בשבילכם, בלי שתצטרכו לעשות דבר.\n` : auto ? `✨ ב־${auto} מהם היינו בטוחים ואישרנו אותם בשבילכם, בלי שתצטרכו לעשות דבר.\n` : '')
+      subject: ({ auto, mid, low }) => (!auto ? 'הספרים מהתמונות שלך מוכנים לאישור'
+        : `✨ אישרנו בשבילכם ${books.he(auto)} מהתמונות שלך${mid + low ? ` · ${mid + low} מחכים לבדיקה` : ''}`),
+      body: ({ auto, mid, low, tidy }, url) => `קראנו את התמונות ששלחת ומצאנו ${books.he(auto + mid + low)}:\n\n`
+        + (auto ? `🟢 ${books.he(auto)} בביטחון גבוה: אישרנו בשבילכם, אין צורך לעשות דבר.\n` : '')
+        + (mid ? `🟡 ${books.he(mid)} בביטחון בינוני: מחכים לאישור שלכם. רובם נכונים, ומספיק מבט מהיר.\n` : '')
+        + (low ? `🔴 ${books.he(low)} בביטחון נמוך: רשות. רובם קריאות שגויות, ואם הרשימה ארוכה מותר לדלג עליהם.\n` : '')
         + (tidy ? `🧹 עוד ${tidy} זיהויים היו כפולים (אותו ספר בכמה תמונות) או קריאות גרועות, ולא הטרדנו אתכם בהם.\n` : '')
-        + (n ? `${auto ? `${n === 1 ? 'ספר אחד נשאר' : `${n} נשארו`} לבדיקה שלכם` : 'בדקו ואשרו אותם'} כאן:\n\n${url}` : `אפשר לראות אותם כאן:\n\n${url}`)
+        + (mid + low ? `\nלבדיקה ולאישור:\n${url}` : `\nאפשר לראות אותם כאן:\n${url}`)
         + '\n\nספרחוב',
     },
-    failed: { subject: () => 'לא הצלחנו לקרוא את התמונות', body: (_, __, url) => `לא הצלחנו לקרוא את התמונות ששלחת. אפשר לנסות שוב, מקרוב יותר ובאור טוב:\n\n${url}\n\nספרחוב` },
+    failed: { subject: () => 'לא הצלחנו לקרוא את התמונות', body: (_, url) => `לא הצלחנו לקרוא את התמונות ששלחת. אפשר לנסות שוב, מקרוב יותר ובאור טוב:\n\n${url}\n\nספרחוב` },
   },
   en: {
     done: {
-      subject: (n, auto) => (!auto ? 'Your shelf photos are ready to check' : `✨ We approved ${auto === 1 ? '1 book' : `${auto} books`} from your photos for you${n ? ` · ${n} to check` : ''}`),
-      body: (n, auto, url, tidy = 0) => `We read the photos you sent and found ${n + auto} books.\n`
-        + (auto && !n ? `✨ We were sure of all of them and approved them for you, nothing for you to do.\n` : auto ? `✨ We were sure of ${auto} of them and approved them for you, nothing for you to do.\n` : '')
+      subject: ({ auto, mid, low }) => (!auto ? 'Your shelf photos are ready to check'
+        : `✨ We approved ${books.en(auto)} from your photos for you${mid + low ? ` · ${mid + low} to check` : ''}`),
+      body: ({ auto, mid, low, tidy }, url) => `We read the photos you sent and found ${books.en(auto + mid + low)}:\n\n`
+        + (auto ? `🟢 ${books.en(auto)}, high confidence: approved for you, nothing to do.\n` : '')
+        + (mid ? `🟡 ${books.en(mid)}, medium confidence: waiting for your OK. Most are right; a quick look is enough.\n` : '')
+        + (low ? `🔴 ${books.en(low)}, low confidence: optional. Most are misreads, so if the list is long, feel free to skip them.\n` : '')
         + (tidy ? `🧹 ${tidy} more reads were duplicates (the same book in several photos) or poor reads, so we did not bother you with them.\n` : '')
-        + (n ? `${auto ? `${n === 1 ? '1 is' : `${n} are`} left for you to check` : 'Check and confirm them'} here:\n\n${url}` : `You can see them here:\n\n${url}`)
+        + (mid + low ? `\nCheck and approve them here:\n${url}` : `\nYou can see them here:\n${url}`)
         + '\n\nSeferehov',
     },
-    failed: { subject: () => 'We could not read your photos', body: (_, __, url) => `We could not read the photos you sent. You can try again, closer and with good light:\n\n${url}\n\nSeferehov` },
+    failed: { subject: () => 'We could not read your photos', body: (_, url) => `We could not read the photos you sent. You can try again, closer and with good light:\n\n${url}\n\nSeferehov` },
   },
 };
 
@@ -313,6 +323,7 @@ async function emailFinished() {
         AND s.finished_at > now() - interval '1 day'
       RETURNING s.id, s.status, s.lang, u.email, (SELECT code FROM locations WHERE id = s.location_id AND s.situation IS NULL) AS code,
                 (SELECT count(*)::int FROM scan_items i WHERE i.scan_id = s.id AND (i.decision IS NULL OR i.decision = 'later')) AS n,
+                (SELECT count(*)::int FROM scan_items i WHERE i.scan_id = s.id AND (i.decision IS NULL OR i.decision = 'later') AND i.confidence < 45) AS low,
                 (SELECT count(*)::int FROM scan_items i WHERE i.scan_id = s.id AND i.auto AND i.decision = 'approved') AS auto,
                 (SELECT count(*)::int FROM scan_items i WHERE i.scan_id = s.id AND i.decision IN ('merged', 'skipped')) AS tidy`,
   );
@@ -322,7 +333,8 @@ async function emailFinished() {
     // From home (My books): the books wait in the queue. All approved already: My books / the library.
     const url = !r.code ? `${config.baseUrl}${!found ? '/books/add' : r.n ? '/queue' : '/books'}`
       : !found ? `${config.baseUrl}/l/${r.code}/add` : `${config.baseUrl}/l/${r.code}${r.n ? '/check' : ''}`;
-    await sendMail({ to: r.email, subject: T.subject(r.n, r.auto), text: T.body(r.n, r.auto, url, r.tidy) }, log);
+    const g = { auto: r.auto, mid: r.n - r.low, low: r.low, tidy: r.tidy };
+    await sendMail({ to: r.email, subject: T.subject(g), text: T.body(g, url) }, log);
   }
 }
 

@@ -92,14 +92,21 @@ export default async function queueView(root) {
   }
 
   function header() {
-    const left = items.filter((i) => !skipped.has(i.id)).length;
     const busy = processing.length
       ? `<p class="progress-line small"><span class="spinner"></span> ${t('queue.processing', { n: processing.length })}${counts.wait ? ` ${t('queue.wait', { mins: counts.wait })}` : ''}</p>` : '';
     const done = lastDone
       ? `<p class="undo-line">${esc(t(`queue.just_${lastDone.decision}`, { title: lastDone.title }))} <button class="btn small" data-undo="${lastDone.id}">${t('queue.undo')}</button></p>` : '';
-    // The app's own work, so the reader sees it is working for them (Ami, 24 Nov 2026).
-    const auto = counts.auto ? `<p class="note auto-line">${t('queue.auto', { n: counts.auto })}</p>` : '';
-    return `${done}${auto}${left ? `<p class="queue-count">${t('queue.left', { n: left })}</p>` : ''}${busy}`;
+    // Three groups, so the reader sees the app working for them and knows what is optional (Ami,
+    // 24 Nov 2026): high = approved for them (last 3 days), medium = wait for them, low = optional.
+    const open = items.filter((i) => !skipped.has(i.id));
+    const low = open.filter((i) => (i.confidence ?? 0) < 45).length;
+    const rows = [
+      counts.auto ? t('queue.sum_auto_html', { n: counts.auto }) : '',
+      open.length - low ? t('queue.sum_mid_html', { n: open.length - low }) : '',
+      low ? t('queue.sum_low_html', { n: low }) : '',
+    ].filter(Boolean);
+    const sum = rows.length ? `<ul class="queue-sum">${rows.map((x) => `<li>${x}</li>`).join('')}</ul>` : '';
+    return `${done}${sum}${busy}`;
   }
   const recentLink = () => `<p class="row"><button class="btn small" id="recent">${t('queue.recent')}</button>${counts.hidden ? ` <button class="btn small" id="show-hidden">${t('queue.show_hidden', { n: counts.hidden })}</button>` : ''}</p>`;
 
