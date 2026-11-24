@@ -61,7 +61,6 @@ const BURST_AWAY = 0.08;  // … while the picture stays within this share of th
 const KEEP = 2;           // photos kept per shelf (the server pools their readings: "seen in 2 photos")
 const QUALITY = 0.85;     // JPEG quality (0.9 before: ~25% bigger and slower)
 const QUEUE_MAX = 3;      // photos waiting to be encoded; past it the oldest second photo is dropped
-const MID_W = 192;        // focus: the centre 60% of the picture at ~320 px wide
 
 const algo = () => { try { return localStorage.getItem(ALGO_KEY) === 'v0' ? 'v0' : 'burst-v1'; } catch { return 'burst-v1'; } };
 
@@ -95,8 +94,12 @@ export function captureShots({ panel, request: given, onEnd, screen = 'library',
   // burst-v1 (see ALGO_KEY):
   let mode = 'v0', sensors = null, imgRing = null, focusRing = null, shelfBest = null, burst = null;
   let pending = [], pumping = null, qMax = 0, bursts = { kept: 0, dropped: 0 }, failedBurst = null, burstNo = 0;
-  const mid = document.createElement('canvas');
-  const midCtx = mid.getContext('2d', { willReadFrequently: true });
+  // burst-v1 looks at the picture once per tick, through a canvas the GPU scales into (no
+  // willReadFrequently), so only the small copy is read back. 24 Nov: two looks per tick into
+  // willReadFrequently canvases (the whole 4K frame copied to memory for each) took 1.1 s per
+  // tick on a reader's phone, a look every 2.9 s instead of 0.1 s.
+  const look = document.createElement('canvas');
+  const lookCtx = look.getContext('2d', { alpha: false });
 
   // The phone's own movement since the last photo: summed acceleration (gravity taken
   // out, m/s) and turning (degrees). Phones without the sensors leave both at 0.
@@ -312,22 +315,42 @@ export function captureShots({ panel, request: given, onEnd, screen = 'library',
   }
 
   // ---- burst-v1: a steady moment, then a burst ------------------------------------------
+  // One look: the picture at 2 × W wide (scaled by the GPU, one small read back), giving the
+  // grey copy at W wide (2 × 2 averaged) and the centre 60% for focus (192 px wide).
+  function lookV1(vw, vh) {
+    const h = Math.round((W * vh) / vw), w2 = 2 * W, h2 = 2 * h;
+    if (look.width !== w2 || look.height !== h2) { look.width = w2; look.height = h2; }
+    lookCtx.drawImage(video, 0, 0, w2, h2);
+    const px = lookCtx.getImageData(0, 0, w2, h2).data;
+    const big = new Float32Array(w2 * h2);
+    for (let i = 0; i < big.length; i++) big[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+    const g = new Float32Array(W * h);
+    let bright = 0;
+    for (let y = 0; y < h; y++) for (let x = 0; x < W; x++) {
+      const i = 2 * y * w2 + 2 * x;
+      const v = (big[i] + big[i + 1] + big[i + w2] + big[i + w2 + 1]) / 4;
+      g[y * W + x] = v; bright += v;
+    }
+    const mx = Math.round(0.2 * w2), my = Math.round(0.2 * h2), mw = Math.round(0.6 * w2), mh = Math.round(0.6 * h2);
+    const m = new Float32Array(mw * mh);
+    for (let y = 0; y < mh; y++) m.set(big.subarray((my + y) * w2 + mx, (my + y) * w2 + mx + mw), y * mw);
+    return { g, w: W, h, bright: bright / g.length, m, mw, mh };
+  }
+
   function tickV1() {
     if (!video?.videoWidth) return;
     const now = Date.now(), pnow = performance.now();
     const vw = video.videoWidth, vh = video.videoHeight;
-    const w = W, h = Math.round((w * vh) / vw);
-    const { g, bright } = grey(ctx, w, h);
+    const t0 = performance.now(); // the tick's own time (camlog alignMs) now includes the look
+    const { g, w, h, bright, m, mw, mh } = lookV1(vw, vh);
     const dark = bright < 55 ? 'shots.dark' : null;
-    const t0 = performance.now();
     const step = prev?.length === g.length ? align(prev, g, w, h) : null;
     const dt = now - prevAt;
     prev = g; prevAt = now;
     if (!step) return;
     if (gaps.length < 400) gaps.push(dt);
-    // Focus: the centre 60% of the picture, ~320 px wide.
-    const mh = Math.round((MID_W * vh) / vw);
-    const sharp = sharpness(grey(midCtx, MID_W, mh, [0.2 * vw, 0.2 * vh, 0.6 * vw, 0.6 * vh]).g, MID_W, mh);
+    // Focus: the centre 60% of the picture.
+    const sharp = sharpness(m, mw, mh);
     const v = step.edge ? 2 * R : still.imgSpeed(step.dx, step.dy, dt);
     speed = v;
     if (step.edge) lost = true; else { moved.x += step.dx; moved.y += step.dy; if (burst) { burst.x += step.dx; burst.y += step.dy; } }
@@ -335,7 +358,7 @@ export function captureShots({ panel, request: given, onEnd, screen = 'library',
     still.push(focusRing, pnow, sharp);
     if (now < settleUntil) return;
     log?.tick(v, step.edge, performance.now() - t0);
-    const st = still.steady(sensors, imgRing, pnow);
+    const st = still.steady(sensors, imgRing, pnow, arrived ? now - arrived : 0);
     const score = still.frameScore(sharp, st.shake);
 
     if (burst) {

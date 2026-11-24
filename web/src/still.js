@@ -27,6 +27,12 @@ export const IMG_PER_MS = 150;
 export const SENSOR_STALE_MS = 500; // no sample for this long: no sensors (iOS before permission, desktop)
 export const FOCUS_MS = 1500;    // focus is judged against the best of this long …
 export const FOCUS_SHARE = 0.7;  // … needing at least this share of it
+// The longer the reader holds the phone at a shelf, the less steady it has to be (Ami, 24 Nov:
+// "be more relaxed with the requirements as time passes"): every limit above is multiplied by
+// relax(waited), 1 at arrival, +1 for every RELAX_MS held, at most RELAX_MAX.
+export const RELAX_MS = 1000;
+export const RELAX_MAX = 4;
+export const relax = (waited) => Math.min(RELAX_MAX, 1 + Math.max(0, waited || 0) / RELAX_MS);
 export const SHIFT_APART = 3;    // the second kept photo: this far from the first (px of the grey copy) …
 export const CLEAR_SHARP = 0.9;  // … or at least this share of the first's sharpness
 
@@ -64,30 +70,38 @@ function rising(ring, now) {
 export const imgSpeed = (dx, dy, dt) => Math.hypot(dx, dy) * (IMG_PER_MS / Math.max(IMG_PER_MS / 3, Math.min(1500, dt || IMG_PER_MS)));
 
 // Is the hand steady now? sensors: the motion ring; img: the ring of picture speeds
-// (imgSpeed, one per tick). Returns { steady, by: 'sensors' | 'image', shake, best }.
+// (imgSpeed, one per tick); waited: ms the reader has held the phone at this shelf (relax()).
+// Returns { steady, by: 'sensors' | 'image', shake, best }.
 // shake is in the sensors' units with sensors, else px per 150 ms.
-export function steady(sensors, img, now) {
+export function steady(sensors, img, now, waited = 0) {
+  const f = relax(waited);
   const imgNow = lastAt(img, now)?.v ?? null;
   if (imgNow == null) return { steady: false, by: null, shake: null, best: null };
   if (hasSensors(sensors, now)) {
     const shake = shakeNow(sensors, now), best = personalBest(sensors, now);
-    const ok = shake <= SHAKE_CEIL && shake <= Math.max(best * BEST_SLACK, SHAKE_FLOOR) && !rising(sensors, now) && imgNow <= IMG_STILL;
+    // "rising" (the hand starting to move) only counts in the first second: after that, a calm
+    // enough moment is taken even on its way up.
+    const ok = shake <= SHAKE_CEIL && shake <= f * Math.max(best * BEST_SLACK, SHAKE_FLOOR) && (f >= 2 || !rising(sensors, now)) && imgNow <= f * IMG_STILL;
     return { steady: ok, by: 'sensors', shake, best };
   }
   // No sensors: the picture's speed alone, the same rule (the last tick, against the
   // reader's best of the last 3 s), never above IMG_STILL.
   const best = pct(img.s.filter((x) => x.t > now - RING_MS && x.t <= now).map((x) => x.v), BEST_PCT);
   const prev = lastAt(img, now - 100);
-  const up = prev && prev !== lastAt(img, now) && imgNow > RISE * prev.v + 0.5;
-  const ok = imgNow <= Math.min(IMG_STILL, Math.max(best * BEST_SLACK, IMG_FLOOR)) && !up;
+  const up = f < 2 && prev && prev !== lastAt(img, now) && imgNow > RISE * prev.v + 0.5;
+  const ok = imgNow <= f * Math.min(IMG_STILL, Math.max(best * BEST_SLACK, IMG_FLOOR)) && !up;
   return { steady: ok, by: 'image', shake: imgNow, best };
 }
 
 // In focus: sharpness at least FOCUS_SHARE of the best of the last FOCUS_MS (focus ring:
-// samples { t, v = sharpness }). With fewer than 2 looks it is not known yet: no.
+// samples { t, v = sharpness }). With fewer than 2 looks it is not known yet: no. A slow phone
+// may look less often than that (a reader's phone, 24 Nov: a look every 2.9 s, so focus was never
+// "known" and every photo waited for the late fallback): then the last 2 looks, however old.
+export const FOCUS_LOOKS = 2;
 export function focusOk(focus, now, sharp) {
-  const seen = focus.s.filter((x) => x.t > now - FOCUS_MS && x.t <= now);
-  if (seen.length < 2) return false;
+  let seen = focus.s.filter((x) => x.t > now - FOCUS_MS && x.t <= now);
+  if (seen.length < FOCUS_LOOKS) seen = focus.s.filter((x) => x.t <= now).slice(-FOCUS_LOOKS);
+  if (seen.length < FOCUS_LOOKS) return false;
   return sharp >= FOCUS_SHARE * Math.max(...seen.map((x) => x.v));
 }
 

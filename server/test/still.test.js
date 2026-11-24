@@ -1,7 +1,7 @@
 // The free-style camera's "steady moment, then a burst" (web/src/still.js).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createRing, push, steady, focusOk, pickBest, shakeNow, personalBest, imgSpeed, motionSample, IMG_STILL } from '../../web/src/still.js';
+import { createRing, push, steady, focusOk, pickBest, shakeNow, personalBest, imgSpeed, motionSample, IMG_STILL, relax, RELAX_MAX } from '../../web/src/still.js';
 
 // Sensor samples at 60 Hz from t0 to t1, shake given by f(t) (deg/s-like units).
 function sensors(ring, t0, t1, f) { for (let t = t0; t <= t1; t += 1000 / 60) push(ring, t, f(t)); }
@@ -110,4 +110,23 @@ test('pickBest keeps the best and a second that shows a little more or is clearl
   assert.deepEqual(pickBest([{ id: 1, score: 9, sharp: 100, x: 0, y: 0 }, { id: 2, score: 5, sharp: 50, x: 1, y: 0 }], 2).map((x) => x.id), [1]);
   assert.deepEqual(pickBest([], 2), []);
   assert.equal(pickBest(b, 1).length, 1);
+});
+
+// Ami, 24 Nov: the longer the phone is held at a shelf, the less steady it has to be.
+test('relax: 1 at arrival, grows with time held, capped', () => {
+  assert.equal(relax(0), 1);
+  assert.equal(relax(1000), 2);
+  assert.equal(relax(60000), RELAX_MAX);
+});
+test('steady: a shake too big at arrival is accepted after holding a while (image only)', () => {
+  const s = createRing(), img = createRing();
+  for (let t = 0; t <= 3000; t += 100) push(img, t, 2 * IMG_STILL);
+  assert.equal(steady(s, img, 3000, 0).steady, false);
+  assert.equal(steady(s, img, 3000, 1500).steady, true);
+});
+test('focusOk: a slow phone (looks 3 s apart) still gets a focus verdict from its last 2 looks', () => {
+  const f = createRing(10000);
+  push(f, 0, 100); push(f, 3000, 95);
+  assert.equal(focusOk(f, 3000, 95), true);
+  assert.equal(focusOk(f, 3000, 40), false);
 });

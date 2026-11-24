@@ -32,6 +32,12 @@ const bubble = (n) => {
   });
 };
 
+// Opening the app (a fresh load, or back to it after a while) moves the map to where the reader
+// is (Ami, 24 Nov), not to where the map was left. Coming back to the map from a library inside
+// the app keeps the view.
+const RECENTRE_AFTER_MS = 5 * 60_000;
+let centredThisLoad = false;
+
 function savedView() {
   try { return JSON.parse(localStorage.getItem(VIEW_KEY)) || null; } catch { return null; }
 }
@@ -127,12 +133,15 @@ export default function mapView(root, _, query) {
   });
   load();
 
-  async function locate(fly = true) {
+  // fly: animate there at street level (the button); centre: jump there (opening the app).
+  async function locate(fly = true, centre = false) {
     try {
       const p = await getPosition();
+      if (!root.isConnected) return;
       if (me) me.setLatLng([p.lat, p.lon]);
       else me = L.circleMarker([p.lat, p.lon], { radius: 8, color: '#fff', weight: 3, fillColor: '#2a7de1', fillOpacity: 1 }).addTo(map);
       if (fly) map.flyTo([p.lat, p.lon], Math.max(map.getZoom(), 16)); // street level, like Google Maps
+      else if (centre) map.setView([p.lat, p.lon], Math.max(map.getZoom(), 15));
     } catch (e) { if (fly) toast(e.message); }
   }
   root.querySelector('.fab-locate').onclick = () => locate(true);
@@ -143,7 +152,23 @@ export default function mapView(root, _, query) {
     const km = z >= 15 ? 1 : z >= 12 ? 5 : z >= 10 ? 20 : 50;
     e.currentTarget.href = `/search?${new URLSearchParams({ km, at: `${c.lat.toFixed(4)},${c.lng.toFixed(4)}`, from: t('find.map_area') })}`;
   };
-  if (!start) locate(false);
+  // Where the reader is: on opening the app the map moves there (if the phone already allows
+  // location, so no question pops up over a saved view); otherwise only the blue dot.
+  const linked = at.length === 3 && at.every(Number.isFinite);
+  (async () => {
+    const granted = await navigator.permissions?.query({ name: 'geolocation' }).then((p) => p.state === 'granted').catch(() => false);
+    if (!start) return locate(false, true);
+    if (!granted) return;
+    locate(false, !linked && !centredThisLoad);
+  })();
+  centredThisLoad = true;
+  let hiddenAt = 0;
+  const onVisible = () => {
+    if (!root.isConnected) return document.removeEventListener('visibilitychange', onVisible);
+    if (document.hidden) { hiddenAt = Date.now(); return; }
+    if (hiddenAt && Date.now() - hiddenAt > RECENTRE_AFTER_MS) locate(false, true);
+  };
+  document.addEventListener('visibilitychange', onVisible);
 
   // One camera for everything (docs/ONE_CAMERA_PLAN.md): no question first. The phone's hints go
   // with the photos and the server guesses where they were taken; the reader checks it in the queue.
@@ -165,5 +190,5 @@ export default function mapView(root, _, query) {
   };
   sheet.querySelector('.sheet-x').onclick = async () => { await cam.stop(); sheet.hidden = true; };
 
-  return () => { removed = true; cam.stop(false); map.remove(); };
+  return () => { removed = true; document.removeEventListener('visibilitychange', onVisible); cam.stop(false); map.remove(); };
 }
