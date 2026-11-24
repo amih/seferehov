@@ -142,13 +142,13 @@ export async function closeIfDone(scanId) {
   );
 }
 
-// Books the server is sure of (confidence "sure", src/confidence.js) are approved without
-// the reader, when AUTO_APPROVE_SURE=1. They show in "Recent decisions", where an auto
+// Books the server is sure enough of (confidence at least AUTO_APPROVE_AT, src/confidence.js:
+// 92 "sure", 90 catalogue + OCR, 95 barcode) are approved without the reader. They show in "Recent decisions", where an auto
 // approval can be undone like any other. Returns how many were approved.
 export async function autoApproveSure(scan) {
-  if (!config.autoApproveSure || !['photo', 'video'].includes(scan.source)) return 0;
+  if (!config.autoApproveAt || !['photo', 'video'].includes(scan.source)) return 0;
   const items = await many(
-    `SELECT i.* FROM scan_items i WHERE i.scan_id = $1 AND i.decision IS NULL AND i.confidence_why = 'sure' AND i.book_id IS NOT NULL`, [scan.id]);
+    `SELECT i.* FROM scan_items i WHERE i.scan_id = $1 AND i.decision IS NULL AND i.confidence >= $2 AND i.book_id IS NOT NULL`, [scan.id, config.autoApproveAt]);
   if (!items.length) return 0;
   const user = await one('SELECT * FROM users WHERE id = $1', [scan.user_id]);
   for (const item of items) {

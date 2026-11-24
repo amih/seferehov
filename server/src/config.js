@@ -25,8 +25,9 @@ export const config = {
   reviewAllLocations: (env.REVIEW_ALL_LOCATIONS ?? '1') === '1',
   // Admins get one email per this many minutes when something waits for review. 0 = off.
   notifyAdminMinutes: Number(env.NOTIFY_ADMIN_MINUTES ?? 10),
-  // 1 = books with confidence "sure" (src/confidence.js) are approved without the reader.
-  autoApproveSure: env.AUTO_APPROVE_SURE === '1',
+  // Books whose confidence (src/confidence.js) is at least this are approved without the reader;
+  // 0 = off. AUTO_APPROVE_SURE=1 alone means 92 ("sure"). Ami 24 Nov 2026: 90 (catalogue + OCR).
+  autoApproveAt: Number(env.AUTO_APPROVE_AT ?? (env.AUTO_APPROVE_SURE === '1' ? 92 : 0)),
   // Never merge two readings that the catalogue matched to different books: a catalogue subtitle
   // holding another book's title merged #759 into #758 (lab 062). SAFE_MERGE=0 turns it off.
   safeMerge: env.SAFE_MERGE !== '0',
