@@ -97,7 +97,9 @@ export default async function queueView(root) {
       ? `<p class="progress-line small"><span class="spinner"></span> ${t('queue.processing', { n: processing.length })}${counts.wait ? ` ${t('queue.wait', { mins: counts.wait })}` : ''}</p>` : '';
     const done = lastDone
       ? `<p class="undo-line">${esc(t(`queue.just_${lastDone.decision}`, { title: lastDone.title }))} <button class="btn small" data-undo="${lastDone.id}">${t('queue.undo')}</button></p>` : '';
-    return `${done}${left ? `<p class="queue-count">${t('queue.left', { n: left })}</p>` : ''}${busy}`;
+    // The app's own work, so the reader sees it is working for them (Ami, 24 Nov 2026).
+    const auto = counts.auto ? `<p class="note auto-line">${t('queue.auto', { n: counts.auto })}</p>` : '';
+    return `${done}${auto}${left ? `<p class="queue-count">${t('queue.left', { n: left })}</p>` : ''}${busy}`;
   }
   const recentLink = () => `<p class="row"><button class="btn small" id="recent">${t('queue.recent')}</button>${counts.hidden ? ` <button class="btn small" id="show-hidden">${t('queue.show_hidden', { n: counts.hidden })}</button>` : ''}</p>`;
 

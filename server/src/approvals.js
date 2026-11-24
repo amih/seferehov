@@ -58,6 +58,8 @@ async function counts(userId) {
               WHERE s.user_id = $1 AND s.status = 'done' AND i.decision = 'later') AS later,
             (SELECT count(*)::int FROM scan_items i JOIN scans s ON s.id = i.scan_id
               WHERE s.user_id = $1 AND i.decision = 'skipped') AS hidden,
+            (SELECT count(*)::int FROM scan_items i JOIN scans s ON s.id = i.scan_id
+              WHERE s.user_id = $1 AND i.auto AND i.decision = 'approved' AND s.finished_at > now() - interval '3 days') AS auto,
             (SELECT count(*)::int FROM scans WHERE user_id = $1 AND status IN ('queued', 'processing')) AS processing`,
     [userId],
   );

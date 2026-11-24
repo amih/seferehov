@@ -275,14 +275,28 @@ export function startScanWorker(logger) {
   }, 6 * 3600_000).unref();
 }
 
+// "n" books wait for the reader; "auto" were approved for them (confidence high enough, AUTO_APPROVE_AT):
+// the app works for the reader, and says so (Ami, 24 Nov 2026).
 const READY_TEXT = {
   he: {
-    done: { subject: 'הספרים מהתמונות שלך מוכנים לאישור', body: (n, url) => `קראנו את התמונות ששלחת ומצאנו ${n} ספרים.\nבדקו ואשרו אותם כאן:\n\n${url}\n\nספרחוב` },
-    failed: { subject: 'לא הצלחנו לקרוא את התמונות', body: (_, url) => `לא הצלחנו לקרוא את התמונות ששלחת. אפשר לנסות שוב, מקרוב יותר ובאור טוב:\n\n${url}\n\nספרחוב` },
+    done: {
+      subject: (n, auto) => (!auto ? 'הספרים מהתמונות שלך מוכנים לאישור' : `✨ אישרנו בשבילכם ${auto === 1 ? 'ספר אחד' : `${auto} ספרים`} מהתמונות שלך${n ? ` · ${n === 1 ? 'אחד מחכה' : `${n} מחכים`} לבדיקה` : ''}`),
+      body: (n, auto, url) => `קראנו את התמונות ששלחת ומצאנו ${n + auto} ספרים.\n`
+        + (auto && !n ? `✨ בכולם היינו בטוחים ואישרנו אותם בשבילכם, בלי שתצטרכו לעשות דבר.\n` : auto ? `✨ ב־${auto} מהם היינו בטוחים ואישרנו אותם בשבילכם, בלי שתצטרכו לעשות דבר.\n` : '')
+        + (n ? `${auto ? `${n === 1 ? 'ספר אחד נשאר' : `${n} נשארו`} לבדיקה שלכם` : 'בדקו ואשרו אותם'} כאן:\n\n${url}` : `אפשר לראות אותם כאן:\n\n${url}`)
+        + '\n\nספרחוב',
+    },
+    failed: { subject: () => 'לא הצלחנו לקרוא את התמונות', body: (_, __, url) => `לא הצלחנו לקרוא את התמונות ששלחת. אפשר לנסות שוב, מקרוב יותר ובאור טוב:\n\n${url}\n\nספרחוב` },
   },
   en: {
-    done: { subject: 'Your shelf photos are ready to check', body: (n, url) => `We read the photos you sent and found ${n} books.\nCheck and confirm them here:\n\n${url}\n\nSeferehov` },
-    failed: { subject: 'We could not read your photos', body: (_, url) => `We could not read the photos you sent. You can try again, closer and with good light:\n\n${url}\n\nSeferehov` },
+    done: {
+      subject: (n, auto) => (!auto ? 'Your shelf photos are ready to check' : `✨ We approved ${auto === 1 ? '1 book' : `${auto} books`} from your photos for you${n ? ` · ${n} to check` : ''}`),
+      body: (n, auto, url) => `We read the photos you sent and found ${n + auto} books.\n`
+        + (auto && !n ? `✨ We were sure of all of them and approved them for you, nothing for you to do.\n` : auto ? `✨ We were sure of ${auto} of them and approved them for you, nothing for you to do.\n` : '')
+        + (n ? `${auto ? `${n === 1 ? '1 is' : `${n} are`} left for you to check` : 'Check and confirm them'} here:\n\n${url}` : `You can see them here:\n\n${url}`)
+        + '\n\nSeferehov',
+    },
+    failed: { subject: () => 'We could not read your photos', body: (_, __, url) => `We could not read the photos you sent. You can try again, closer and with good light:\n\n${url}\n\nSeferehov` },
   },
 };
 
@@ -296,14 +310,16 @@ async function emailFinished() {
         AND s.status IN ('done','confirmed','failed') AND s.finished_at < now() - interval '2 minutes'
         AND s.finished_at > now() - interval '1 day'
       RETURNING s.id, s.status, s.lang, u.email, (SELECT code FROM locations WHERE id = s.location_id AND s.situation IS NULL) AS code,
-                (SELECT count(*)::int FROM scan_items i WHERE i.scan_id = s.id) AS n`,
+                (SELECT count(*)::int FROM scan_items i WHERE i.scan_id = s.id AND (i.decision IS NULL OR i.decision = 'later')) AS n,
+                (SELECT count(*)::int FROM scan_items i WHERE i.scan_id = s.id AND i.auto AND i.decision = 'approved') AS auto`,
   );
   for (const r of rows) {
-    const T = READY_TEXT[r.lang === 'en' ? 'en' : 'he'][r.status !== 'failed' && r.n ? 'done' : 'failed'];
-    // From home (My books): the books wait in the queue.
-    const url = !r.code ? `${config.baseUrl}${r.status !== 'failed' && r.n ? '/queue' : '/books/add'}`
-      : r.status !== 'failed' && r.n ? `${config.baseUrl}/l/${r.code}/check` : `${config.baseUrl}/l/${r.code}/add`;
-    await sendMail({ to: r.email, subject: T.subject, text: T.body(r.n, url) }, log);
+    const found = r.status !== 'failed' && r.n + r.auto > 0;
+    const T = READY_TEXT[r.lang === 'en' ? 'en' : 'he'][found ? 'done' : 'failed'];
+    // From home (My books): the books wait in the queue. All approved already: My books / the library.
+    const url = !r.code ? `${config.baseUrl}${!found ? '/books/add' : r.n ? '/queue' : '/books'}`
+      : !found ? `${config.baseUrl}/l/${r.code}/add` : `${config.baseUrl}/l/${r.code}${r.n ? '/check' : ''}`;
+    await sendMail({ to: r.email, subject: T.subject(r.n, r.auto), text: T.body(r.n, r.auto, url) }, log);
   }
 }
 
