@@ -1,3 +1,4 @@
+import { scrollToY } from '../frame.js';
 import { api, getMe } from '../api.js';
 import { navigate } from '../nav.js';
 import { esc, toast, getPosition } from '../ui.js';
@@ -96,7 +97,7 @@ export async function helpLibraryView(root, [code]) {
       queueCountStale();
       items = items.slice(1);
       render();
-      window.scrollTo(0, 0);
+      scrollToY(0);
     };
   }
   render();

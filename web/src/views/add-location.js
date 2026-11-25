@@ -1,3 +1,4 @@
+import { scrollToY } from '../frame.js';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { api, getMe } from '../api.js';
@@ -81,7 +82,7 @@ export default async function addLocationView(root) {
     root.querySelectorAll('.wiz').forEach((w) => { w.hidden = Number(w.dataset.step) !== n; });
     root.querySelectorAll('.wiz-steps li').forEach((li) => { li.className = Number(li.dataset.s) < n ? 'done' : Number(li.dataset.s) === n ? 'on' : ''; });
     if (n === 2) setTimeout(() => map.invalidateSize());
-    window.scrollTo(0, 0);
+    scrollToY(0);
   };
   form.addEventListener('click', (e) => {
     if (e.target.closest('[data-next]')) show(step + 1);

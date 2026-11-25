@@ -28,6 +28,7 @@ import pageView from './views/page.js';
 import inviteView, { invitedView } from './views/invite.js';
 import { rememberInvite, joinInvite } from './invite.js';
 import { initMenu } from './menu.js';
+import { initFrame, scrollToY } from './frame.js';
 import { todoCounts, queueCount, queueCountStale } from './todo.js';
 import './install.js';
 import searchView from './views/search.js';
@@ -109,7 +110,7 @@ async function render({ back = false } = {}) {
   const fresh = main.cloneNode(false);
   main.replaceWith(fresh);
   main = fresh;
-  window.scrollTo(0, 0);
+  scrollToY(0);
   if (!view) {
     // Perhaps a page added after this version was loaded: get the newest version first.
     main.innerHTML = `<section class="page"><p class="muted">${t('loading')}</p></section>`;
@@ -127,7 +128,7 @@ async function render({ back = false } = {}) {
   cleanup = done;
   // Back (or forward) to a screen: where it was scrolled to, once it has drawn.
   const y = back ? savedScroll() : null;
-  if (y) requestAnimationFrame(() => { if (!stale()) window.scrollTo(0, y); });
+  if (y) requestAnimationFrame(() => { if (!stale()) scrollToY(y); });
   showReadyBanner(me, path);
 }
 
@@ -211,6 +212,7 @@ applyLang();
 translateShell();
 
 initMenu();
+initFrame();
 
 // The menu's to-do count, fetched ahead so the menu shows it at once (todo.js keeps it):
 // when the app starts, and when it comes back into view after 10 minutes or more. No timer.

@@ -1,3 +1,4 @@
+import { scrollPos } from './frame.js';
 // The app's history: a stack of screens with the map at the bottom (Ami, 22 Nov 2026; until
 // then it held only the map and one screen, so back from a book skipped its library).
 //
@@ -51,7 +52,7 @@ export function navigate(to, { replace = false } = {}) {
   const here = urlOf(location);
   const p = plan(history.state, here, to, { replace });
   // Remember where this screen was scrolled to, for coming back to it.
-  if (!p.replace && !layer) history.replaceState({ ...(stateFor(history.state, here) ?? { depth: 0, trail: [here] }), scroll: scrollY }, '');
+  if (!p.replace && !layer) history.replaceState({ ...(stateFor(history.state, here) ?? { depth: 0, trail: [here] }), scroll: scrollPos() }, '');
   if (p.go) { history.go(p.go - (layer ? 1 : 0)); return; } // popstate renders the screen
   history[p.push && !layer ? 'pushState' : 'replaceState'](p.push ?? p.replace, '', p.url);
   window.dispatchEvent(new Event('seferehov:navigate'));

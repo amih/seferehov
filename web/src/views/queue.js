@@ -1,3 +1,4 @@
+import { scrollToY } from '../frame.js';
 import { api, getMe } from '../api.js';
 import { navigate } from '../nav.js';
 import { esc, toast, nextLook } from '../ui.js';
@@ -120,7 +121,7 @@ export default async function queueView(root) {
       lastDone = null;
       toast(t('queue.undone'));
       render();
-      window.scrollTo(0, 0);
+      scrollToY(0);
     } catch (err) { toast(err.message); }
   }
 
@@ -141,12 +142,12 @@ export default async function queueView(root) {
         ${i.undoable ? `<button class="btn small" data-undo="${i.id}">${t('queue.undo')}</button>` : `<span class="small muted">${t('queue.placed')}</span>`}
       </li>`).join('')}</ul>` : `<p class="note">${t('queue.recent_none')}</p>`}
     </section>`;
-    root.querySelector('#back').onclick = () => { render(); window.scrollTo(0, 0); };
+    root.querySelector('#back').onclick = () => { render(); scrollToY(0); };
   }
   root.addEventListener('click', (e) => {
     const u = e.target.closest('[data-undo]');
     if (u) { u.disabled = true; undo(Number(u.dataset.undo)); }
-    else if (e.target.closest('#recent')) { renderRecent(); window.scrollTo(0, 0); }
+    else if (e.target.closest('#recent')) { renderRecent(); scrollToY(0); }
     else if (e.target.closest('#show-hidden')) { api('/api/queue/skipped/show', { method: 'POST' }).then(() => location.reload()).catch(() => toast(t('offline'))); }
   });
   function renderHeader() {
@@ -165,7 +166,7 @@ export default async function queueView(root) {
       toast(t('sit.thanks'));
       await load();
       render();
-      window.scrollTo(0, 0);
+      scrollToY(0);
     } catch (err) {
       toast(err.body?.error === 'already_approved' ? t('sit.already') : err.body?.error === 'nearby_exists' ? t('sit.nearby', { name: err.body?.location?.name || t('free_library') })
         : err.body?.error === 'location_required' ? t('sit.need_place') : err.message);
@@ -287,7 +288,7 @@ export default async function queueView(root) {
         lastDone = decision === 'later' ? null : { id: i.id, decision: body.flip ? 'flipped' : decision, title: body.title || shownTitle };
         if (decision === 'approved' && r.status === 'pending') toast(t('loc.thanks_review'));
         render();
-        window.scrollTo(0, 0);
+        scrollToY(0);
       } catch (err) {
         if (err.body?.error === 'situation_first') { await load().catch(() => {}); render(); return; }
         toast(err.message);

@@ -791,3 +791,35 @@ kbd { border: 1px solid #bbb; border-bottom-width: 2px; border-radius: 4px; padd
 .sit .why { margin: 2px 0 8px; }
 .sit .opts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .sit input { margin-top: 6px; }
+
+/* Laptop and desktop: the app as a large phone floating on grey (src/frame.js; ⤢ fills the window). Inside the
+   frame the screen scrolls in #view, and position: fixed parts (header, buttons, the decide bar) keep to the frame. */
+.frame-btn { display: none; background: transparent; color: #fff; border: 0; font-size: 1.35rem; line-height: 1; padding: 2px 6px; cursor: pointer; opacity: .85; }
+.frame-btn:hover { opacity: 1; }
+@media (min-width: 900px) and (min-height: 600px) {
+  .frame-btn { display: inline-block; }
+  html.framed { background: #d3d3d3; height: 100%; overflow: hidden; }
+  html.framed body {
+    position: relative; width: 480px; height: min(940px, calc(100vh - 48px)); margin: 24px auto;
+    transform: translateZ(0); overflow: hidden; border-radius: 26px;
+    box-shadow: 0 0 0 1px rgb(0 0 0 / .12), 0 18px 50px rgb(0 0 0 / .28);
+  }
+  html.framed body:not(.full) #view { height: 100%; overflow-y: auto; overscroll-behavior: contain; }
+  html.framed body::after { display: none; }
+  /* The phone layouts that wide windows switch off (they ask the window's width, not the frame's). */
+  html.framed .comic-page .strip, html.framed .comic-page .facts, html.framed .comic-page .routes { grid-template-columns: minmax(0, 1fr); }
+  html.framed .comic-page .route + .route { border-inline-start: 0; border-top: 4px solid var(--c-ink); }
+  html.framed .comic-page .panel.wide .art { aspect-ratio: 1216 / 832; }
+  html.framed .comic-page .masthead { grid-template-columns: 1fr; }
+  html.framed .comic-page .issue { justify-self: start; }
+  html.framed .comic-page .bubble { max-width: 64%; }
+  html.framed .ocr-item { flex-direction: column; }
+  html.framed .ocr-item img { width: 100%; }
+  html.framed .trace .callbody { flex-direction: column; }
+  html.framed .ol-edit { grid-template-columns: 1fr; height: auto; }
+  html.framed .ol-stage { height: 70vh; }
+}
+@media (min-width: 900px) and (min-height: 600px) and (prefers-color-scheme: dark) {
+  html.framed { background: #2b2b2b; }
+  html.framed body { box-shadow: 0 0 0 1px rgb(255 255 255 / .1), 0 18px 50px rgb(0 0 0 / .6); }
+}

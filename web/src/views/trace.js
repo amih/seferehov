@@ -1,3 +1,4 @@
+import { scrollToY, scrollPos } from '../frame.js';
 import { api, getMe } from '../api.js';
 import { navigate } from '../nav.js';
 import { esc, timeAgo, toast } from '../ui.js';
@@ -63,9 +64,9 @@ async function showTrace(root, id) {
       throw err;
     }
     const open = new Set([...box.querySelectorAll('details[open][data-key]')].map((d) => d.dataset.key));
-    const y = window.scrollY;
+    const y = scrollPos();
     box.innerHTML = render(id, data, open);
-    window.scrollTo(0, y);
+    scrollToY(y);
     wire(box);
     if (data.trace.ms == null) timer = setTimeout(load, 5000); // still running
   };
