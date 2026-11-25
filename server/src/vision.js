@@ -361,7 +361,13 @@ export async function generate(jpeg, prompt, numPredict) {
     // Retried: a 5xx or a refused connection (Ollama restarting); not a time-out.
     if (res.ok || (res.status > 0 && res.status < 500) || res.err?.name === 'TimeoutError') break;
   }
-  if (!res.ok) throw res.err ?? new Error(`vision ${res.status}`);
+  if (!res.ok) {
+    // The model could not be reached in time (no answer, a 5xx, a time-out): usually the graphics card is busy
+    // with a long job (the lab's training holds it for hours). Callers that can wait try again later.
+    const err = res.err ?? new Error(`vision ${res.status}`);
+    err.modelUnavailable = res.status === 0 || res.status >= 500;
+    throw err;
+  }
   const answer = (await res.json()).response ?? '';
   await step('model', { model: config.vision.model, prompt, answer, ms: Date.now() - t0 },
     Object.fromEntries(images.map((b, i) => [i ? `image${i + 1}` : 'image', b])), { side: 1000 });

@@ -144,13 +144,14 @@ async function openSession(user, id, f) {
 // "end" but photos missing (still in a phone's outbox, offline).
 const READY_SQL = `
   SELECT s.* FROM capture_sessions s
-   WHERE s.status = 'open' AND (
+   WHERE s.status = 'open' AND (s.retry_after IS NULL OR s.retry_after < now()) AND (
          (s.ended_at IS NOT NULL AND s.last_shot_at < now() - interval '5 seconds'
            AND (SELECT count(*) FROM capture_shots c WHERE c.session_id = s.id) >= coalesce(s.expected, 0))
       OR (s.ended_at IS NULL AND s.last_shot_at < now() - interval '3 minutes')
       OR s.last_shot_at < now() - interval '30 minutes')
    ORDER BY s.last_shot_at LIMIT 1`;
 
+const RETRY_FOR_MS = 2 * 24 * 3600_000;
 let busy = false, log = console, timer = null;
 export function startCaptureWorker(logger) {
   log = logger;
@@ -165,6 +166,15 @@ async function run() {
   try {
     for (let s; (s = await one(`UPDATE capture_sessions SET status = 'sorting' WHERE id = (${READY_SQL.replace('SELECT s.*', 'SELECT s.id')}) RETURNING *`));) {
       await sortSession(s).catch(async (err) => {
+        // The model was out of reach (the graphics card busy for hours with a long job): the photos are kept and the
+        // session is sorted again in 5 minutes, for up to 2 days. Before 25 Nov 2026 it failed at once, and a new
+        // reader's first photos never reached the approval queue.
+        if (err.modelUnavailable && Date.now() - new Date(s.created_at).getTime() < RETRY_FOR_MS) {
+          log.warn({ err, session: s.id, tries: s.tries + 1 }, 'capture sort: model out of reach, trying again in 5 minutes');
+          await q(`UPDATE capture_sessions SET status = 'open', tries = tries + 1, retry_after = now() + interval '5 minutes', error = $2 WHERE id = $1`,
+            [s.id, String(err.message).slice(0, 300)]);
+          return;
+        }
         log.error({ err, session: s.id }, 'capture sort failed');
         await q(`UPDATE capture_sessions SET status = 'failed', error = $2 WHERE id = $1`, [s.id, String(err.message).slice(0, 300)]);
       });
