@@ -181,7 +181,7 @@ Books read from shelf photos at public street libraries that their photographer 
 ## Reading order (when many readers scan at once)
 
 - Book covers go first: a cover sent while a long shelf batch is being read is read between two of its photos, within a few minutes.
-- Readers take turns: everyone's first shelf scan before anyone's second, so one big home library does not hold up everyone else.
+- Readers take turns: everyone's first shelf scan before anyone's second, so one big home library does not hold up everyone else. Between readers on the same turn, the one served longest ago goes first (25 Nov 2026: before, a finished scan stopped counting, so one reader's three scans went ahead of another's first).
 - The expected wait comes from the last 30 days of measured reading times.
 - **A long queue** (`server/src/busy.js`, 10 Nov 2026): every 10 minutes the server works out how long shelf photos sent now would wait. When that passes 3 hours (`BUSY_ALERT_HOURS`), the admins get one email; the next comes only after the wait has fallen under half that. On `/admin#queue` the admin sees who waits an hour or more and the email they would get, and can send it with one click: "Many people sent shelf photos today, so reading them takes longer than usual. Yours should be ready in about N hours. We will email you when they are." (in the reader's language). Each waiting scan is told at most once; nobody is emailed about it without the admin's click.
 

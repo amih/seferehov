@@ -347,14 +347,18 @@ export function wake() {
 // The order scans are read in: book covers first (a minute each, and the reader is often
 // still holding the book), then shelf photos and videos. Within each, readers take turns:
 // everyone's first scan before anyone's second, so one big home library does not hold
-// everyone else up for hours. The scan being read now counts as its reader's turn.
+// everyone else up for hours. The scan being read now counts as its reader's turn. Between
+// readers on the same turn, the one served longest ago goes first (25 Nov 2026: a reader's
+// first scan waited behind three of another reader's, because a finished scan no longer counted).
 const QUEUE_SQL = `
-  SELECT id, user_id, source, media, created_at FROM (
+  SELECT q.id, q.user_id, q.source, q.media, q.created_at FROM (
     SELECT id, user_id, source, media, created_at, status,
            row_number() OVER (PARTITION BY user_id, source = 'cover' ORDER BY status <> 'processing', created_at) AS turn
       FROM scans WHERE status IN ('queued', 'processing')) q
-   WHERE status = 'queued'
-   ORDER BY source <> 'cover', turn, created_at`;
+   LEFT JOIN LATERAL (SELECT max(p.started_at) AS served FROM scans p
+                       WHERE p.user_id = q.user_id AND p.started_at > now() - interval '1 day') l ON true
+   WHERE q.status = 'queued'
+   ORDER BY q.source <> 'cover', q.turn, l.served NULLS FIRST, q.created_at`;
 
 const claim = (coversOnly) => one(
   `UPDATE scans SET status = 'processing', started_at = now()
