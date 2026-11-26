@@ -21,7 +21,7 @@ import { MEDIA_DIR, wake } from './scans.js';
 import { sortShots } from './pairing.js';
 import { withTrace } from './trace.js';
 import { guessSituation, SURE } from './situation.js';
-import { autoConfirmKnown, closeIfDone } from './approvals.js';
+import { autoConfirmKnown, autoApproveSure, closeIfDone } from './approvals.js';
 import { absorbOsmTwin } from './duplicates.js';
 
 const MAX_PHOTO_BYTES = 15 * 1024 * 1024;
@@ -294,9 +294,12 @@ export async function answerSituation(user, sessionId, answer) {
   const scans = await many(
     `UPDATE scans SET location_id = $2, owner = $3, friend_name = $4, distance_m = $5, situation = NULL WHERE capture_id = $1 RETURNING *`,
     [s.id, place.location_id, place.owner, place.friend_name, place.distance_m]);
-  // What waited for the place: books already on that library's shelf are confirmed.
+  // What waited for the place: books already on that library's shelf are confirmed, and books sure enough
+  // (AUTO_APPROVE_AT) are approved, as for photos whose place was known (scans.js runScan). Until 26 Nov 2026
+  // only the first ran here, so a session read before its place was answered left even 92% books to the reader.
   for (const scan of scans.filter((x) => x.status === 'done')) {
     await autoConfirmKnown(scan).catch((err) => log.warn({ err, scan: scan.id }, 'auto confirm'));
+    await autoApproveSure(scan).catch((err) => log.warn({ err, scan: scan.id }, 'auto approve'));
     await closeIfDone(scan.id);
   }
   if (place.location_id) await absorbOsmTwin(place.location_id).catch(() => null);
