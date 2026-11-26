@@ -189,10 +189,13 @@ export default function mapView(root, _, query) {
   const linked = at.length === 3 && at.every(Number.isFinite);
   // As if the reader tapped ◎ (Ami, 26 Nov 2026): also when the phone would ask first (Android's "only this time"
   // permission asks again on the next opening). Only a refusal stops it.
+  // Decided before any await: centredThisLoad is set right below, and reading it after the permission query
+  // (as until 26 Nov 2026) always found it set, so with a saved view the map never moved on opening.
+  const centreNow = !start || (!linked && !centredThisLoad);
   (async () => {
     const state = await navigator.permissions?.query({ name: 'geolocation' }).then((p) => p.state).catch(() => 'prompt');
     if (state === 'denied') return;
-    locate(false, !start || (!linked && !centredThisLoad));
+    locate(false, centreNow);
   })();
   centredThisLoad = true;
   let hiddenAt = 0;
