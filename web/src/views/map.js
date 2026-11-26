@@ -4,7 +4,7 @@ import 'leaflet.markercluster';
 import 'leaflet.markercluster/dist/MarkerCluster.css';
 import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 import { api, getMe } from '../api.js';
-import { esc, getPosition, toast } from '../ui.js';
+import { esc, getPosition, toast, watchBest } from '../ui.js';
 import { t, isRtl, lang } from '../i18n.js';
 import { navigate } from '../nav.js';
 import { captureShots, captureFiles, askMotion } from '../capture.js';
@@ -148,6 +148,7 @@ export default function mapView(root, _, query) {
         if (!root.isConnected) return;
         showMe(p);
         map.flyTo([p.lat, p.lon], Math.max(map.getZoom(), 16)); // street level, like Google Maps
+        if (p.accuracy > 25) map.once('moveend', () => locate(false, true)); // then follow better GPS fixes
       } catch (e) { toast(e.message); }
       return;
     }
@@ -161,16 +162,20 @@ export default function mapView(root, _, query) {
     }
     if (rough instanceof Error && rough.code === 1) return report('denied', rough.code);
     map.once('dragstart zoomstart', onMove);
-    const fine = await getPosition({ timeout: 20000 }).catch((e) => e);
+    // Better and better fixes for up to a minute (a cold GPS needs 20-60 s); the map follows each one
+    // until the reader moves it.
+    watching?.stop();
+    watching = watchBest({ onFix: (p) => {
+      if (!root.isConnected) return watching?.stop();
+      showMe(p);
+      if (centre && !moved) map.setView([p.lat, p.lon], map.getZoom());
+    } });
+    const fine = await watching.done.catch((e) => e);
     map.off('dragstart zoomstart', onMove);
     if (!root.isConnected) return;
-    if (fine instanceof Error) {
-      if (rough instanceof Error) report('failed', `${rough.code}/${fine.code}`);
-      return;
-    }
-    showMe(fine);
-    if (centre && !moved) map.setView([fine.lat, fine.lon], map.getZoom());
+    if ((fine instanceof Error || !fine) && rough instanceof Error) report('failed', `${rough.code}/${fine?.code ?? '-'}`);
   }
+  let watching = null;
   async function report(what, code) {
     const state = await navigator.permissions?.query({ name: 'geolocation' }).then((p) => p.state).catch(() => '?');
     navigator.sendBeacon?.('/api/client-error', new Blob([JSON.stringify({ message: `map open: location ${what} (code ${code}, permission ${state})`,

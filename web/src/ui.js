@@ -94,6 +94,35 @@ export function getPosition({ timeout = 15000, precise = true, maxAge = 30000 } 
   });
 }
 
+// Fresh GPS fixes for up to maxMs: onFix(p) on each one more accurate than the last; stops at goodM metres,
+// at maxMs, or when stop() is called. The phone's first fix is often a Wi-Fi/cell guess hundreds of metres off
+// (Ami, 26 Nov 2026: wrong on opening, right after reopening), so one getCurrentPosition is not enough.
+// Resolves with the best fix (or null); rejects only on a refusal (code 1) with no fix at all.
+export function watchBest({ onFix, goodM = 25, maxMs = 60000 } = {}) {
+  let stop = () => {};
+  const done = new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return resolve(null);
+    let best = null;
+    const finish = (err) => {
+      navigator.geolocation.clearWatch(id); clearTimeout(timer);
+      if (err && !best) reject(err); else resolve(best);
+    };
+    const id = navigator.geolocation.watchPosition(
+      (g) => {
+        const p = { lat: g.coords.latitude, lon: g.coords.longitude, accuracy: g.coords.accuracy };
+        if (best && p.accuracy >= best.accuracy) return;
+        best = p; onFix?.(p);
+        if (p.accuracy <= goodM) finish();
+      },
+      (e) => { if (e.code === 1) finish(Object.assign(new Error(t('geo.denied')), { code: 1 })); },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: maxMs },
+    );
+    const timer = setTimeout(() => finish(best ? null : Object.assign(new Error(t('geo.fail')), { code: 3 })), maxMs);
+    stop = () => finish();
+  });
+  return { done, stop: () => stop() };
+}
+
 // Phone photos are 3–12 MB; send at most 2000px JPEG.
 export async function shrinkImage(file, maxSide = 2000) {
   const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
