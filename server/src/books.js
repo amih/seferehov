@@ -533,6 +533,24 @@ async function searchTitle(title, author, verify, veto = author) {
     : { book: null, score: rankBest(candidates, title, author, verify, veto).score || null };
 }
 
+// The fast reader's gate (lab 065): does a catalogue know this reading? The local copy of the catalogues first,
+// then, for a Hebrew title, the National Library, as searchTitle does; nothing is saved. Books readers added
+// (source 'app') are left out, as in the lab: there they settled spines less surely (96% against 100%).
+// accept(match): whether a local match will do (else the National Library is asked too).
+// Returns { by: 'local' | 'nli', title, authors, score } or null.
+export async function catalogueKnows(title, author, accept = () => true) {
+  if (!title || normTitle(title).length < 3) return null;
+  const local = (await localTitleCandidates(title).catch(() => [])).map((r) => ({ ...fromLocal(r), bare: r.title, isbn: r.isbn13, alt: r.tnorm, via: 'local_ol' }));
+  const l = pickBest(local, title, author, null, author);
+  const lm = l && { by: 'local', title: l.title, authors: l.authors ?? [], score: l.score };
+  // As lab 065: the National Library only when the local match is not close to the reading.
+  if (lm && accept(lm)) return lm;
+  if (!isHebrew(title)) return lm;
+  const c = (await track('nli', () => nliSearch(`alma.title="${title.replace(/["\\]/g, ' ')}"`)).catch(() => [])) ?? [];
+  const n = pickBest(c.map((b) => ({ ...b, via: 'nli' })), title, author, null, author);
+  return n ? { by: 'nli', title: n.title, authors: n.authors ?? [], score: n.score } : lm;
+}
+
 // Dice on letter pairs: tolerates spelling variants, so only counts when very close.
 function charSimilarity(a, b) {
   const pairs = (s) => { const t = normTitle(s).replace(/ /g, ''), m = new Map(); for (let i = 0; i < t.length - 1; i++) m.set(t.slice(i, i + 2), (m.get(t.slice(i, i + 2)) ?? 0) + 1); return m; };

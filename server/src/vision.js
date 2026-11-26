@@ -5,6 +5,7 @@ import { config } from './config.js';
 import { normalizeIsbn, normalizeDanacode } from './util.js';
 import { here, scope, step } from './trace.js';
 import { sendMail } from './mail.js';
+import { fastFor, logFast, prepareFast } from './fastread.js';
 
 // One line per book is far more reliable with small local models than JSON.
 const PROMPT = `Read the book spines and covers in this photo. Write one line per distinct book, in the format:
@@ -369,12 +370,17 @@ export async function generate(jpeg, prompt, numPredict) {
     throw err;
   }
   const answer = (await res.json()).response ?? '';
+  modelCalls++;
   await step('model', { model: config.vision.model, prompt, answer, ms: Date.now() - t0 },
     Object.fromEntries(images.map((b, i) => [i ? `image${i + 1}` : 'image', b])), { side: 1000 });
   return answer;
 }
 
 const MAX_SPINES = 30;
+export const MAX_CUTOUTS = MAX_SPINES * 2;
+// Vision-model calls so far (the fast reader's log counts the calls each cut-out took).
+let modelCalls = 0;
+export const modelCallCount = () => modelCalls;
 export const SPINE_PROMPT = 'This is one book spine or cover. Read its title and author exactly as printed, in the original language and script. Answer one line: TITLE | AUTHOR. If unreadable answer NONE.';
 const iou = (a, b) => {
   const w = Math.min(a[2], b[2]) - Math.max(a[0], b[0]);
@@ -651,12 +657,14 @@ export async function scriptGuard(jpeg, read, ocr) {
 // (verified: null). title: the book we are looking for (findSpine), read by the
 // vision model elsewhere.
 const ORIENT_OK = 0.5;
+// A cut-out turned one way up, as it is read (also by the fast reader, fastread.js).
+export const turnedCutout = (img, angle) => sharp(img).rotate(angle).resize(1280, 1280, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 90 }).toBuffer();
 export async function readCrop(img, w, h, title = null, opts = {}) {
   const spine = h > w * 1.3;
   const angles = spine ? [270, 90] : [0, 180];
   const paddle = !!config.spineOcrUrl;
   const tries = await Promise.all(angles.map(async (angle) => {
-    const jpeg = await sharp(img).rotate(angle).resize(1280, 1280, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 90 }).toBuffer();
+    const jpeg = await turnedCutout(img, angle);
     const [read, ocr] = await Promise.all([
       generate(jpeg, SPINE_PROMPT, 80).then((line) => (/^NONE\b/i.test(line.trim()) ? null : parseBooks(line.trim().split('\n')[0])[0] ?? null)),
       paddle ? suryaRead(jpeg, { url: config.spineOcrUrl, engine: 'paddle-hebrew' }).catch(() => null) : suryaRead(jpeg).catch(() => null),
@@ -1027,6 +1035,19 @@ export async function spineCut(jpeg, lines) {
 // The spine cutter (spines/spine_server.py, lab experiment 051): a small YOLO model draws a
 // turned rectangle around every spine, and each spine is cut out straight along its own
 // rectangle. null when the service is off or down.
+// A shelf photo turned upright and cut by the spine cutter, once per photo (the fast reader and the reading
+// that follows use the same cut-outs).
+const cuts = new WeakMap();
+export function cutPhoto(buffer) {
+  if (!cuts.has(buffer)) {
+    cuts.set(buffer, (async () => {
+      const { data: upright, info } = await sharp(buffer).rotate().toBuffer({ resolveWithObject: true });
+      return { upright, W: info.width, H: info.height, cutRes: await cutSpines(await sharp(upright).jpeg({ quality: 95 }).toBuffer()) };
+    })());
+  }
+  return cuts.get(buffer);
+}
+
 export async function cutSpines(upright) {
   if (!config.spinesUrl) return null;
   let why;
@@ -1060,7 +1081,7 @@ On the server: systemctl status seferehov-spines; journalctl -u seferehov-spines
 
 // Spine by spine, cut by the spine cutter: each cut-out is read as before (readCrop). Its
 // outline on the photo is the cutter's rectangle.
-async function readSpinesCut(cutRes, W, H, upright) {
+async function readSpinesCut(cutRes, W, H, upright, fast = null) {
   const spines = cutRes.spines.slice(0, MAX_SPINES * 2);
   await step('spine-cutter', {
     note: `the spine cutter (YOLO, lab 051) found ${cutRes.spines.length} spines in ${cutRes.ms} ms; ${cutRes.dropped_edge} cut off by the photo's edge left out${cutRes.dropped_overlap ? `, ${cutRes.dropped_overlap} found twice (overlapping a surer box) left out` : ''}`,
@@ -1072,11 +1093,20 @@ async function readSpinesCut(cutRes, W, H, upright) {
     const pts = s.poly.map(([x, y]) => [x * W, y * H]);
     const box = [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])), Math.max(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1]))];
     const place = { tilt: 0, box };
+    const f = fast?.cut[k];
     const b = await scope(`cut-out ${k + 1}`, async () => {
       await step('cut-out', { from: 'spine cutter', w: s.w, h: s.h, poly: s.poly, conf: s.conf }, { image: img });
+      if (f?.settled && !f.shadow) return fastBook(fast, f);
       // No band splitting for the cutter's cut-outs (24 Nov): a two-spine box sliced along its lines gave
       // slivers; an unconfirmed cut-out is dropped instead.
-      return readCrop(img, s.w, s.h, null, { split: false, fromCutter: true });
+      const t0 = Date.now(), calls0 = modelCalls;
+      const r = await readCrop(img, s.w, s.h, null, { split: false, fromCutter: true });
+      if (f) {
+        const one = [].concat(r ?? [])[0] ?? null;
+        const id = await logFast(fast, f, { used: 'qwen', qwen: one && { title: one.title, author: one.author, verified: one.verified }, qwen_calls: modelCalls - calls0, qwen_ms: Date.now() - t0 });
+        for (const x of [].concat(r ?? [])) x.fastId = id;
+      }
+      return r;
     });
     for (const x of [].concat(b ?? [])) if (x.verified !== false) books.push({ ...x, place, spot: { poly: s.poly.map(([x2, y2]) => [Math.round(x2 * 1000) / 1000, Math.round(y2 * 1000) / 1000]), by: 'yolo-051', conf: s.conf } });
   }
@@ -1089,10 +1119,13 @@ async function readSpinesCut(cutRes, W, H, upright) {
 // the whole photo upright for each group and find the spines again — standing straight,
 // each one gets a box of its own. Then read spine by spine.
 async function readSpines(buffer) {
-  const { data: upright, info } = await sharp(buffer).rotate().toBuffer({ resolveWithObject: true });
-  const { width: W, height: H } = info;
-  const cutRes = await cutSpines(await sharp(upright).jpeg({ quality: 95 }).toBuffer());
-  if (cutRes?.spines) return mergeSameSpine(await readSpinesCut(cutRes, W, H, upright));
+  const { upright, W, H, cutRes } = await cutPhoto(buffer);
+  if (cutRes?.spines) {
+    // The fast reader first (when on): a scan reads all its photos' cut-outs in one go before this (scans.js);
+    // a photo read on its own (the bench, an admin's test) is read here.
+    if (config.fastReader && !fastFor(buffer)) await prepareFast([{ buffer, frame: null }]);
+    return mergeSameSpine(await readSpinesCut(cutRes, W, H, upright, fastFor(buffer)));
+  }
   if (cutRes?.down) await step('spine-cutter', { note: `the spine cutter did not cut this photo (${cutRes.down}): the vision model finds the spines` });
   const boxes = (await detect(upright, W, H)).slice(0, MAX_SPINES);
   for (const b of boxes) b.tilt = await dominantTilt(await cut(upright, W, H, b, 4));
@@ -1150,6 +1183,23 @@ async function readSpines(buffer) {
     for (const x of [].concat(b ?? [])) if (x.verified !== false) books.push({ ...x, place, spot: spotOf({ tilt: place.tilt, box: narrowed(place.box, area, x.across) }, W, H) });
   }
   return mergeSameSpine(books);
+}
+
+// A cut-out the fast reader settled: its reading (the catalogue knows it), without the big model. The Hebrew
+// PaddleOCR still looks for it on the cut-out: found, it counts as confirmed by OCR (as the big model's
+// readings are); not found, it stays unconfirmed (lower confidence) but is kept, since the catalogue knows it.
+async function fastBook(fast, f) {
+  const { angle, jpeg, read, match } = f.pick;
+  let score = 0;
+  if (config.spineOcrUrl) {
+    const ocr = await suryaRead(jpeg, { url: config.spineOcrUrl, engine: 'paddle-hebrew' }).catch(() => null);
+    score = Math.max(0, ...(ocr?.boxes ?? []).filter((b) => b.confidence >= 0.5).map((b) => Math.max(overlap(read.title, b.text), 0.8 * overlap(read.author, b.text))));
+  }
+  const ocrOk = score >= ORIENT_OK;
+  await step('crop-read', { note: `read by the fast reader (lab 065 A5), turned ${angle}°; the catalogue (${match.by === 'nli' ? 'National Library' : 'local copy'}) knows it as "${match.title}": the big model is not asked`,
+    verdict: 'kept (fast reader)', angle, title: read.title, author: read.author, catalogue: match.title, texts: f.texts, ocr_score: Math.round(score * 100) / 100 }, { crop: jpeg });
+  const id = await logFast(fast, f, { used: 'fast', ocr_ok: ocrOk });
+  return { title: read.title, author: read.author, isbn: null, quality: read.quality ?? 'medium', crop: jpeg, verified: ocrOk ? true : null, at: here(), across: null, fast: true, fastId: id };
 }
 
 // Boxes overlap, so one spine can be read from two cut-outs: alike readings from cut-outs

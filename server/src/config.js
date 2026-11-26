@@ -60,6 +60,13 @@ export const config = {
   enhanceBin: env.ENHANCE_BIN || '',
   // Optional: run it through gpu-lease (github.com/amih/gpu-queue) so it waits its turn on the GPU.
   enhanceLease: env.ENHANCE_LEASE || '',
+  // The fast spine reader (lab 065 A5, fastread/fast_read.py): the command that runs it, e.g.
+  // "<venv>/bin/python <app>/fastread/fast_read.py" (run through ENHANCE_LEASE's gpu-lease when set). Empty = off.
+  fastReader: env.FAST_READER || '',
+  fastScripts: env.FAST_READER_SCRIPTS || 'all', // 'hebrew': only Hebrew readings may settle a spine
+  fastReaderClient: env.FAST_READER_CLIENT || 'seferehov', // its name in the GPU queue
+  // Share of the spines it settles that the big model reads anyway (its reading kept), to compare the two.
+  fastShadow: Number(env.FAST_READER_SHADOW ?? 0.2),
   // Checks public texts for door codes, phone numbers etc. Same model = no GPU swap.
   privacyModel: env.PRIVACY_MODEL || env.VISION_MODEL || 'qwen3-vl:8b-instruct',
   google: {

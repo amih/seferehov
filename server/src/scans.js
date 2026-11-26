@@ -9,6 +9,7 @@ import { requireUser } from './auth.js';
 import { lookupIsbn, lookupTitle, findOrCreateBook } from './books.js';
 import { readBooks, sharpness, BLURRY, readCover, readCoverText, readIsbnBarcodes, normTitle, titleSimilarity, coverAgrees, authorsAgree } from './vision.js';
 import { pickFrames } from './frames.js';
+import { prepareFast } from './fastread.js';
 import { webCheck, purgeSearchCache, blurbSearch } from './websearch.js';
 import { localCheck, swapIfReversed, closeToRead } from './refindex.js';
 import { titleByAuthor } from './coverfix.js';
@@ -760,15 +761,22 @@ export async function processScan(scan, { dry = false } = {}) {
       hit.author ||= item.author;
       hit.isbn ||= item.isbn;
       if (hit.quality === 'low' && item.quality && item.quality !== 'low') hit.quality = item.quality;
+      if (item.fastId) hit.fastIds.add(item.fastId);
       if (item.crop) hit.crops.push({ crop: item.crop, verified: item.verified, at: item.at, spot });
       if (!hit.crop && item.crop) Object.assign(hit, { crop: item.crop, verified: item.verified, at: item.at });
       hit.spot ??= spot;
       hit.at ??= item.at;
       return;
     }
-    found.push({ ...item, spot, key, keys: new Set([key]), frames: new Set([i]), crops: item.crop ? [{ crop: item.crop, verified: item.verified, at: item.at, spot }] : [],
+    found.push({ ...item, spot, key, keys: new Set([key]), frames: new Set([i]), fastIds: new Set(item.fastId ? [item.fastId] : []), crops: item.crop ? [{ crop: item.crop, verified: item.verified, at: item.at, spot }] : [],
       reads: new Map(item.title ? [[item.title, 1 + (item.verified ? 0.5 : 0)]] : []) });
   };
+  // The fast spine reader (fastread.js): all photos' cut-outs in one GPU lease, before the big model reads.
+  if (config.fastReader) {
+    await setProgress(scan.id, { step: 'reading', done: 0, total: images.length });
+    const readable = images.map((im, i) => ({ buffer: im.buffer, frame: i, skip: anySharp && im.sharp != null && im.sharp < BLURRY })).filter((x) => !x.skip);
+    await prepareFast(readable, { scanId: dry ? null : scan.id }).catch((err) => log.warn({ err, scan: scan.id }, 'fast reader failed'));
+  }
   for (const [i, { buffer: buf, fromVideo, t, sharp: sharpScore }] of images.entries()) {
     if (!dry && i) await letCoversIn();
     await setProgress(scan.id, { step: 'reading', done: i, total: images.length });
@@ -819,7 +827,7 @@ export async function processScan(scan, { dry = false } = {}) {
     // A catalogue record or an index title far from what was read is another book (lab 055).
     const far = (title, authors, read = asRead) => item.via === 'vision' && !closeToRead(read, title, authors);
     ev.push({ stage: 'read', source: item.via === 'barcode' ? 'barcode' : item.verified ? 'vision+ocr' : 'vision', outcome: 'as_read',
-      after: asRead ?? isbn ?? null, detail: { author: item.author ?? null, frames: item.frames ? [...item.frames].map((x) => x + 1) : undefined, verified: item.verified ?? null, quality: item.quality ?? null } });
+      after: asRead ?? isbn ?? null, detail: { author: item.author ?? null, frames: item.frames ? [...item.frames].map((x) => x + 1) : undefined, verified: item.verified ?? null, quality: item.quality ?? null, ...(item.fast ? { fast: true } : {}) } });
     // Cover blurbs read as titles ("INTERNATIONAL BEST SELLER", "OVER 10,000,000 COPIES SOLD").
     if (item.via === 'vision' && !isbn && BLURB.test(item.title ?? '')) {
       await setProgress(scan.id, { step: 'matching', done: ++done, total: found.length });
@@ -925,6 +933,7 @@ export async function processScan(scan, { dry = false } = {}) {
         [item.via === 'barcode' ? 'barcode' : scan.source], item.at?.length ? item.at : null, item.confidence ?? null, item.confidenceWhy ?? null,
         item.spot ? JSON.stringify({ poly: item.spot.poly, ...(item.spot.by ? { by: item.spot.by } : {}), ...(item.spot.conf != null ? { conf: item.spot.conf } : {}) }) : null, crop && item.cropShape ? JSON.stringify(item.cropShape) : null],
     );
+    if (item.fastIds?.size) await q('UPDATE fast_reads SET item_id = $1 WHERE id = ANY($2::bigint[])', [saved.id, [...item.fastIds]]).catch((err) => log.warn({ err }, 'fast reads link'));
     for (const e of item.evidence ?? []) {
       await q(`INSERT INTO scan_item_evidence(item_id, stage, source, outcome, before, after, detail) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [saved.id, e.stage, e.source, e.outcome, e.before ?? null, e.after ?? null, e.detail ? JSON.stringify(e.detail) : null]).catch((err) => log.warn({ err }, 'evidence'));
