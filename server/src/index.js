@@ -40,6 +40,7 @@ import { startWebQueue } from './webqueue.js';
 import { startJobs } from './jobs.js';
 import { startIndexNow } from './indexnow.js';
 import busyRoutes, { startBusyWatch } from './busy.js';
+import noteRoutes from './notes.js';
 
 const app = Fastify({ logger: true, trustProxy: '127.0.0.1', bodyLimit: 1024 * 1024 });
 
@@ -68,6 +69,7 @@ uploadReceipts(app);
 
 await app.register(authRoutes);
 await app.register(stepRoutes);
+await app.register(noteRoutes);
 await app.register(locationRoutes);
 await app.register(reviewRoutes);
 await app.register(signRoutes);

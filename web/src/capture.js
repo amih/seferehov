@@ -2,6 +2,7 @@ import { esc, shrinkImage } from './ui.js';
 import { startHints, rememberSession } from './hints.js';
 import { api } from './api.js';
 import { t } from './i18n.js';
+import { showNotes } from './notes.js';
 import { cameraLog } from './camlog.js';
 import { enqueue, kick, onItem, unsentItems } from './queue.js';
 import { detectFrame } from './scanner.js';
@@ -129,8 +130,10 @@ export function captureShots({ panel, request: given, onEnd, screen = 'library',
         <button class="shot-x" data-capture="end" aria-label="${t('capture.stop')}">✕</button>
         <button class="btn primary shot-stop on-cam" data-capture="end">■ ${t('capture.stop')} · <span class="burst-count">0</span></button></div>
       <div class="burst-thumbs"></div>
+      <div class="user-notes" hidden></div>
       <p class="shot-say"><b>${t('capture.how')}</b><br><span class="muted small">${t('capture.how2')}</span></p>
       <p class="shot-done"></p>`;
+    showNotes(panel.querySelector('.user-notes'), 'camera');
     video = panel.querySelector('video');
     sid = sessionId();
     const shake = Number(localStorage.getItem(SHAKE_KEY)) || null;
