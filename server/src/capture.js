@@ -157,6 +157,33 @@ export function startCaptureWorker(logger) {
   log = logger;
   q(`UPDATE capture_sessions SET status = 'open' WHERE status = 'sorting'`).catch(() => {});
   setInterval(run, 30_000).unref();
+  setInterval(() => assumeGuesses().catch((err) => log.warn({ err }, 'assume guesses')), 10 * 60_000).unref();
+}
+
+// No answer to "where were these taken?" (Ami, 26 Nov 2026: "if I ignore it, assume the place you guessed"):
+// ASSUME_AFTER_HOURS (default 2) after the session's photos were all read, the guess is taken as the answer, so the
+// books are confirmed and the sure ones approved (answerSituation). A guessed new library is added to the map (with
+// the usual review) only when the phone sent a position; without one the question stays. As with any answer, the
+// place can't be changed once a book of the session is approved (the sure ones are, right then): see answerSituation.
+export const ASSUME_AFTER_HOURS = Number(process.env.ASSUME_AFTER_HOURS ?? 2);
+export async function assumeGuesses() {
+  if (!(ASSUME_AFTER_HOURS > 0)) return 0;
+  const sessions = await many(
+    `SELECT c.id, c.user_id, c.guess->>'kind' AS kind, c.hints FROM capture_sessions c
+      WHERE c.guessed AND c.answered_at IS NULL AND c.guess IS NOT NULL AND c.status = 'done'
+        AND c.sorted_at < now() - make_interval(secs => $1 * 3600)
+        AND EXISTS (SELECT 1 FROM scans x WHERE x.capture_id = c.id)
+        AND NOT EXISTS (SELECT 1 FROM scans x WHERE x.capture_id = c.id AND x.status IN ('queued', 'processing'))
+        AND (SELECT max(x.finished_at) FROM scans x WHERE x.capture_id = c.id) < now() - make_interval(secs => $1 * 3600)
+        AND (c.guess->>'kind' <> 'new_library' OR (c.hints ? 'lat' AND c.hints ? 'lon'))`, [ASSUME_AFTER_HOURS]);
+  let n = 0;
+  for (const c of sessions) {
+    const user = await one('SELECT * FROM users WHERE id = $1', [c.user_id]);
+    const r = await answerSituation(user, c.id, { kind: c.kind === 'new_library' ? 'new_library' : 'right', assumed: true });
+    if (r.ok) n++;
+    log.info({ capture: c.id, guess: c.kind, ok: !!r.ok, error: r.error }, 'capture place assumed from the guess (no answer)');
+  }
+  return n;
 }
 function soon() { clearTimeout(timer); timer = setTimeout(run, 6_000); }
 
@@ -290,7 +317,7 @@ export async function answerSituation(user, sessionId, answer) {
   // At home or a friend's: the server keeps no coordinates of the place.
   const hints = kind === 'home' || kind === 'friend' ? Object.fromEntries(Object.entries(s.hints ?? {}).filter(([k]) => !['lat', 'lon', 'acc'].includes(k))) : s.hints;
   await q(`UPDATE capture_sessions SET location_id = $2, owner = $3, friend_name = $4, distance_m = $5, answer = $6, answered_at = now(), hints = $7 WHERE id = $1`,
-    [s.id, place.location_id, place.owner, place.friend_name, place.distance_m, { kind: answer.kind, final: kind, at: new Date().toISOString() }, hints]);
+    [s.id, place.location_id, place.owner, place.friend_name, place.distance_m, { kind: answer.kind, final: kind, at: new Date().toISOString(), ...(answer.assumed ? { assumed: true } : {}) }, hints]);
   const scans = await many(
     `UPDATE scans SET location_id = $2, owner = $3, friend_name = $4, distance_m = $5, situation = NULL WHERE capture_id = $1 RETURNING *`,
     [s.id, place.location_id, place.owner, place.friend_name, place.distance_m]);

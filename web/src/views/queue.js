@@ -30,7 +30,7 @@ function situationHtml(sit, ask, open) {
     `<button class="btn" data-sit="friend">👥 ${t('sit.opt_friend')}</button>`,
   ].filter(Boolean).join('');
   return `<div class="sit ${ask ? 'ask' : 'sure'}" data-session="${esc(sit.session)}">${head}
-    ${ask ? '' : `<p class="small">${t('sit.change_how')}</p>`}
+    ${ask ? `<p class="small muted">${t('sit.assume', { h: 2 })}</p>` : `<p class="small">${t('sit.change_how')}</p>`}
     <div class="opts">${opts}</div>
     <input name="sit-name" dir="auto" maxlength="120" placeholder="${esc(t('sit.new_name'))}" ${g.kind === 'new_library' ? '' : 'hidden'}>
     <input name="sit-friend" dir="auto" maxlength="80" placeholder="${esc(t('sit.friend_name'))}" hidden></div>`;
