@@ -35,7 +35,7 @@ const bubble = (n) => {
 // Opening the app (a fresh load, or back to it after a while) moves the map to where the reader
 // is (Ami, 24 Nov), not to where the map was left. Coming back to the map from a library inside
 // the app keeps the view.
-const RECENTRE_AFTER_MS = 5 * 60_000;
+const RECENTRE_AFTER_MS = 30_000; // back in the app after this long = opening it (Android resumes a recent app)
 let centredThisLoad = false;
 
 function savedView() {
@@ -134,15 +134,47 @@ export default function mapView(root, _, query) {
   load();
 
   // fly: animate there at street level (the button); centre: jump there (opening the app).
+  // Opening the app: a quick rough fix (Wi-Fi / cell, a recent one accepted) centres the map at once, then GPS
+  // refines the dot, and the view too unless the reader moved the map meanwhile. A failure on opening is silent on
+  // screen but reported to the server log (26 Nov 2026: Ami saw the map not move on opening; no evidence why).
+  const showMe = (p) => {
+    if (me) me.setLatLng([p.lat, p.lon]);
+    else me = L.circleMarker([p.lat, p.lon], { radius: 8, color: '#fff', weight: 3, fillColor: '#2a7de1', fillOpacity: 1 }).addTo(map);
+  };
   async function locate(fly = true, centre = false) {
-    try {
-      const p = await getPosition();
-      if (!root.isConnected) return;
-      if (me) me.setLatLng([p.lat, p.lon]);
-      else me = L.circleMarker([p.lat, p.lon], { radius: 8, color: '#fff', weight: 3, fillColor: '#2a7de1', fillOpacity: 1 }).addTo(map);
-      if (fly) map.flyTo([p.lat, p.lon], Math.max(map.getZoom(), 16)); // street level, like Google Maps
-      else if (centre) map.setView([p.lat, p.lon], Math.max(map.getZoom(), 15));
-    } catch (e) { if (fly) toast(e.message); }
+    if (fly) {
+      try {
+        const p = await getPosition();
+        if (!root.isConnected) return;
+        showMe(p);
+        map.flyTo([p.lat, p.lon], Math.max(map.getZoom(), 16)); // street level, like Google Maps
+      } catch (e) { toast(e.message); }
+      return;
+    }
+    let moved = false;
+    const onMove = () => { moved = true; };
+    const rough = await getPosition({ precise: false, timeout: 5000, maxAge: 2 * 60_000 }).catch((e) => e);
+    if (!root.isConnected) return;
+    if (!(rough instanceof Error)) {
+      showMe(rough);
+      if (centre) map.setView([rough.lat, rough.lon], Math.max(map.getZoom(), 15));
+    }
+    if (rough instanceof Error && rough.code === 1) return report('denied', rough.code);
+    map.once('dragstart zoomstart', onMove);
+    const fine = await getPosition({ timeout: 20000 }).catch((e) => e);
+    map.off('dragstart zoomstart', onMove);
+    if (!root.isConnected) return;
+    if (fine instanceof Error) {
+      if (rough instanceof Error) report('failed', `${rough.code}/${fine.code}`);
+      return;
+    }
+    showMe(fine);
+    if (centre && !moved) map.setView([fine.lat, fine.lon], map.getZoom());
+  }
+  async function report(what, code) {
+    const state = await navigator.permissions?.query({ name: 'geolocation' }).then((p) => p.state).catch(() => '?');
+    navigator.sendBeacon?.('/api/client-error', new Blob([JSON.stringify({ message: `map open: location ${what} (code ${code}, permission ${state})`,
+      where: 'map.locate', path: location.pathname, version: __APP_VERSION__ })], { type: 'application/json' }));
   }
   root.querySelector('.fab-locate').onclick = () => locate(true);
   // Search opens on every book around what the map shows; typing narrows it down.
@@ -152,14 +184,15 @@ export default function mapView(root, _, query) {
     const km = z >= 15 ? 1 : z >= 12 ? 5 : z >= 10 ? 20 : 50;
     e.currentTarget.href = `/search?${new URLSearchParams({ km, at: `${c.lat.toFixed(4)},${c.lng.toFixed(4)}`, from: t('find.map_area') })}`;
   };
-  // Where the reader is: on opening the app the map moves there (if the phone already allows
-  // location, so no question pops up over a saved view); otherwise only the blue dot.
+  // Where the reader is: on opening the app the map moves there; coming back to the map from another screen of the
+  // app moves only the blue dot.
   const linked = at.length === 3 && at.every(Number.isFinite);
+  // As if the reader tapped ◎ (Ami, 26 Nov 2026): also when the phone would ask first (Android's "only this time"
+  // permission asks again on the next opening). Only a refusal stops it.
   (async () => {
-    const granted = await navigator.permissions?.query({ name: 'geolocation' }).then((p) => p.state === 'granted').catch(() => false);
-    if (!start) return locate(false, true);
-    if (!granted) return;
-    locate(false, !linked && !centredThisLoad);
+    const state = await navigator.permissions?.query({ name: 'geolocation' }).then((p) => p.state).catch(() => 'prompt');
+    if (state === 'denied') return;
+    locate(false, !start || (!linked && !centredThisLoad));
   })();
   centredThisLoad = true;
   let hiddenAt = 0;

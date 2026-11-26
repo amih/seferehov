@@ -81,13 +81,15 @@ export function timeAgo(iso) {
   }
 }
 
-export function getPosition({ timeout = 15000 } = {}) {
+// precise: GPS (slow indoors); otherwise Wi-Fi / cell towers, a recent fix accepted (fast, ~50-500 m).
+// The error carries the browser's code (1 denied, 2 unavailable, 3 timeout) for the logs.
+export function getPosition({ timeout = 15000, precise = true, maxAge = 30000 } = {}) {
   return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) return reject(new Error(t('geo.none')));
+    if (!navigator.geolocation) return reject(Object.assign(new Error(t('geo.none')), { code: 0 }));
     navigator.geolocation.getCurrentPosition(
       (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude, accuracy: p.coords.accuracy }),
-      (e) => reject(new Error(t(e.code === 1 ? 'geo.denied' : 'geo.fail'))),
-      { enableHighAccuracy: true, timeout, maximumAge: 30000 },
+      (e) => reject(Object.assign(new Error(t(e.code === 1 ? 'geo.denied' : 'geo.fail')), { code: e.code })),
+      { enableHighAccuracy: precise, timeout, maximumAge: maxAge },
     );
   });
 }
