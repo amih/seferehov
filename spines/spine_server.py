@@ -56,9 +56,11 @@ PARTIAL_LEN = 0.80
 PARTIAL_THIN = 0.50
 PARTIAL_MIN_REF = 3
 EDGE_MARGIN = 0.005
-# The fitter (lab 081, 28 Nov 2026): refits suspect cuts (much thicker than their row, or in a row of leaning books)
-# to the book's own two long edges. SPINES_FITTER=0 turns it off.
-FITTER_ON = os.environ.get("SPINES_FITTER", "1") != "0"
+# The fitter (lab 081, 28 Nov 2026): refits each cut to the book's own two long edges. SPINES_FITTER=all (default,
+# lab 084: test v2 303 -> 316, 13 fixed, 0 broken) refits every cut; =suspects only cuts much thicker than their
+# row or in a row of leaning books (lab 081: 303 -> 309); =0 turns it off.
+FITTER_MODE = os.environ.get("SPINES_FITTER", "all")
+FITTER_ON = FITTER_MODE != "0"
 FITTER_WEIGHTS = os.environ.get("SPINES_FITTER_WEIGHTS", os.path.join(HERE, "models", "fitter-081.pt"))
 model = None
 fitter = None
@@ -206,7 +208,7 @@ def cut_spines(data):
     fitted = 0
     if FITTER_ON and kept:
         import fitter_app
-        flags = fitter_app.suspects([q for q, _, _ in kept], W, H)
+        flags = fitter_app.suspects([q for q, _, _ in kept], W, H) if FITTER_MODE == "suspects" else [True] * len(kept)
         if any(flags):
             with lock:
                 fm = load_fitter()
@@ -232,7 +234,7 @@ def cut_spines(data):
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self._send(200, {"ok": True, "weights": os.path.basename(WEIGHTS), "fitter": os.path.basename(FITTER_WEIGHTS) if FITTER_ON else None} if self.path == "/health" else {"error": "not found"})
+        self._send(200, {"ok": True, "weights": os.path.basename(WEIGHTS), "fitter": f"{os.path.basename(FITTER_WEIGHTS)} ({FITTER_MODE})" if FITTER_ON else None} if self.path == "/health" else {"error": "not found"})
 
     def do_POST(self):
         if self.path != "/cut":
