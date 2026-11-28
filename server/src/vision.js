@@ -1084,8 +1084,8 @@ On the server: systemctl status seferehov-spines; journalctl -u seferehov-spines
 async function readSpinesCut(cutRes, W, H, upright, fast = null) {
   const spines = cutRes.spines.slice(0, MAX_SPINES * 2);
   await step('spine-cutter', {
-    note: `the spine cutter (YOLO, lab 051) found ${cutRes.spines.length} spines in ${cutRes.ms} ms; ${cutRes.dropped_edge} cut off by the photo's edge left out${cutRes.dropped_partial ? `, ${cutRes.dropped_partial} more only partly in the photo (shorter or thinner than the others) left out` : ''}${cutRes.dropped_overlap ? `, ${cutRes.dropped_overlap} found twice (overlapping a surer box) left out` : ''}`,
-    W, H, dropped_edge: cutRes.dropped_edge, dropped_partial: cutRes.dropped_partial ?? 0, dropped_overlap: cutRes.dropped_overlap ?? 0,
+    note: `the spine cutter (${cutRes.model ?? 'yolo-051'}) found ${cutRes.spines.length} spines in ${cutRes.ms} ms; ${cutRes.dropped_edge} cut off by the photo's edge left out${cutRes.dropped_partial ? `, ${cutRes.dropped_partial} more only partly in the photo (shorter or thinner than the others) left out` : ''}${cutRes.dropped_overlap ? `, ${cutRes.dropped_overlap} found twice (overlapping a surer box) left out` : ''}`,
+    W, H, model: cutRes.model ?? 'yolo-051', dropped_edge: cutRes.dropped_edge, dropped_partial: cutRes.dropped_partial ?? 0, dropped_overlap: cutRes.dropped_overlap ?? 0,
     spines: spines.map((s) => ({ poly: s.poly, conf: s.conf })),
   }, { image: upright });
   const books = [];
@@ -1109,7 +1109,7 @@ async function readSpinesCut(cutRes, W, H, upright, fast = null) {
       }
       return r;
     });
-    for (const x of [].concat(b ?? [])) if (x.verified !== false) books.push({ ...x, place, spot: { poly: s.poly.map(([x2, y2]) => [Math.round(x2 * 1000) / 1000, Math.round(y2 * 1000) / 1000]), by: 'yolo-051', conf: s.conf } });
+    for (const x of [].concat(b ?? [])) if (x.verified !== false) books.push({ ...x, place, spot: { poly: s.poly.map(([x2, y2]) => [Math.round(x2 * 1000) / 1000, Math.round(y2 * 1000) / 1000]), by: cutRes.model ?? 'yolo-051', conf: s.conf } });
   }
   return books;
 }

@@ -1,8 +1,11 @@
 """Cuts every book spine out of a shelf photo, for the Node server (vision.js).
 
-The spine finder is a small YOLO11n-OBB model (2.66 M weights, 5.7 MB) trained by the lab
-(experiment 051: the admin's checked outlines plus 3,000 synthetic shelves with book covers
-that are not spines). It draws a turned rectangle around each spine; each spine is cut out
+The spine finder is a small YOLO11n-OBB model (2.66 M weights, 5.7 MB) trained by the lab.
+Since 28 Nov 2026 it is "StairsCutter" (spines-077T.pt, lab 077-T round 30: 051 + the 073 physics
+shelves + leaning rows and look-alike runs with staircase ends); before, "AnchorCutter"
+(spines-051.pt, lab 051: the admin's checked outlines plus 3,000 synthetic shelves with book covers
+that are not spines). Test v2 (30 photos, 338 checked spines), the app's rules included:
+AnchorCutter 293 right, StairsCutter 303 (27 won, 17 lost); same speed. SPINES_WEIGHTS picks another file. It draws a turned rectangle around each spine; each spine is cut out
 straight along its own rectangle, 4% longer at each end. On the lab's 55 checked test spines:
 43 cut cleanly, against 15 for the vision model's boxes; 0.07 s a photo on the CPU.
 
@@ -24,7 +27,7 @@ Overlaps: a rectangle that covers 35% or more of a surer one (or is 35% covered 
 the same spine found twice, often half of it; only the surer one is kept (24 Nov 2026).
 
 POST /cut with the upright photo's bytes answers
-  {"W", "H", "ms", "dropped_edge", "dropped_partial", "dropped_overlap", "spines": [{"poly", "conf", "w", "h", "jpeg"}]}
+  {"W", "H", "ms", "model", "dropped_edge", "dropped_partial", "dropped_overlap", "spines": [{"poly", "conf", "w", "h", "jpeg"}]}
 poly: the spine's four corners as fractions of W and H; w, h: the cut-out's size in pixels
 (h along the spine); jpeg: the cut-out, base64, upright with the spine's length vertical.
 Spines left to right. Listens on 127.0.0.1 only.
@@ -41,7 +44,8 @@ import cv2
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-WEIGHTS = os.environ.get("SPINES_WEIGHTS", os.path.join(HERE, "models", "spines-051.pt"))
+WEIGHTS = os.environ.get("SPINES_WEIGHTS", os.path.join(HERE, "models", "spines-077T.pt"))
+MODEL = os.path.splitext(os.path.basename(WEIGHTS))[0].replace("spines-", "yolo-")
 CONF = float(os.environ.get("SPINES_CONF", "0.25"))
 MARGIN = 0.04
 EDGE_ASPECT = 4.0
@@ -196,7 +200,7 @@ def cut_spines(data):
             "jpeg": base64.b64encode(jpg.tobytes()).decode(), "_x": float(np.mean(q[:, 0])),
         })
     out.sort(key=lambda s: s.pop("_x"))
-    return {"W": W, "H": H, "ms": round((time.time() - t) * 1000), "dropped_edge": dropped, "dropped_partial": sum(partial), "dropped_overlap": twice, "spines": out}
+    return {"W": W, "H": H, "ms": round((time.time() - t) * 1000), "model": MODEL, "dropped_edge": dropped, "dropped_partial": sum(partial), "dropped_overlap": twice, "spines": out}
 
 
 class Handler(BaseHTTPRequestHandler):
