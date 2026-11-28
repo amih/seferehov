@@ -27,7 +27,7 @@ Overlaps: a rectangle that covers 35% or more of a surer one (or is 35% covered 
 the same spine found twice, often half of it; only the surer one is kept (24 Nov 2026).
 
 POST /cut with the upright photo's bytes answers
-  {"W", "H", "ms", "model", "dropped_edge", "dropped_partial", "dropped_overlap", "spines": [{"poly", "conf", "w", "h", "jpeg"}]}
+  {"W", "H", "ms", "model", "fitted", "dropped_edge", "dropped_partial", "dropped_overlap", "spines": [{"poly", "conf", "w", "h", "jpeg"}]}
 poly: the spine's four corners as fractions of W and H; w, h: the cut-out's size in pixels
 (h along the spine); jpeg: the cut-out, base64, upright with the spine's length vertical.
 Spines left to right. Listens on 127.0.0.1 only.
@@ -56,8 +56,21 @@ PARTIAL_LEN = 0.80
 PARTIAL_THIN = 0.50
 PARTIAL_MIN_REF = 3
 EDGE_MARGIN = 0.005
+# The fitter (lab 081, 28 Nov 2026): refits suspect cuts (much thicker than their row, or in a row of leaning books)
+# to the book's own two long edges. SPINES_FITTER=0 turns it off.
+FITTER_ON = os.environ.get("SPINES_FITTER", "1") != "0"
+FITTER_WEIGHTS = os.environ.get("SPINES_FITTER_WEIGHTS", os.path.join(HERE, "models", "fitter-081.pt"))
 model = None
+fitter = None
 lock = threading.Lock()
+
+
+def load_fitter():
+    global fitter
+    if fitter is None:
+        import fitter_app
+        fitter = fitter_app.load(FITTER_WEIGHTS)
+    return fitter
 
 
 def load():
@@ -189,10 +202,24 @@ def cut_spines(data):
     partial = partial_edge([q for q, _, _ in kept], W, H) if EDGE_PARTIAL else [False] * len(kept)
     if any(partial):
         print(f"{W}x{H}: {sum(partial)} of {len(kept)} cuts cut off by the photo's edge left out", flush=True)
+    kept = [k for k, part in zip(kept, partial) if not part]
+    fitted = 0
+    if FITTER_ON and kept:
+        import fitter_app
+        flags = fitter_app.suspects([q for q, _, _ in kept], W, H)
+        if any(flags):
+            with lock:
+                fm = load_fitter()
+                for i, flag in enumerate(flags):
+                    if not flag:
+                        continue
+                    q2 = np.asarray(fitter_app.fit(fm, img, kept[i][0], W, H), np.float32)
+                    crop2, _ = cut(img, q2)
+                    if crop2 is not None:
+                        kept[i] = (q2, kept[i][1], crop2)
+                        fitted += 1
     out = []
-    for (q, cf, crop), part in zip(kept, partial):
-        if part:
-            continue
+    for q, cf, crop in kept:
         ok, jpg = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 92])
         out.append({
             "poly": [[round(min(1, max(0, float(x) / W)), 4), round(min(1, max(0, float(y) / H)), 4)] for x, y in q],
@@ -200,12 +227,12 @@ def cut_spines(data):
             "jpeg": base64.b64encode(jpg.tobytes()).decode(), "_x": float(np.mean(q[:, 0])),
         })
     out.sort(key=lambda s: s.pop("_x"))
-    return {"W": W, "H": H, "ms": round((time.time() - t) * 1000), "model": MODEL, "dropped_edge": dropped, "dropped_partial": sum(partial), "dropped_overlap": twice, "spines": out}
+    return {"W": W, "H": H, "ms": round((time.time() - t) * 1000), "model": MODEL, "fitted": fitted, "dropped_edge": dropped, "dropped_partial": sum(partial), "dropped_overlap": twice, "spines": out}
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self._send(200, {"ok": True, "weights": os.path.basename(WEIGHTS)} if self.path == "/health" else {"error": "not found"})
+        self._send(200, {"ok": True, "weights": os.path.basename(WEIGHTS), "fitter": os.path.basename(FITTER_WEIGHTS) if FITTER_ON else None} if self.path == "/health" else {"error": "not found"})
 
     def do_POST(self):
         if self.path != "/cut":

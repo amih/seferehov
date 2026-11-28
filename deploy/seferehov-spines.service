@@ -1,6 +1,7 @@
 # Spine cutter (spines/spine_server.py, YOLO11n-OBB, lab 077-T "StairsCutter"; 051 "AnchorCutter" before 28 Nov 2026). Install:
 #   python3 -m venv APP_DIR-spines-venv && APP_DIR-spines-venv/bin/pip install -r APP_DIR/spines/requirements.txt
-#   copy the weights to APP_DIR/spines/models/spines-077T.pt (not in git; keep spines-051.pt to go back with SPINES_WEIGHTS)
+#   copy the weights to APP_DIR/spines/models/spines-077T.pt and the fitter to APP_DIR/spines/models/fitter-081.pt
+#   (not in git; keep spines-051.pt to go back with SPINES_WEIGHTS; SPINES_FITTER=0 turns the fitter off)
 #   copy to /etc/systemd/system/ (replace APP_USER/APP_DIR), systemctl enable --now seferehov-spines
 [Unit]
 Description=Seferehov spine cutter (YOLO)
